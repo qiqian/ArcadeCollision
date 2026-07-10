@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>ArcCollision.Ref</AssemblyName>
+    <RootNamespace>ArcCollision</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <Description>Reference (correctness-first) implementation of the ArcadeCollision toolkit.</Description>
+  </PropertyGroup>
+
+</Project>
