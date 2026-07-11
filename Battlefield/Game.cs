@@ -349,6 +349,11 @@ internal sealed class Game
             if (fighter.Faction != Faction.Enemy || fighter.Dead || !fighter.CombatActive)
                 continue;
 
+            // Action states have priority over the spawn walk. Otherwise a hit
+            // during walk-in is overwritten by Walk on the next frame, which
+            // can strand a zero-health Sarge outside the KO/death pipeline.
+            if (!fighter.CanAct) continue;
+
             if (fighter.SpawnWalking)
             {
                 Vec2 delta = fighter.SpawnTarget - fighter.Pos;
@@ -365,7 +370,6 @@ internal sealed class Game
                 }
                 continue;
             }
-            if (!fighter.CanAct) continue;
 
             switch (fighter.Ai)
             {
@@ -403,9 +407,15 @@ internal sealed class Game
                 case AiState.MoveToDashMarker:
                 {
                     Vec2 delta = fighter.AiTarget - fighter.Pos;
-                    if (delta.LengthSquared <= ArriveRange * ArriveRange)
+                    float span = fighter.Def.BodyHalfSpine + fighter.Def.Radius;
+                    (float screenLeft, float screenRight) = GetScreenXBounds();
+                    bool blockedByScreenWall =
+                        (delta.X < 0f && fighter.Pos.X <= screenLeft + span + ArriveRange)
+                        || (delta.X > 0f && fighter.Pos.X >= screenRight - span - ArriveRange);
+                    if (delta.LengthSquared <= ArriveRange * ArriveRange || blockedByScreenWall)
                     {
-                        fighter.Pos = fighter.AiTarget;
+                        if (!blockedByScreenWall)
+                            fighter.Pos = fighter.AiTarget;
                         fighter.Ai = AiState.Align;
                         fighter.AiTimer = 5f;
                     }
@@ -995,8 +1005,9 @@ internal sealed class Game
             bool contactedPlayer = fighter.AttackTime >= .208334f
                 && Collide.CapsuleVsAabb(Player.Body, detector).Colliding;
             float span = fighter.Def.BodyHalfSpine + fighter.Def.Radius;
-            float left = ActiveRoom?.Left ?? XMin;
-            float right = ActiveRoom?.Right ?? XMax;
+            (float left, float right) = GetScreenXBounds();
+            // DashObstacleDetector collides with QuiverLevelCamera's moving
+            // screen-limit bodies, not the wider fight-room limits.
             bool contactedWall = fighter.Pos.X - span <= left || fighter.Pos.X + span >= right;
             if (contactedPlayer || contactedWall)
             {
@@ -1054,10 +1065,7 @@ internal sealed class Game
 
     private void ClampArena()
     {
-        float visibleWidth = ArenaW / MathF.Max(.1f, CameraZoom);
-        float cameraMax = MathF.Max(CameraLeft, CameraRight - visibleWidth);
-        float screenLeft = Math.Clamp(Player.Pos.X - visibleWidth * .5f, CameraLeft, cameraMax);
-        float screenRight = screenLeft + visibleWidth;
+        (float screenLeft, float screenRight) = GetScreenXBounds();
         foreach (Fighter fighter in Fighters)
         {
             float span = fighter.Def.BodyHalfSpine + fighter.Def.Radius;
@@ -1087,6 +1095,14 @@ internal sealed class Game
                 Math.Clamp(fighter.Pos.Y, topEdge + fighter.Def.Radius,
                     FloorY1 - fighter.Def.Radius));
         }
+    }
+
+    private (float Left, float Right) GetScreenXBounds()
+    {
+        float visibleWidth = ArenaW / MathF.Max(.1f, CameraZoom);
+        float cameraMax = MathF.Max(CameraLeft, CameraRight - visibleWidth);
+        float left = Math.Clamp(Player.Pos.X - visibleWidth * .5f, CameraLeft, cameraMax);
+        return (left, left + visibleWidth);
     }
 
     // ------------------------------------------------------------------ hits
