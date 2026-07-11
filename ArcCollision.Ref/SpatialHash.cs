@@ -4,157 +4,221 @@ using System.Collections.Generic;
 namespace ArcCollision;
 
 /// <summary>
-/// A uniform-grid spatial hash for broadphase queries. Entities are inserted by
-/// their AABB and can be queried by region or enumerated as candidate pairs.
-///
-/// Bounds are stored in 24.8 fixed point and bucketing/overlap tests are pure
-/// integer math (floats convert at the public boundary).
-///
-/// Choose a cell size roughly equal to the average entity size for best results.
+/// Integer hybrid broadphase: a global immutable BVH for static geometry and a
+/// balanced Dynamic AABB Tree with fat proxies for moving objects. The class
+/// name is retained for source compatibility with the former spatial hash.
 /// </summary>
 public sealed class SpatialHash
 {
-    private readonly record struct Cell(long X, long Y);
+    private readonly long _fatMarginFx;
+    private readonly DynamicAabbTree _dynamicTree = new();
+    private readonly StaticBvh _staticBvh = new();
+    private readonly Dictionary<int, BpBounds> _dynamicBounds = new();
+    private readonly Dictionary<int, BpBounds> _staticBounds = new();
+    private readonly List<int> _candidates = new();
+    private bool _staticDirty;
 
-    private readonly struct Bounds
-    {
-        public readonly long MinX, MinY, MaxX, MaxY;
-
-        public Bounds(Aabb box)
-        {
-            MinX = Fx.From(box.Center.X) - Fx.From(box.HalfExtents.X);
-            MinY = Fx.From(box.Center.Y) - Fx.From(box.HalfExtents.Y);
-            MaxX = Fx.From(box.Center.X) + Fx.From(box.HalfExtents.X);
-            MaxY = Fx.From(box.Center.Y) + Fx.From(box.HalfExtents.Y);
-        }
-
-        public bool Overlaps(in Bounds b) =>
-            MinX <= b.MaxX && b.MinX <= MaxX && MinY <= b.MaxY && b.MinY <= MaxY;
-    }
-
-    private readonly long _cellSizeFx;
-    private readonly Dictionary<Cell, List<int>> _cells = new();
-    private readonly Dictionary<int, Bounds> _bounds = new();
-
+    /// <param name="cellSize">
+    /// Compatibility parameter now used as the Dynamic Tree fat-AABB margin.
+    /// Larger values reduce reinsertion frequency but produce more candidates.
+    /// </param>
     public SpatialHash(float cellSize)
     {
-        _cellSizeFx = Fx.From(cellSize);
-        if (_cellSizeFx <= 0)
-            throw new ArgumentOutOfRangeException(nameof(cellSize), "Cell size must be positive.");
+        _fatMarginFx = Fx.From(cellSize);
+        if (_fatMarginFx < 0)
+            throw new ArgumentOutOfRangeException(nameof(cellSize), "Fat margin cannot be negative.");
     }
 
-    public float CellSize => Fx.To(_cellSizeFx);
-    public int Count => _bounds.Count;
+    public float CellSize => Fx.To(_fatMarginFx);
+    public float FatMargin => Fx.To(_fatMarginFx);
+    public int Count => _dynamicBounds.Count + _staticBounds.Count;
+    public int DynamicCount => _dynamicBounds.Count;
+    public int StaticCount => _staticBounds.Count;
 
     public void Clear()
     {
-        _cells.Clear();
-        _bounds.Clear();
+        _dynamicTree.Clear();
+        _staticBvh.Clear();
+        _dynamicBounds.Clear();
+        _staticBounds.Clear();
+        _staticDirty = false;
     }
 
-    /// <summary>Insert or move an entity identified by <paramref name="id"/>.</summary>
-    public void Insert(int id, Aabb bounds)
+    public void ClearDynamic()
     {
-        if (_bounds.ContainsKey(id))
-            Remove(id);
+        _dynamicTree.Clear();
+        _dynamicBounds.Clear();
+    }
 
-        var fx = new Bounds(bounds);
-        _bounds[id] = fx;
-        ForEachCell(fx, (cx, cy) =>
-        {
-            Cell key = new(cx, cy);
-            if (!_cells.TryGetValue(key, out var list))
-            {
-                list = new List<int>();
-                _cells[key] = list;
-            }
-            list.Add(id);
-        });
+    public void ClearStatic()
+    {
+        _staticBvh.Clear();
+        _staticBounds.Clear();
+        _staticDirty = false;
+    }
+
+    public void Insert(int id, Aabb bounds) => InsertDynamic(id, new BpBounds(bounds));
+    public void Insert(int id, Circle bounds) => InsertDynamic(id, new BpBounds(bounds));
+    public void Insert(int id, Capsule bounds) => InsertDynamic(id, new BpBounds(bounds));
+    public void Insert(int id, Obb bounds) => InsertDynamic(id, new BpBounds(bounds));
+
+    public void Update(int id, Aabb bounds) => UpdateDynamic(id, new BpBounds(bounds));
+    public void Update(int id, Circle bounds) => UpdateDynamic(id, new BpBounds(bounds));
+    public void Update(int id, Capsule bounds) => UpdateDynamic(id, new BpBounds(bounds));
+    public void Update(int id, Obb bounds) => UpdateDynamic(id, new BpBounds(bounds));
+
+    public void InsertStatic(int id, Aabb bounds) => InsertStaticBounds(id, new BpBounds(bounds));
+    public void InsertStatic(int id, Circle bounds) => InsertStaticBounds(id, new BpBounds(bounds));
+    public void InsertStatic(int id, Capsule bounds) => InsertStaticBounds(id, new BpBounds(bounds));
+    public void InsertStatic(int id, Obb bounds) => InsertStaticBounds(id, new BpBounds(bounds));
+
+    public void UpdateStatic(int id, Aabb bounds) => InsertStaticBounds(id, new BpBounds(bounds));
+    public void UpdateStatic(int id, Circle bounds) => InsertStaticBounds(id, new BpBounds(bounds));
+    public void UpdateStatic(int id, Capsule bounds) => InsertStaticBounds(id, new BpBounds(bounds));
+    public void UpdateStatic(int id, Obb bounds) => InsertStaticBounds(id, new BpBounds(bounds));
+
+    /// <summary>Immediately rebuilds the immutable global static BVH.</summary>
+    public void BuildStatic()
+    {
+        _staticBvh.Build(_staticBounds);
+        _staticDirty = false;
     }
 
     public void Remove(int id)
     {
-        if (!_bounds.TryGetValue(id, out Bounds fx))
+        if (_dynamicBounds.Remove(id))
+        {
+            _dynamicTree.Remove(id);
             return;
-        ForEachCell(fx, (cx, cy) =>
-        {
-            Cell key = new(cx, cy);
-            if (_cells.TryGetValue(key, out var list))
-            {
-                list.Remove(id);
-                if (list.Count == 0)
-                    _cells.Remove(key);
-            }
-        });
-        _bounds.Remove(id);
+        }
+        if (_staticBounds.Remove(id))
+            _staticDirty = true;
     }
 
-    /// <summary>Collect the ids whose cells intersect <paramref name="region"/>.</summary>
-    public void Query(Aabb region, List<int> results)
-    {
-        results.Clear();
-        var fx = new Bounds(region);
-        var seen = new HashSet<int>();
-        ForEachCell(fx, (cx, cy) =>
-        {
-            if (_cells.TryGetValue(new Cell(cx, cy), out var list))
-            {
-                foreach (int id in list)
-                {
-                    if (seen.Add(id) && _bounds[id].Overlaps(fx))
-                        results.Add(id);
-                }
-            }
-        });
-    }
+    public void Query(Aabb region, List<int> results) => QueryBounds(new BpBounds(region), results);
+    public void Query(Circle region, List<int> results) => QueryBounds(new BpBounds(region), results);
+    public void Query(Capsule region, List<int> results) => QueryBounds(new BpBounds(region), results);
+    public void Query(Obb region, List<int> results) => QueryBounds(new BpBounds(region), results);
 
-    public List<int> Query(Aabb region)
-    {
-        var results = new List<int>();
-        Query(region, results);
-        return results;
-    }
+    public List<int> Query(Aabb region) => QueryNew(new BpBounds(region));
+    public List<int> Query(Circle region) => QueryNew(new BpBounds(region));
+    public List<int> Query(Capsule region) => QueryNew(new BpBounds(region));
+    public List<int> Query(Obb region) => QueryNew(new BpBounds(region));
 
     /// <summary>
-    /// Enumerate unique candidate pairs (broadphase). Only pairs whose AABBs
-    /// actually overlap are returned, so this is safe to feed straight into the
-    /// narrowphase.
+    /// Computes dynamic-dynamic and dynamic-static pairs. Static-static pairs
+    /// are intentionally omitted because immutable geometry cannot create new
+    /// contacts without a dynamic participant.
     /// </summary>
-    public IEnumerable<(int A, int B)> Pairs()
+    public void ComputePairs(List<(int A, int B)> results)
     {
-        var emitted = new HashSet<long>();
-        foreach (var cell in _cells.Values)
+        ArgumentNullException.ThrowIfNull(results);
+        EnsureStaticBuilt();
+        results.Clear();
+
+        foreach (KeyValuePair<int, BpBounds> item in _dynamicBounds)
         {
-            int n = cell.Count;
-            for (int i = 0; i < n; i++)
+            int id = item.Key;
+            BpBounds bounds = item.Value;
+
+            _candidates.Clear();
+            _dynamicTree.Query(bounds, _candidates);
+            for (int i = 0; i < _candidates.Count; i++)
             {
-                for (int j = i + 1; j < n; j++)
-                {
-                    int a = cell[i];
-                    int b = cell[j];
-                    if (a > b)
-                        (a, b) = (b, a);
+                int other = _candidates[i];
+                if (id < other && _dynamicBounds[other].Overlaps(bounds))
+                    results.Add((id, other));
+            }
 
-                    long pairKey = ((long)a << 32) | (uint)b;
-                    if (!emitted.Add(pairKey))
-                        continue;
-
-                    if (_bounds[a].Overlaps(_bounds[b]))
-                        yield return (a, b);
-                }
+            _candidates.Clear();
+            _staticBvh.Query(bounds, _candidates);
+            for (int i = 0; i < _candidates.Count; i++)
+            {
+                int other = _candidates[i];
+                if (_staticBounds[other].Overlaps(bounds))
+                    results.Add(id < other ? (id, other) : (other, id));
             }
         }
     }
 
-    private void ForEachCell(in Bounds fx, Action<long, long> action)
+    /// <summary>Compatibility API. Prefer <see cref="ComputePairs"/> in hot loops.</summary>
+    public IEnumerable<(int A, int B)> Pairs()
     {
-        long minX = Fx.FloorDiv(fx.MinX, _cellSizeFx);
-        long minY = Fx.FloorDiv(fx.MinY, _cellSizeFx);
-        long maxX = Fx.FloorDiv(fx.MaxX, _cellSizeFx);
-        long maxY = Fx.FloorDiv(fx.MaxY, _cellSizeFx);
+        var results = new List<(int A, int B)>();
+        ComputePairs(results);
+        return results;
+    }
 
-        for (long cy = minY; cy <= maxY; cy++)
-            for (long cx = minX; cx <= maxX; cx++)
-                action(cx, cy);
+    private void InsertDynamic(int id, BpBounds bounds)
+    {
+        if (_staticBounds.Remove(id))
+            _staticDirty = true;
+
+        if (_dynamicBounds.ContainsKey(id))
+        {
+            UpdateDynamic(id, bounds);
+            return;
+        }
+
+        _dynamicBounds.Add(id, bounds);
+        _dynamicTree.Insert(id, bounds.Expanded(_fatMarginFx));
+    }
+
+    private void UpdateDynamic(int id, BpBounds bounds)
+    {
+        if (!_dynamicBounds.ContainsKey(id))
+        {
+            InsertDynamic(id, bounds);
+            return;
+        }
+
+        _dynamicBounds[id] = bounds;
+        _dynamicTree.Move(id, bounds, bounds.Expanded(_fatMarginFx));
+    }
+
+    private void InsertStaticBounds(int id, BpBounds bounds)
+    {
+        if (_dynamicBounds.Remove(id))
+            _dynamicTree.Remove(id);
+        _staticBounds[id] = bounds;
+        _staticDirty = true;
+    }
+
+    private void QueryBounds(BpBounds bounds, List<int> results)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+        EnsureStaticBuilt();
+        results.Clear();
+
+        _candidates.Clear();
+        _dynamicTree.Query(bounds, _candidates);
+        for (int i = 0; i < _candidates.Count; i++)
+        {
+            int id = _candidates[i];
+            if (_dynamicBounds[id].Overlaps(bounds))
+                results.Add(id);
+        }
+
+        _candidates.Clear();
+        _staticBvh.Query(bounds, _candidates);
+        for (int i = 0; i < _candidates.Count; i++)
+        {
+            int id = _candidates[i];
+            if (_staticBounds[id].Overlaps(bounds))
+                results.Add(id);
+        }
+    }
+
+    private List<int> QueryNew(BpBounds bounds)
+    {
+        var results = new List<int>();
+        QueryBounds(bounds, results);
+        return results;
+    }
+
+    private void EnsureStaticBuilt()
+    {
+        if (_staticDirty)
+            BuildStatic();
     }
 }

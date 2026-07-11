@@ -222,10 +222,125 @@ public class BroadphaseTests
         FieldInfo[] fields = typeof(SpatialHash).GetFields(BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.DoesNotContain(fields, f => f.FieldType == typeof(float) || f.FieldType == typeof(double));
 
-        FieldInfo cells = Assert.Single(fields, f => f.Name == "_cells");
-        Type cellType = cells.FieldType.GetGenericArguments()[0];
-        Assert.All(cellType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
+        FieldInfo boundsMap = Assert.Single(fields, f => f.Name == "_dynamicBounds");
+        Type boundsType = boundsMap.FieldType.GetGenericArguments()[1];
+        Assert.All(boundsType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
             f => Assert.Equal(typeof(long), f.FieldType));
+    }
+
+    [Fact]
+    public void SpatialHash_SupportsAllShapeOverloads()
+    {
+        var hash = new SpatialHash(8f);
+        hash.Insert(1, new Circle(new Vec2(0, 0), 2));
+        hash.Insert(2, new Capsule(new Vec2(-3, 1), new Vec2(3, 1), 1));
+        hash.Insert(3, new Obb(new Vec2(1, -1), new Vec2(3, 1), 0.5f));
+        hash.Insert(4, new Aabb(new Vec2(100, 100), new Vec2(2, 2)));
+
+        var results = new List<int>();
+        hash.Query(new Circle(Vec2.Zero, 5), results);
+        Assert.Contains(1, results);
+        Assert.Contains(2, results);
+        Assert.Contains(3, results);
+        Assert.DoesNotContain(4, results);
+
+        hash.Query(new Capsule(new Vec2(-5, 0), new Vec2(5, 0), 2), results);
+        Assert.Contains(1, results);
+        hash.Query(new Obb(Vec2.Zero, new Vec2(5, 5), 0.25f), results);
+        Assert.Contains(2, results);
+    }
+
+    [Fact]
+    public void SpatialHash_PairsAcrossDifferentLevelsWithoutDuplicates()
+    {
+        var hash = new SpatialHash(10f);
+        hash.Insert(1, new Aabb(Vec2.Zero, new Vec2(500, 500)));
+        hash.Insert(2, new Circle(new Vec2(400, 0), 2));
+        hash.Insert(3, new Circle(new Vec2(2_000, 0), 2));
+
+        var pairs = new List<(int A, int B)>();
+        hash.ComputePairs(pairs);
+
+        Assert.Single(pairs);
+        Assert.Equal((1, 2), pairs[0]);
+    }
+
+    [Fact]
+    public void SpatialHash_UpdateAndRemoveMoveEntityBetweenDistantCells()
+    {
+        var hash = new SpatialHash(16f);
+        hash.Insert(9, new Circle(Vec2.Zero, 1));
+        hash.Update(9, new Circle(new Vec2(1_000_000, -1_000_000), 1));
+
+        Assert.Empty(hash.Query(new Aabb(Vec2.Zero, new Vec2(10, 10))));
+        Assert.Contains(9, hash.Query(new Circle(new Vec2(1_000_000, -1_000_000), 2)));
+
+        hash.Remove(9);
+        Assert.Equal(0, hash.Count);
+        Assert.Empty(hash.Query(new Circle(new Vec2(1_000_000, -1_000_000), 2)));
+    }
+
+    [Fact]
+    public void SpatialHash_StaticBvhPairsOnlyWithDynamicTree()
+    {
+        var broadphase = new SpatialHash(4f);
+        broadphase.InsertStatic(100, new Aabb(Vec2.Zero, new Vec2(20, 20)));
+        broadphase.InsertStatic(101, new Aabb(new Vec2(10, 0), new Vec2(20, 20)));
+        broadphase.Insert(1, new Circle(new Vec2(5, 0), 2));
+        broadphase.BuildStatic();
+
+        var pairs = new List<(int A, int B)>();
+        broadphase.ComputePairs(pairs);
+
+        Assert.Contains((1, 100), pairs);
+        Assert.Contains((1, 101), pairs);
+        Assert.DoesNotContain((100, 101), pairs);
+    }
+
+    [Fact]
+    public void SpatialHash_HybridTreesMatchBruteForceAfterRandomMoves()
+    {
+        var broadphase = new SpatialHash(12f);
+        var dynamic = new Dictionary<int, Aabb>();
+        var stationary = new Dictionary<int, Aabb>();
+        var random = new Random(12345);
+
+        static Aabb RandomBox(Random random) => new(
+            new Vec2(random.Next(-5_000, 5_001), random.Next(-5_000, 5_001)),
+            new Vec2(random.Next(1, 80), random.Next(1, 80)));
+
+        for (int id = 0; id < 100; id++)
+        {
+            Aabb box = RandomBox(random);
+            dynamic.Add(id, box);
+            broadphase.Insert(id, box);
+        }
+        for (int id = 1_000; id < 1_060; id++)
+        {
+            Aabb box = RandomBox(random);
+            stationary.Add(id, box);
+            broadphase.InsertStatic(id, box);
+        }
+        broadphase.BuildStatic();
+
+        var actual = new List<int>();
+        for (int step = 0; step < 200; step++)
+        {
+            int id = random.Next(0, 100);
+            Aabb moved = RandomBox(random);
+            dynamic[id] = moved;
+            broadphase.Update(id, moved);
+
+            Aabb query = RandomBox(random).Expanded(150);
+            broadphase.Query(query, actual);
+            var expected = new HashSet<int>();
+            foreach (KeyValuePair<int, Aabb> item in dynamic)
+                if (item.Value.Overlaps(query)) expected.Add(item.Key);
+            foreach (KeyValuePair<int, Aabb> item in stationary)
+                if (item.Value.Overlaps(query)) expected.Add(item.Key);
+
+            Assert.True(expected.SetEquals(actual), $"Broadphase mismatch at move {step}.");
+        }
     }
 
     [Fact]

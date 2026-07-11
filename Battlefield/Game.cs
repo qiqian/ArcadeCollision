@@ -62,7 +62,10 @@ internal sealed class Game
 
     private readonly SpatialHash _hash = new(80f);          // body capsules (separation)
     private readonly SpatialHash _hurtHash = new(160f);     // hurt boxes (hit broadphase)
+    private readonly List<(int A, int B)> _bodyPairs = new();
     private readonly List<int> _hitCandidates = new();
+    private int _bodyProxySlots;
+    private int _hurtProxySlots;
     private readonly Random _rng = new();
     private Fighter _taxMan = null!;
     private Vec2 _move;
@@ -78,6 +81,9 @@ internal sealed class Game
     public void Reset()
     {
         Fighters.Clear();
+        _hash.Clear();
+        _hurtHash.Clear();
+        _bodyProxySlots = _hurtProxySlots = 0;
         GameOver = Win = false;
         Hitstop = 0f;
         ActiveRoom = null;
@@ -1052,7 +1058,6 @@ internal sealed class Game
 
     private void ResolveBodies()
     {
-        _hash.Clear();
         for (int i = 0; i < Fighters.Count; i++)
         {
             Fighter fighter = Fighters[i];
@@ -1062,11 +1067,18 @@ internal sealed class Game
             // spawn point would otherwise push each other away from their markers
             // forever and stall the wave.
             if (!fighter.Dead && fighter.CombatActive && !fighter.SpawnWalking)
-                _hash.Insert(i, fighter.Body.Bounds);
+                _hash.Update(i, fighter.Body);
+            else
+                _hash.Remove(i);
         }
+        for (int i = Fighters.Count; i < _bodyProxySlots; i++)
+            _hash.Remove(i);
+        _bodyProxySlots = Fighters.Count;
 
-        foreach ((int ia, int ib) in _hash.Pairs())
+        _hash.ComputePairs(_bodyPairs);
+        for (int pairIndex = 0; pairIndex < _bodyPairs.Count; pairIndex++)
         {
+            (int ia, int ib) = _bodyPairs[pairIndex];
             Fighter a = Fighters[ia], b = Fighters[ib];
             if (a.Dead || b.Dead || !a.CombatActive || !b.CombatActive) continue;
             Manifold manifold = Collide.CapsuleVsCapsule(a.Body, b.Body);
@@ -1123,30 +1135,51 @@ internal sealed class Game
 
     private void ResolveHits()
     {
-        // Broadphase: index every attackable hurt box in the SpatialHash once,
-        // then each active hit window only narrow-phase-tests the candidates its
-        // own bounds map to, instead of scanning the whole fighter list.
-        _hurtHash.Clear();
+        // Keep dynamic proxies alive across frames; fat AABBs avoid tree
+        // reinsertion while fighters move within their predicted margin.
         for (int i = 0; i < Fighters.Count; i++)
         {
             Fighter target = Fighters[i];
             if (target.Dead || !target.CombatActive || target.IsInvulnerable)
+            {
+                _hurtHash.Remove(i);
                 continue;
-            _hurtHash.Insert(i, BoundsOf(target.CurrentHurtShape()));
+            }
+            BoxShape hurt = target.CurrentHurtShape();
+            _hurtHash.Update(i, new Obb(hurt.Center, hurt.HalfSize, hurt.Rotation));
         }
-        if (_hurtHash.Count == 0) return;
+        for (int i = Fighters.Count; i < _hurtProxySlots; i++)
+            _hurtHash.Remove(i);
+        _hurtProxySlots = Fighters.Count;
+        if (_hurtHash.DynamicCount == 0) return;
 
-        foreach (Fighter attacker in Fighters)
+        for (int attackerIndex = 0; attackerIndex < Fighters.Count; attackerIndex++)
         {
+            Fighter attacker = Fighters[attackerIndex];
             if (!attacker.CombatActive
                 || attacker.State is not (FState.Attack or FState.AirAttack)
                 || attacker.Attack == null
                 || !attacker.Attack.TryWindowAt(attacker.AttackTime, out HitWindow hit))
                 continue;
 
-            _hurtHash.Query(HitBounds(attacker, hit), _hitCandidates);
-            foreach (int index in _hitCandidates)
+            Vec2 hitCenter = HitCenter(attacker, hit);
+            if (hit.ShapeKind == HitShapeKind.HorizontalCapsule)
             {
+                float halfSpine = MathF.Max(0f, hit.CapsuleHeight * .5f - hit.CapsuleRadius);
+                _hurtHash.Query(new Capsule(
+                    hitCenter - new Vec2(halfSpine, 0f),
+                    hitCenter + new Vec2(halfSpine, 0f),
+                    hit.CapsuleRadius), _hitCandidates);
+            }
+            else
+            {
+                _hurtHash.Query(new Obb(hitCenter, hit.Box.HalfSize,
+                    hit.Box.Rotation * attacker.Facing), _hitCandidates);
+            }
+
+            for (int candidateIndex = 0; candidateIndex < _hitCandidates.Count; candidateIndex++)
+            {
+                int index = _hitCandidates[candidateIndex];
                 Fighter target = Fighters[index];
                 if (target == attacker || target.Faction == attacker.Faction)
                     continue;
@@ -1168,15 +1201,6 @@ internal sealed class Game
 
     private static Vec2 HitCenter(Fighter attacker, in HitWindow hit) =>
         attacker.Pos + new Vec2(attacker.Facing * hit.Box.Center.X, hit.Box.Center.Y - attacker.SkinY);
-
-    /// <summary>World-space AABB of an active hit window, for the broadphase query.</summary>
-    private static Aabb HitBounds(Fighter attacker, in HitWindow hit)
-    {
-        Vec2 center = HitCenter(attacker, hit);
-        if (hit.ShapeKind == HitShapeKind.HorizontalCapsule)
-            return new Aabb(center, new Vec2(hit.CapsuleHeight * .5f, hit.CapsuleRadius));
-        return BoundsOf(new BoxShape(center, hit.Box.HalfSize, hit.Box.Rotation * attacker.Facing));
-    }
 
     private static bool HitOverlaps(Fighter attacker, HitWindow hit, BoxShape hurt)
     {

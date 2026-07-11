@@ -61,6 +61,38 @@ public readonly struct Aabb
     }
 }
 
+/// <summary>An oriented box defined by center, half-extents and radians.</summary>
+public readonly struct Obb
+{
+    public readonly Vec2 Center;
+    public readonly Vec2 HalfExtents;
+    public readonly float Rotation;
+
+    public Obb(Vec2 center, Vec2 halfExtents, float rotation = 0f)
+    {
+        Center = center;
+        HalfExtents = halfExtents;
+        Rotation = rotation;
+    }
+
+    public Aabb Bounds
+    {
+        get
+        {
+            float c = MathF.Cos(Rotation);
+            float s = MathF.Sin(Rotation);
+            float hx = MathF.Abs(HalfExtents.X);
+            float hy = MathF.Abs(HalfExtents.Y);
+            var half = new Vec2(
+                MathF.Abs(c) * hx + MathF.Abs(s) * hy,
+                MathF.Abs(s) * hx + MathF.Abs(c) * hy);
+            return new Aabb(Center, half);
+        }
+    }
+
+    public Obb Moved(Vec2 delta) => new(Center + delta, HalfExtents, Rotation);
+}
+
 /// <summary>
 /// A capsule: the set of points within <see cref="Radius"/> of the segment
 /// A-B. Great for characters, sword swings and thick projectiles.
