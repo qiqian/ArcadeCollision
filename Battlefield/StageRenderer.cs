@@ -17,7 +17,7 @@ internal sealed class StageRenderer : IDisposable
     private readonly Dictionary<int, Bitmap> _staticChunks = new();
     private float _cameraSourceX;
     private bool _renderingStaticChunk;
-    private string Root => Path.Combine(AppContext.BaseDirectory, "Template");
+    private string Root => Path.Combine(AppContext.BaseDirectory, "Assets");
     private const int ChunkWidth = 1280;
     private const int CacheTop = -800;
     private const int CacheHeight = 1800;

@@ -47,14 +47,13 @@ internal sealed class Clip
 internal static class SpriteLibrary
 {
     private static readonly Dictionary<string, Dictionary<string, Clip>> _sets = new();
-    private static string TemplateRoot => Path.Combine(AppContext.BaseDirectory, "Template");
-    private static string FallbackRoot => Path.Combine(AppContext.BaseDirectory, "Assets");
+    private static string AssetRoot => Path.Combine(AppContext.BaseDirectory, "Assets");
 
     private static string SetRoot(string set) => set switch
     {
-        "chad" => Path.Combine(TemplateRoot, "characters", "playable", "chad", "resources", "sprites"),
-        "taxman" => Path.Combine(TemplateRoot, "characters", "enemies", "tax_man", "resources", "sprites"),
-        _ => Path.Combine(TemplateRoot, "characters", "enemies", "sargent", "resources", "sprites"),
+        "chad" => Path.Combine(AssetRoot, "characters", "playable", "chad", "resources", "sprites"),
+        "taxman" => Path.Combine(AssetRoot, "characters", "enemies", "tax_man", "resources", "sprites"),
+        _ => Path.Combine(AssetRoot, "characters", "enemies", "sargent", "resources", "sprites"),
     };
 
     public static Dictionary<string, Clip> Get(string set)
@@ -81,8 +80,6 @@ internal static class SpriteLibrary
         {
             string relative = r.Replace('/', Path.DirectorySeparatorChar) + ".png";
             string path = Path.Combine(SetRoot(set), relative);
-            if (!File.Exists(path))
-                path = Path.Combine(FallbackRoot, set, relative);
             if (File.Exists(path))
                 list.Add(new Bitmap(path));
         }
@@ -94,8 +91,6 @@ internal static class SpriteLibrary
     private static Bitmap[] FolderFrames(string set, string relativeFolder)
     {
         string folder = Path.Combine(SetRoot(set), relativeFolder.Replace('/', Path.DirectorySeparatorChar));
-        if (!Directory.Exists(folder))
-            folder = Path.Combine(FallbackRoot, set, relativeFolder.Replace('/', Path.DirectorySeparatorChar));
         if (!Directory.Exists(folder)) return new[] { new Bitmap(1, 1) };
         string[] files = Directory.GetFiles(folder, "*.png");
         Array.Sort(files, StringComparer.OrdinalIgnoreCase);

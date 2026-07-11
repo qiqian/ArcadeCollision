@@ -47,8 +47,6 @@ internal sealed class Fighter
     public float AttackTime;
     public bool ComboQueued;
     public int AutoCombo;
-    public int ActiveHitWindow = -1;
-    public readonly HashSet<Fighter> HitThisSwing = new(); // kept for the existing renderer/debug API
     public readonly Dictionary<Fighter, HashSet<int>> HitGroups = new();
 
     public float SkinY;                      // height above root, up-positive
@@ -64,11 +62,9 @@ internal sealed class Fighter
     public float HurtTimer;
     public float LandedTimer;
     public float DeathTimer;
-    public float AttackCooldown = 0f;
 
     public AiState Ai = AiState.Wait;
     public float AiTimer;
-    public int AiComboHits = 0;
     public int AiAttackChoice;
     public int BossPhase;
     public bool SpawnWalking;
@@ -140,12 +136,7 @@ internal sealed class Fighter
         return !ids.Add(hitId);
     }
 
-    public void ResetAttackHits()
-    {
-        HitThisSwing.Clear();
-        HitGroups.Clear();
-        ActiveHitWindow = -1;
-    }
+    public void ResetAttackHits() => HitGroups.Clear();
 
     public void SetState(FState state)
     {

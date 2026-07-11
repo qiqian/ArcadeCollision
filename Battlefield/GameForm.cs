@@ -21,7 +21,6 @@ public sealed class GameForm : Form
     private readonly HashSet<Keys> _prev = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly System.Windows.Forms.Timer _timer = new();
-    private readonly Random _rng = new();
     private long _lastTicks;
     private double _accumulator;
     private bool _attackQueued, _jumpQueued;
@@ -43,8 +42,8 @@ public sealed class GameForm : Form
     private const float VW = Game.ArenaW;   // virtual render width
     private const float VH = 720f;          // virtual render height
 
-    private readonly Bitmap[] _fxExplosion;   // Tax Man area-attack explosion frames
-    private readonly Bitmap[] _fxCoin;        // Tax Man grenade-death coin frames
+    private readonly Font _fEndTitle = new("Segoe UI", 44f, FontStyle.Bold);
+    private readonly Font _fEndHint = new("Segoe UI", 16f, FontStyle.Bold);
     private readonly Bitmap _buffer = new((int)VW, (int)VH, PixelFormat.Format32bppPArgb);
     private Direct2DPresenter? _presenter;
     private const double FixedStep = 1.0 / 60.0;
@@ -74,19 +73,9 @@ public sealed class GameForm : Form
         ClientSize = new Size(cw, ch);
         StartPosition = FormStartPosition.CenterScreen;
 
-        string template = Path.Combine(AppContext.BaseDirectory, "Template");
-        string taxSprites = Path.Combine(template, "characters", "enemies", "tax_man", "resources", "sprites");
-        _fxExplosion = LoadFrames(Path.Combine(taxSprites, "attacks", "area_attack", "explosion"));
-        _fxCoin = LoadFrames(Path.Combine(taxSprites, "attacks", "grenade_death", "coins"));
-        if (_fxExplosion.Length == 0 || _fxCoin.Length == 0)
-        {
-            string fallbackFx = Path.Combine(AppContext.BaseDirectory, "Assets", "taxman", "fx");
-            if (_fxExplosion.Length == 0) _fxExplosion = LoadFrames(Path.Combine(fallbackFx, "explosion"));
-            if (_fxCoin.Length == 0) _fxCoin = LoadFrames(Path.Combine(fallbackFx, "coins"));
-        }
-
-        string playerHud = Path.Combine(template, "ui", "gameplay_hud", "player_health_bar", "pngs");
-        string enemyHud = Path.Combine(template, "ui", "gameplay_hud", "enemy_health_bar", "pngs");
+        string assets = Path.Combine(AppContext.BaseDirectory, "Assets");
+        string playerHud = Path.Combine(assets, "ui", "gameplay_hud", "player_health_bar", "pngs");
+        string enemyHud = Path.Combine(assets, "ui", "gameplay_hud", "enemy_health_bar", "pngs");
         _hudPlayerBase = TryLoad(Path.Combine(playerHud, "health_bar_base.png"));
         _hudPlayerUnder = TryLoad(Path.Combine(playerHud, "health_bar_under.png"));
         _hudPlayerProgress = TryLoad(Path.Combine(playerHud, "health_bar_progress.png"));
@@ -95,9 +84,9 @@ public sealed class GameForm : Form
         _hudEnemyUnder = TryLoad(Path.Combine(enemyHud, "small_health_bar_under.png"));
         _hudEnemyProgress = TryLoad(Path.Combine(enemyHud, "small_health_bar_progress.png"));
         _hudEnemyHeart = TryLoad(Path.Combine(enemyHud, "small_heart_icon.png"));
-        _profileChad = TryLoad(Path.Combine(template, "characters", "playable", "chad", "resources", "sprites", "chad_profile.png"));
-        _profileSarge = TryLoad(Path.Combine(template, "characters", "enemies", "sargent", "resources", "sprites", "health_bar_revised_all_sarge.png"));
-        _profileTaxman = TryLoad(Path.Combine(template, "characters", "enemies", "tax_man", "resources", "sprites", "health_bar_revised_all_tax_man.png"));
+        _profileChad = TryLoad(Path.Combine(assets, "characters", "playable", "chad", "resources", "sprites", "chad_profile.png"));
+        _profileSarge = TryLoad(Path.Combine(assets, "characters", "enemies", "sargent", "resources", "sprites", "health_bar_revised_all_sarge.png"));
+        _profileTaxman = TryLoad(Path.Combine(assets, "characters", "enemies", "tax_man", "resources", "sprites", "health_bar_revised_all_tax_man.png"));
 
         _lastTicks = _clock.ElapsedTicks;
         _timer.Interval = 8;
@@ -136,17 +125,6 @@ public sealed class GameForm : Form
         _presenter?.Dispose();
         _presenter = null;
         base.OnHandleDestroyed(e);
-    }
-
-    private static Bitmap[] LoadFrames(string dir)
-    {
-        if (!Directory.Exists(dir)) return Array.Empty<Bitmap>();
-        var files = Directory.GetFiles(dir, "*.png");
-        Array.Sort(files, StringComparer.OrdinalIgnoreCase);   // numeric-suffix filenames sort in order
-        var list = new List<Bitmap>(files.Length);
-        foreach (var f in files)
-            try { list.Add(new Bitmap(f)); } catch { /* skip unreadable frame */ }
-        return list.ToArray();
     }
 
     // -------------------------------------------------------------- input
@@ -273,27 +251,19 @@ public sealed class GameForm : Form
     {
         g.Clear(BackColor);
 
-        float sx = 0, sy = 0;
-        if (_game.ShakeMag > 0.1f)
-        {
-            sx = (float)(_rng.NextDouble() - 0.5) * _game.ShakeMag * 2f;
-            sy = (float)(_rng.NextDouble() - 0.5) * _game.ShakeMag * 2f;
-        }
-
         float camX = _camReady ? _camX : CameraTargetX();
         float camY = _camReady ? _camY : CameraTargetY();
 
         GraphicsState world = g.Save();
         float zoom = _camZoom;
         using (var matrix = new Matrix(zoom, 0f, 0f, zoom,
-                   sx - camX * zoom, sy - camY * zoom))
+                   -camX * zoom, -camY * zoom))
             g.Transform = matrix;
 
         _stageRenderer.DrawBackground(g, camX, zoom);
         DrawSeatedTaxman(g);
 
         GraphicsState combatSpace = g.Save();
-        foreach (var d in _game.Dusts) DrawDust(g, d);
         foreach (var f in _game.Fighters) DrawShadow(g, f);
 
         var order = new List<Fighter>(_game.Fighters);
@@ -313,18 +283,32 @@ public sealed class GameForm : Form
         }
         DrawTaxDeath(g);
 
-        foreach (var fx in _game.Effects) DrawEffect(g, fx);
-        foreach (var s in _game.Sparks) DrawSpark(g, s);
         g.Restore(combatSpace);
         _stageRenderer.DrawForeground(g);
 
         g.Restore(world);
 
-        if (_game.FlashFx > 0.01f)
-            using (var fl = new SolidBrush(Color.FromArgb((int)(70 * Math.Clamp(_game.FlashFx, 0f, 1f)), 255, 255, 255)))
-                g.FillRectangle(fl, 0, 0, VW, VH);
-
         DrawHud(g);
+        if (_game.GameOver) DrawEndScreen(g);
+    }
+
+    private void DrawEndScreen(Graphics g)
+    {
+        using var shade = new SolidBrush(Color.FromArgb(170, 0, 0, 0));
+        g.FillRectangle(shade, 0, 0, VW, VH);
+
+        string title = _game.Win ? "STAGE CLEAR!" : "GAME OVER";
+        using var titleBrush = new SolidBrush(_game.Win
+            ? Color.FromArgb(255, 226, 130) : Color.White);
+        var titleSize = g.MeasureString(title, _fEndTitle);
+        g.DrawString(title, _fEndTitle, titleBrush, (VW - titleSize.Width) / 2f, VH / 2f - 100f);
+
+        // Blink so the restart hint is unmissable.
+        int alpha = (int)(180 + 75 * MathF.Sin(_presentationTime * 5f));
+        using var hintBrush = new SolidBrush(Color.FromArgb(Math.Clamp(alpha, 0, 255), 235, 235, 245));
+        string hint = "PRESS  R  TO  RESTART";
+        var hintSize = g.MeasureString(hint, _fEndHint);
+        g.DrawString(hint, _fEndHint, hintBrush, (VW - hintSize.Width) / 2f, VH / 2f + 4f);
     }
 
     private float CameraTargetX()
@@ -397,20 +381,6 @@ public sealed class GameForm : Form
     }
 
     private static float Lerp(float a, float b, float t) => a + (b - a) * t;
-
-    // The barrier that walls the player into an active fight room (world space).
-    private void DrawRoomBarrier(Graphics g)
-    {
-        var r = _game.ActiveRoom;
-        if (r == null) return;
-        foreach (float x in new[] { r.Left, r.Right })
-        {
-            using var post = new LinearGradientBrush(
-                new RectangleF(x - 7, Game.FloorY0 - 60, 14, (Game.FloorY1 - Game.FloorY0) + 120),
-                Color.FromArgb(180, 120, 90, 60), Color.FromArgb(180, 60, 44, 30), LinearGradientMode.Horizontal);
-            g.FillRectangle(post, x - 7, Game.FloorY0 - 60, 14, (Game.FloorY1 - Game.FloorY0) + 120);
-        }
-    }
 
     // ---- sprite drawing ----
 
@@ -642,63 +612,6 @@ public sealed class GameForm : Form
         g.FillEllipse(b, f.Pos.X - rx, f.Pos.Y - ry, rx * 2, ry * 2);
     }
 
-    // ---- effects ----
-
-    private static void DrawDust(Graphics g, Dust d)
-    {
-        float t = d.Age / d.Life; int a = (int)(120 * (1f - t));
-        if (a <= 0) return;
-        float r = d.Size * (0.6f + t);
-        using var b = new SolidBrush(Color.FromArgb(a, 175, 160, 135));
-        g.FillEllipse(b, d.Pos.X - r, d.Pos.Y - r, r * 2, r * 2);
-    }
-
-    private void DrawEffect(Graphics g, EffectSprite fx)
-    {
-        Bitmap[] set = fx.Kind == EffectKind.Explosion ? _fxExplosion : _fxCoin;
-        if (set.Length == 0) return;
-        float t = fx.Age / fx.Life;
-
-        int idx = fx.Kind == EffectKind.Explosion
-            ? Math.Clamp((int)(t * set.Length), 0, set.Length - 1)   // one-shot across lifetime
-            : (int)(fx.Age * 18f + fx.Spin) % set.Length;           // coin spin loop
-        Bitmap bmp = set[idx];
-
-        float scale = fx.Scale / bmp.Height;
-        float w = bmp.Width * scale, h = bmp.Height * scale;
-        var dest = new RectangleF(fx.Pos.X - w / 2f, fx.Pos.Y - h / 2f, w, h);
-
-        float alpha = fx.Kind == EffectKind.Coin ? Math.Clamp((1f - t) * 2.5f, 0f, 1f) : 1f;
-        if (alpha >= 0.999f)
-            g.DrawImage(bmp, dest.X, dest.Y, dest.Width, dest.Height);
-        else
-            DrawImageAlpha(g, bmp, dest, alpha);
-    }
-
-    private void DrawSpark(Graphics g, HitSpark s)
-    {
-        float t = s.Age / s.Life, k = 1f - t;
-        if (k <= 0) return;
-        GraphicsState st = g.Save();
-        g.TranslateTransform(s.Pos.X, s.Pos.Y);
-        g.RotateTransform(s.Angle * 180f / MathF.PI + s.Age * 240f);
-        float rad = (s.Heavy ? 30f : 17f) * s.Size * (0.5f + t);
-        Color col = s.Heavy ? Color.FromArgb((int)(255 * k), 255, 180, 90) : Color.FromArgb((int)(255 * k), 255, 245, 200);
-        using (var pen = new Pen(col, s.Heavy ? 4f : 2.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-        {
-            int n = s.Heavy ? 8 : 6;
-            for (int i = 0; i < n; i++)
-            {
-                double ang = i * Math.PI * 2 / n;
-                g.DrawLine(pen, (float)Math.Cos(ang) * rad * 0.35f, (float)Math.Sin(ang) * rad * 0.35f,
-                    (float)Math.Cos(ang) * rad, (float)Math.Sin(ang) * rad);
-            }
-        }
-        using (var core = new SolidBrush(Color.FromArgb((int)(255 * k), 255, 255, 255)))
-            g.FillEllipse(core, -rad * 0.28f, -rad * 0.28f, rad * 0.56f, rad * 0.56f);
-        g.Restore(st);
-    }
-
     private void DrawHud(Graphics g)
     {
         const float scale = Game.WorldScale;
@@ -766,8 +679,8 @@ public sealed class GameForm : Form
             _timer.Dispose();
             _buffer.Dispose();
             _stageRenderer.Dispose();
-            foreach (var b in _fxExplosion) b.Dispose();
-            foreach (var b in _fxCoin) b.Dispose();
+            _fEndTitle.Dispose();
+            _fEndHint.Dispose();
             foreach (Image? image in new[] {
                 _hudPlayerBase, _hudPlayerUnder, _hudPlayerProgress, _hudHeart,
                 _hudEnemyBase, _hudEnemyUnder, _hudEnemyProgress, _hudEnemyHeart,

@@ -3,35 +3,16 @@ using System.Collections.Generic;
 
 namespace ArcCollision.Battlefield;
 
-// These collections remain part of GameForm's rendering contract. Combat no
-// longer creates arcade score/combo particles; source-timed Tax Man VFX are
-// rendered directly by GameForm from attack/state time.
-#pragma warning disable CS0649 // compatibility-only renderer DTO fields
-internal struct HitSpark { public Vec2 Pos; public float Age, Life, Angle, Size; public bool Heavy; }
-internal struct DamageNumber { public Vec2 Pos; public Vec2 Vel; public float Age, Life; public int Value; public bool Crit; }
-internal struct Dust { public Vec2 Pos; public Vec2 Vel; public float Age, Life, Size; }
-internal enum EffectKind { Explosion, Coin }
-internal struct EffectSprite
-{
-    public EffectKind Kind;
-    public Vec2 Pos, Vel;
-    public float Age, Life, Scale, Spin;
-    public bool Gravity;
-}
-#pragma warning restore CS0649
-
 /// <summary>
 /// Combat-only translation of Quiver's Downtown Beatdown source. Source-space
 /// values are mapped once from 1920x1080 by WorldScale; there is no vertical
-/// viewport crop.
+/// viewport crop. Source-timed Tax Man VFX are rendered directly by GameForm
+/// from attack/state time.
 /// </summary>
 internal sealed class Game
 {
     public const float ArenaW = 1280f;
     public const float WorldScale = 2f / 3f;
-    // Kept for compatibility with presentation code. The actual vertical view
-    // follows QuiverLevelCamera (player Y - 100, clamped by room limits).
-    public const float SourceViewTop = 0f;
     public const float WorldW = 16070f * WorldScale;
     // Walkable edges from Stage_01's CeilingLimits and BottomLimit collision
     // shapes (character radius is applied in ClampArena).
@@ -48,18 +29,10 @@ internal sealed class Game
     private const float ArriveRange = 10f * WorldScale;
 
     public readonly List<Fighter> Fighters = new();
-    public readonly List<HitSpark> Sparks = new();
-    public readonly List<DamageNumber> Numbers = new();
-    public readonly List<Dust> Dusts = new();
-    public readonly List<EffectSprite> Effects = new();
     public Fighter Player = null!;
 
-    // Obsolete arcade counters are intentionally harmless because GameForm may
-    // still read them.
-    public int Score, Lives, Combo, BestCombo;
-    public float ComboTimer;
     public bool GameOver, Win;
-    public float Hitstop, ShakeMag, FlashFx;
+    public float Hitstop;
 
     internal sealed class FightRoom
     {
@@ -100,14 +73,8 @@ internal sealed class Game
     public void Reset()
     {
         Fighters.Clear();
-        Sparks.Clear();
-        Numbers.Clear();
-        Dusts.Clear();
-        Effects.Clear();
-        Score = Lives = Combo = BestCombo = 0;
-        ComboTimer = 0f;
         GameOver = Win = false;
-        Hitstop = ShakeMag = FlashFx = 0f;
+        Hitstop = 0f;
         ActiveRoom = null;
         RoomsCleared = 0;
         CameraLeft = 0f;
@@ -264,7 +231,6 @@ internal sealed class Game
         ResolveBodies();
         ClampArena();
         ResolveHits();
-        UpdateEffects(dt);
         Cleanup();
         StageUpdate(dt);
     }
@@ -406,15 +372,20 @@ internal sealed class Game
 
                 case AiState.MoveToDashMarker:
                 {
+                    fighter.AiTimer -= dt;
                     Vec2 delta = fighter.AiTarget - fighter.Pos;
                     float span = fighter.Def.BodyHalfSpine + fighter.Def.Radius;
                     (float screenLeft, float screenRight) = GetScreenXBounds();
                     bool blockedByScreenWall =
                         (delta.X < 0f && fighter.Pos.X <= screenLeft + span + ArriveRange)
                         || (delta.X > 0f && fighter.Pos.X >= screenRight - span - ArriveRange);
-                    if (delta.LengthSquared <= ArriveRange * ArriveRange || blockedByScreenWall)
+                    bool arrived = delta.LengthSquared <= ArriveRange * ArriveRange;
+                    // The timeout mirrors the chase timeout: with body separation a
+                    // blocking player could otherwise pin the boss short of the
+                    // marker indefinitely.
+                    if (arrived || blockedByScreenWall || fighter.AiTimer <= 0f)
                     {
-                        if (!blockedByScreenWall)
+                        if (arrived)
                             fighter.Pos = fighter.AiTarget;
                         fighter.Ai = AiState.Align;
                         fighter.AiTimer = 5f;
@@ -508,6 +479,7 @@ internal sealed class Game
             fighter.AiTarget = fighter.Pos.DistanceSquared(left) <= fighter.Pos.DistanceSquared(right)
                 ? left : right;
             fighter.Ai = AiState.MoveToDashMarker;
+            fighter.AiTimer = 5f;
         }
         else
         {
@@ -853,7 +825,25 @@ internal sealed class Game
                 target.Invuln = 0f;
                 AiDecide(target);
             }
-            else EnterAiWait(target);
+            else ResumeTaxPlan(target);
+        }
+    }
+
+    // TaxManAiStateMachine resumes _state_to_resume after WaitForIdle: an
+    // interrupted approach (chase, dash setup) restarts rather than re-rolling
+    // the attack choice. The resumed state re-enters with a fresh timeout.
+    private void ResumeTaxPlan(Fighter target)
+    {
+        switch (target.Ai)
+        {
+            case AiState.Chase:
+            case AiState.MoveToDashMarker:
+            case AiState.Align:
+                target.AiTimer = 5f;
+                break;
+            default:
+                EnterAiWait(target);
+                break;
         }
     }
 
@@ -1047,7 +1037,12 @@ internal sealed class Game
         for (int i = 0; i < Fighters.Count; i++)
         {
             Fighter fighter = Fighters[i];
-            if (!fighter.Dead && fighter.CombatActive)
+            // Source characters never body-collide (collision_mask covers only
+            // obstacles/limits). Separation here is a port nicety for combat, so
+            // walk-in spawns must be exempt: crossing entrance paths from a shared
+            // spawn point would otherwise push each other away from their markers
+            // forever and stall the wave.
+            if (!fighter.Dead && fighter.CombatActive && !fighter.SpawnWalking)
                 _hash.Insert(i, fighter.Body.Bounds);
         }
 
@@ -1400,31 +1395,4 @@ internal sealed class Game
         }
     }
 
-    private void UpdateEffects(float dt)
-    {
-        for (int i = Sparks.Count - 1; i >= 0; i--)
-        {
-            HitSpark value = Sparks[i];
-            value.Age += dt;
-            if (value.Age >= value.Life) Sparks.RemoveAt(i); else Sparks[i] = value;
-        }
-        for (int i = Numbers.Count - 1; i >= 0; i--)
-        {
-            DamageNumber value = Numbers[i];
-            value.Age += dt;
-            if (value.Age >= value.Life) Numbers.RemoveAt(i); else Numbers[i] = value;
-        }
-        for (int i = Dusts.Count - 1; i >= 0; i--)
-        {
-            Dust value = Dusts[i];
-            value.Age += dt;
-            if (value.Age >= value.Life) Dusts.RemoveAt(i); else Dusts[i] = value;
-        }
-        for (int i = Effects.Count - 1; i >= 0; i--)
-        {
-            EffectSprite value = Effects[i];
-            value.Age += dt;
-            if (value.Age >= value.Life) Effects.RemoveAt(i); else Effects[i] = value;
-        }
-    }
 }
