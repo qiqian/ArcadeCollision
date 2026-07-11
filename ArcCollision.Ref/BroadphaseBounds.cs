@@ -52,6 +52,28 @@ internal readonly struct BpBounds
 
     public BpBounds(Obb box) : this(box.Bounds) { }
 
+    public BpBounds(Polygon polygon)
+    {
+        ArgumentNullException.ThrowIfNull(polygon);
+        MinX = polygon.MinXFx;
+        MinY = polygon.MinYFx;
+        MaxX = polygon.MaxXFx;
+        MaxY = polygon.MaxYFx;
+    }
+
+    public BpBounds(Shape shape)
+    {
+        this = shape.Kind switch
+        {
+            ShapeKind.Circle => new BpBounds(shape.Circle),
+            ShapeKind.Aabb => new BpBounds(shape.Aabb),
+            ShapeKind.Capsule => new BpBounds(shape.Capsule),
+            ShapeKind.Obb => new BpBounds(shape.Obb),
+            ShapeKind.Polygon => new BpBounds(shape.Polygon),
+            _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+        };
+    }
+
     public long CenterX => MinX + ((MaxX - MinX) >> 1);
     public long CenterY => MinY + ((MaxY - MinY) >> 1);
     public long Perimeter => 2 * ((MaxX - MinX) + (MaxY - MinY));

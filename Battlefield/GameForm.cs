@@ -73,6 +73,11 @@ public sealed class GameForm : Form
         ClientSize = new Size(cw, ch);
         StartPosition = FormStartPosition.CenterScreen;
 
+        // Perform all disk I/O and static stage composition before the gameplay
+        // timer starts, so walking into a new room never triggers lazy loading.
+        SpriteLibrary.PreloadAll();
+        _stageRenderer.Preload();
+
         string assets = Path.Combine(AppContext.BaseDirectory, "Assets");
         string playerHud = Path.Combine(assets, "ui", "gameplay_hud", "player_health_bar", "pngs");
         string enemyHud = Path.Combine(assets, "ui", "gameplay_hud", "enemy_health_bar", "pngs");

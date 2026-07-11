@@ -106,6 +106,13 @@ internal sealed class StaticBvh
         }
     }
 
+    internal int RootIndex => _root;
+    internal bool IsLeaf(int index) => _nodes[index].IsLeaf;
+    internal BpBounds BoundsAt(int index) => _nodes[index].Bounds;
+    internal int Child1At(int index) => _nodes[index].Child1;
+    internal int Child2At(int index) => _nodes[index].Child2;
+    internal int IdAt(int index) => _nodes[index].Id;
+
     private int BuildRange(int start, int count)
     {
         int nodeIndex = _nodeCount++;

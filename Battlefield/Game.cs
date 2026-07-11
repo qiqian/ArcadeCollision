@@ -60,12 +60,13 @@ internal sealed class Game
     public float CamMaxY => CameraBottom;
     public Fighter TaxMan => _taxMan;
 
-    private readonly SpatialHash _hash = new(80f);          // body capsules (separation)
-    private readonly SpatialHash _hurtHash = new(160f);     // hurt boxes (hit broadphase)
-    private readonly List<(int A, int B)> _bodyPairs = new();
-    private readonly List<int> _hitCandidates = new();
-    private int _bodyProxySlots;
-    private int _hurtProxySlots;
+    private readonly ArcWorld _bodyWorld = new(80f);
+    private readonly ArcWorld _hurtWorld = new(160f);
+    private readonly List<CandidatePair> _bodyPairs = new();
+    private readonly List<ArcHandle> _hitCandidates = new();
+    private Fighter?[] _entitiesById = new Fighter?[32];
+    private Vec2[] _bodyCorrections = new Vec2[32];
+    private int _nextEntityId;
     private readonly Random _rng = new();
     private Fighter _taxMan = null!;
     private Vec2 _move;
@@ -81,9 +82,15 @@ internal sealed class Game
     public void Reset()
     {
         Fighters.Clear();
-        _hash.Clear();
-        _hurtHash.Clear();
-        _bodyProxySlots = _hurtProxySlots = 0;
+        _bodyWorld.Clear();
+        _hurtWorld.Clear();
+        _bodyPairs.Clear();
+        _hitCandidates.Clear();
+        Array.Clear(_entitiesById);
+        Array.Clear(_bodyCorrections);
+        _nextEntityId = 0;
+        _move = Vec2.Zero;
+        _attackBuffer = _jumpBuffer = 0f;
         GameOver = Win = false;
         Hitstop = 0f;
         ActiveRoom = null;
@@ -102,7 +109,7 @@ internal sealed class Game
             Pos = P(824, 800),
             Health = CharacterDef.Chad.MaxHealth,
         };
-        Fighters.Add(Player);
+        RegisterFighter(Player);
 
         // stage_01.tscn contains Tax Man from scene load at (15208, 861).
         // He exists now but is not put in the active character list until the
@@ -178,9 +185,12 @@ internal sealed class Game
             {
                 new[]
                 {
-                    S(9906, 840, 9046, 696), S(9906, 840, 9182, 864),
-                    S(9906, 840, 9306, 1004), S(9906, 840, 9326, 696),
-                    S(9906, 840, 9462, 864), S(9906, 840, 9586, 1004),
+                    S(9046, 696, 9046, 696, false),
+                    S(9182, 864, 9182, 864, false),
+                    S(9306, 1004, 9306, 1004, false),
+                    S(9326, 696, 9326, 696, false),
+                    S(9462, 864, 9462, 864, false),
+                    S(9586, 1004, 9586, 1004, false),
                 },
             },
         });
@@ -195,7 +205,11 @@ internal sealed class Game
             EngagesBoss = true,
             Waves = new[]
             {
-                new[] { S(16019, 728, 14987, 620), S(16019, 728, 15247, 928) },
+                new[]
+                {
+                    S(14987, 620, 14987, 620, false),
+                    S(15247, 928, 15247, 928, false),
+                },
             },
         });
         Rooms.Add(new FightRoom
@@ -1067,26 +1081,35 @@ internal sealed class Game
             // spawn point would otherwise push each other away from their markers
             // forever and stall the wave.
             if (!fighter.Dead && fighter.CombatActive && !fighter.SpawnWalking)
-                _hash.Update(i, fighter.Body);
-            else
-                _hash.Remove(i);
+            {
+                Shape body = fighter.Body;
+                if (_bodyWorld.IsValid(fighter.BodyHandle))
+                    _bodyWorld.Update(fighter.BodyHandle, body);
+                else
+                    fighter.BodyHandle = _bodyWorld.Add(fighter.EntityId, body);
+            }
+            else if (_bodyWorld.IsValid(fighter.BodyHandle))
+            {
+                _bodyWorld.Remove(fighter.BodyHandle);
+                fighter.BodyHandle = default;
+            }
         }
-        for (int i = Fighters.Count; i < _bodyProxySlots; i++)
-            _hash.Remove(i);
-        _bodyProxySlots = Fighters.Count;
 
-        _hash.ComputePairs(_bodyPairs);
+        _bodyWorld.ComputePairs(_bodyPairs);
+        Array.Clear(_bodyCorrections, 0, _nextEntityId);
         for (int pairIndex = 0; pairIndex < _bodyPairs.Count; pairIndex++)
         {
-            (int ia, int ib) = _bodyPairs[pairIndex];
-            Fighter a = Fighters[ia], b = Fighters[ib];
+            CandidatePair pair = _bodyPairs[pairIndex];
+            Fighter a = FighterFor(pair.A);
+            Fighter b = FighterFor(pair.B);
             if (a.Dead || b.Dead || !a.CombatActive || !b.CombatActive) continue;
-            Manifold manifold = Collide.CapsuleVsCapsule(a.Body, b.Body);
-            if (!manifold.Colliding) continue;
-            Vec2 separation = manifold.Normal * (manifold.Depth * .5f);
-            a.Pos -= separation;
-            b.Pos += separation;
+            if (!_bodyWorld.TryComputeContact(pair, out ContactPair contact)) continue;
+            Vec2 separation = contact.Manifold.Normal * (contact.Manifold.Depth * .5f);
+            _bodyCorrections[a.EntityId] -= separation;
+            _bodyCorrections[b.EntityId] += separation;
         }
+        for (int i = 0; i < Fighters.Count; i++)
+            Fighters[i].Pos += _bodyCorrections[Fighters[i].EntityId];
     }
 
     private void ClampArena()
@@ -1135,23 +1158,9 @@ internal sealed class Game
 
     private void ResolveHits()
     {
-        // Keep dynamic proxies alive across frames; fat AABBs avoid tree
-        // reinsertion while fighters move within their predicted margin.
         for (int i = 0; i < Fighters.Count; i++)
-        {
-            Fighter target = Fighters[i];
-            if (target.Dead || !target.CombatActive || target.IsInvulnerable)
-            {
-                _hurtHash.Remove(i);
-                continue;
-            }
-            BoxShape hurt = target.CurrentHurtShape();
-            _hurtHash.Update(i, new Obb(hurt.Center, hurt.HalfSize, hurt.Rotation));
-        }
-        for (int i = Fighters.Count; i < _hurtProxySlots; i++)
-            _hurtHash.Remove(i);
-        _hurtProxySlots = Fighters.Count;
-        if (_hurtHash.DynamicCount == 0) return;
+            SyncHurtCollider(Fighters[i]);
+        if (_hurtWorld.DynamicCount == 0) return;
 
         for (int attackerIndex = 0; attackerIndex < Fighters.Count; attackerIndex++)
         {
@@ -1162,25 +1171,13 @@ internal sealed class Game
                 || !attacker.Attack.TryWindowAt(attacker.AttackTime, out HitWindow hit))
                 continue;
 
-            Vec2 hitCenter = HitCenter(attacker, hit);
-            if (hit.ShapeKind == HitShapeKind.HorizontalCapsule)
-            {
-                float halfSpine = MathF.Max(0f, hit.CapsuleHeight * .5f - hit.CapsuleRadius);
-                _hurtHash.Query(new Capsule(
-                    hitCenter - new Vec2(halfSpine, 0f),
-                    hitCenter + new Vec2(halfSpine, 0f),
-                    hit.CapsuleRadius), _hitCandidates);
-            }
-            else
-            {
-                _hurtHash.Query(new Obb(hitCenter, hit.Box.HalfSize,
-                    hit.Box.Rotation * attacker.Facing), _hitCandidates);
-            }
+            Shape attackShape = CreateHitShape(attacker, hit);
+            _hurtWorld.Query(attackShape, _hitCandidates);
 
             for (int candidateIndex = 0; candidateIndex < _hitCandidates.Count; candidateIndex++)
             {
-                int index = _hitCandidates[candidateIndex];
-                Fighter target = Fighters[index];
+                ArcHandle targetHandle = _hitCandidates[candidateIndex];
+                Fighter target = FighterFor(targetHandle);
                 if (target == attacker || target.Faction == attacker.Faction)
                     continue;
                 // Re-check state that an earlier hit this frame may have changed
@@ -1189,34 +1186,49 @@ internal sealed class Game
                     continue;
                 if (MathF.Abs(attacker.Pos.Y - target.Pos.Y) > HitLane)
                     continue;
-                BoxShape hurt = target.CurrentHurtShape();
-                if (!HitOverlaps(attacker, hit, hurt))
+                if (!_hurtWorld.TryComputeContact(attackShape, targetHandle, out _))
                     continue;
                 if (attacker.WasHitBy(target, hit.HitId))
                     continue;
                 ApplyHit(attacker, target, hit);
+                SyncHurtCollider(target);
             }
         }
+    }
+
+    private void SyncHurtCollider(Fighter target)
+    {
+        if (target.Dead || !target.CombatActive || target.IsInvulnerable)
+        {
+            if (_hurtWorld.IsValid(target.HurtHandle))
+            {
+                _hurtWorld.Remove(target.HurtHandle);
+                target.HurtHandle = default;
+            }
+            return;
+        }
+
+        BoxShape hurt = target.CurrentHurtShape();
+        Shape shape = new Obb(hurt.Center, hurt.HalfSize, hurt.Rotation);
+        if (_hurtWorld.IsValid(target.HurtHandle))
+            _hurtWorld.Update(target.HurtHandle, shape);
+        else
+            target.HurtHandle = _hurtWorld.Add(target.EntityId, shape);
     }
 
     private static Vec2 HitCenter(Fighter attacker, in HitWindow hit) =>
         attacker.Pos + new Vec2(attacker.Facing * hit.Box.Center.X, hit.Box.Center.Y - attacker.SkinY);
 
-    private static bool HitOverlaps(Fighter attacker, HitWindow hit, BoxShape hurt)
+    private static Shape CreateHitShape(Fighter attacker, in HitWindow hit)
     {
         Vec2 center = HitCenter(attacker, hit);
         if (hit.ShapeKind == HitShapeKind.HorizontalCapsule)
         {
             float halfSpine = MathF.Max(0f, hit.CapsuleHeight * .5f - hit.CapsuleRadius);
-            Capsule capsule = new(center - new Vec2(halfSpine, 0f),
+            return new Capsule(center - new Vec2(halfSpine, 0f),
                 center + new Vec2(halfSpine, 0f), hit.CapsuleRadius);
-            if (MathF.Abs(hurt.Rotation) < .0001f)
-                return Collide.CapsuleVsAabb(capsule, new Aabb(hurt.Center, hurt.HalfSize)).Colliding;
-            return capsule.Bounds.Overlaps(BoundsOf(hurt));
         }
-
-        BoxShape attack = new(center, hit.Box.HalfSize, hit.Box.Rotation * attacker.Facing);
-        return OrientedBoxesOverlap(attack, hurt);
+        return new Obb(center, hit.Box.HalfSize, hit.Box.Rotation * attacker.Facing);
     }
 
     private void ApplyHit(Fighter attacker, Fighter target, HitWindow hit)
@@ -1249,25 +1261,6 @@ internal sealed class Game
             EnterKo(target, attacker, hit);
         else if (!armor)
             EnterHurt(target, hit);
-    }
-
-    private static bool OrientedBoxesOverlap(BoxShape a, BoxShape b)
-    {
-        GetAxes(a.Rotation, out Vec2 ax, out Vec2 ay);
-        GetAxes(b.Rotation, out Vec2 bx, out Vec2 by);
-        return OverlapOn(ax, a, b) && OverlapOn(ay, a, b)
-            && OverlapOn(bx, a, b) && OverlapOn(by, a, b);
-    }
-
-    private static bool OverlapOn(Vec2 axis, BoxShape a, BoxShape b)
-    {
-        GetAxes(a.Rotation, out Vec2 ax, out Vec2 ay);
-        GetAxes(b.Rotation, out Vec2 bx, out Vec2 by);
-        float ra = a.HalfSize.X * MathF.Abs(axis.Dot(ax))
-            + a.HalfSize.Y * MathF.Abs(axis.Dot(ay));
-        float rb = b.HalfSize.X * MathF.Abs(axis.Dot(bx))
-            + b.HalfSize.Y * MathF.Abs(axis.Dot(by));
-        return MathF.Abs((b.Center - a.Center).Dot(axis)) <= ra + rb;
     }
 
     private static void GetAxes(float rotation, out Vec2 x, out Vec2 y)
@@ -1320,8 +1313,8 @@ internal sealed class Game
 
     private void BeginTaxEngage()
     {
-        if (!Fighters.Contains(_taxMan))
-            Fighters.Add(_taxMan);
+        if (_taxMan.EntityId < 0)
+            RegisterFighter(_taxMan);
         _taxMan.TaxSeat = TaxSeatState.Engage;
         _taxMan.TaxSeatTimer = 1.75f;
         _taxMan.CombatActive = false;
@@ -1438,6 +1431,39 @@ internal sealed class Game
         }
     }
 
+    private void RegisterFighter(Fighter fighter)
+    {
+        int entityId = _nextEntityId++;
+        if (entityId == _entitiesById.Length)
+        {
+            Array.Resize(ref _entitiesById, _entitiesById.Length * 2);
+            Array.Resize(ref _bodyCorrections, _bodyCorrections.Length * 2);
+        }
+        fighter.EntityId = entityId;
+        fighter.BodyHandle = default;
+        fighter.HurtHandle = default;
+        _entitiesById[entityId] = fighter;
+        Fighters.Add(fighter);
+    }
+
+    private void UnregisterFighterAt(int index)
+    {
+        Fighter fighter = Fighters[index];
+        if (_bodyWorld.IsValid(fighter.BodyHandle))
+            _bodyWorld.Remove(fighter.BodyHandle);
+        if (_hurtWorld.IsValid(fighter.HurtHandle))
+            _hurtWorld.Remove(fighter.HurtHandle);
+        _entitiesById[fighter.EntityId] = null;
+        fighter.EntityId = -1;
+        fighter.BodyHandle = default;
+        fighter.HurtHandle = default;
+        Fighters.RemoveAt(index);
+    }
+
+    private Fighter FighterFor(ArcHandle handle) =>
+        _entitiesById[handle.EntityId]
+        ?? throw new InvalidOperationException($"Missing fighter for entity {handle.EntityId}.");
+
     private void SpawnWave(SpawnData[] wave)
     {
         foreach (SpawnData spawn in wave)
@@ -1453,7 +1479,7 @@ internal sealed class Game
                 Facing = spawn.Target.X < spawn.Start.X ? -1f : 1f,
             };
             fighter.AiTimer = 1f + (float)_rng.NextDouble() * 2f;
-            Fighters.Add(fighter);
+            RegisterFighter(fighter);
         }
     }
 
@@ -1463,7 +1489,7 @@ internal sealed class Game
         {
             Fighter fighter = Fighters[i];
             if (fighter.Faction == Faction.Enemy && fighter.Dead && fighter.DeathTimer <= 0f)
-                Fighters.RemoveAt(i);
+                UnregisterFighterAt(i);
         }
     }
 

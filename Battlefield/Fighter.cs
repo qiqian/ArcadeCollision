@@ -24,6 +24,9 @@ internal enum TaxSeatState { AwaitReveal, Reveal, Swirl, Drink, Laugh, Engage, A
 /// <summary>Mutable state for one translated QuiverCharacter.</summary>
 internal sealed class Fighter
 {
+    public int EntityId = -1;
+    public ArcHandle BodyHandle;
+    public ArcHandle HurtHandle;
     public required CharacterDef Def;
     public Faction Faction;
     public Vec2 Pos;                         // character root / feet on the ground plane

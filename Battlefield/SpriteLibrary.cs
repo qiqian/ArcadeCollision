@@ -47,6 +47,8 @@ internal sealed class Clip
 internal static class SpriteLibrary
 {
     private static readonly Dictionary<string, Dictionary<string, Clip>> _sets = new();
+    private static readonly Dictionary<string, Bitmap> _bitmaps =
+        new(StringComparer.OrdinalIgnoreCase);
     private static string AssetRoot => Path.Combine(AppContext.BaseDirectory, "Assets");
 
     private static string SetRoot(string set) => set switch
@@ -70,6 +72,13 @@ internal static class SpriteLibrary
         return clips;
     }
 
+    public static void PreloadAll()
+    {
+        Get("chad");
+        Get("sarge");
+        Get("taxman");
+    }
+
     private static Clip CB(Bitmap[] frames, float fps, bool loop, bool facesLeft = false) =>
         new() { Frames = frames, Fps = fps, Loop = loop, BottomAnchor = true, FacesLeft = facesLeft };
 
@@ -81,7 +90,7 @@ internal static class SpriteLibrary
             string relative = r.Replace('/', Path.DirectorySeparatorChar) + ".png";
             string path = Path.Combine(SetRoot(set), relative);
             if (File.Exists(path))
-                list.Add(new Bitmap(path));
+                list.Add(LoadBitmap(path));
         }
         if (list.Count == 0)
             list.Add(new Bitmap(1, 1)); // guard against a totally missing clip
@@ -96,8 +105,16 @@ internal static class SpriteLibrary
         Array.Sort(files, StringComparer.OrdinalIgnoreCase);
         var frames = new List<Bitmap>(files.Length);
         foreach (string file in files)
-            try { frames.Add(new Bitmap(file)); } catch { }
+            try { frames.Add(LoadBitmap(file)); } catch { }
         return frames.Count == 0 ? new[] { new Bitmap(1, 1) } : frames.ToArray();
+    }
+
+    private static Bitmap LoadBitmap(string path)
+    {
+        if (_bitmaps.TryGetValue(path, out Bitmap? bitmap)) return bitmap;
+        bitmap = new Bitmap(path);
+        _bitmaps.Add(path, bitmap);
+        return bitmap;
     }
 
     private static Clip C(Bitmap[] frames, float fps, bool loop, float ox, float oy,

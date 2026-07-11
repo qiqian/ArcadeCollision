@@ -12,7 +12,7 @@ namespace ArcCollision;
 /// in 24.8 fixed point and times in 16.16. Degree-four discriminants are
 /// uniformly scaled before multiplication to keep arithmetic in Int64.
 /// </summary>
-public static class Sweep
+public static partial class Sweep
 {
     /// <summary>Ray (origin + d) versus circle. <paramref name="d"/> is the full motion.</summary>
     public static SweepHit RayVsCircle(Vec2 origin, Vec2 d, Circle circle) =>
@@ -188,5 +188,53 @@ public static class Sweep
         FxVec2 moverAtImpact = moverFx.Center + motionFx.MulT(best.Time16);
         FxVec2 contact = moverAtImpact - best.Normal.MulUnit(r);
         return new FxSweep(true, best.Time16, best.Normal, contact).ToSweepHit();
+    }
+
+    public static SweepHit MovingCircleVsCapsule(
+        Circle mover, Vec2 motion, Capsule target)
+    {
+        FxCircle circle = FxCircle.From(mover);
+        FxVec2 motionFx = FxVec2.From(motion);
+        long radius = Math.Abs(circle.Radius) + Math.Abs(Fx.From(target.Radius));
+        FxSweep hit = RayVsCapsuleCore(circle.Center, motionFx,
+            FxVec2.From(target.A), FxVec2.From(target.B), radius);
+        if (!hit.Hit) return SweepHit.Miss;
+        FxVec2 contact = hit.Point - hit.Normal.MulUnit(Math.Abs(circle.Radius));
+        return new FxSweep(true, hit.Time16, hit.Normal, contact).ToSweepHit();
+    }
+
+    public static SweepHit MovingCircleVsObb(Circle mover, Vec2 motion, Obb target)
+    {
+        float c = MathF.Cos(target.Rotation);
+        float s = MathF.Sin(target.Rotation);
+        Vec2 axisX = new(c, s);
+        Vec2 axisY = new(-s, c);
+        Vec2 relative = mover.Center - target.Center;
+        Circle localCircle = new(
+            new Vec2(relative.Dot(axisX), relative.Dot(axisY)), mover.Radius);
+        Vec2 localMotion = new(motion.Dot(axisX), motion.Dot(axisY));
+        SweepHit local = MovingCircleVsAabb(localCircle, localMotion,
+            new Aabb(Vec2.Zero, target.HalfExtents));
+        if (!local.Hit) return local;
+        Vec2 normal = axisX * local.Normal.X + axisY * local.Normal.Y;
+        Vec2 point = target.Center + axisX * local.Point.X + axisY * local.Point.Y;
+        return new SweepHit(true, local.Time, normal, point);
+    }
+
+    public static SweepHit MovingAabbVsAabb(Aabb mover, Vec2 motion, Aabb target)
+    {
+        FxAabb moving = FxAabb.From(mover);
+        FxAabb stationary = FxAabb.From(target);
+        var expanded = new FxAabb(stationary.Center,
+            new FxVec2(stationary.Half.X + moving.Half.X,
+                stationary.Half.Y + moving.Half.Y));
+        FxVec2 motionFx = FxVec2.From(motion);
+        FxSweep hit = RayVsAabbFx(moving.Center, motionFx, expanded);
+        if (!hit.Hit) return SweepHit.Miss;
+        FxVec2 center = moving.Center + motionFx.MulT(hit.Time16);
+        long extent = Fx.MulUnit(Math.Abs(hit.Normal.X), moving.Half.X)
+            + Fx.MulUnit(Math.Abs(hit.Normal.Y), moving.Half.Y);
+        FxVec2 contact = center - hit.Normal.MulUnit(extent);
+        return new FxSweep(true, hit.Time16, hit.Normal, contact).ToSweepHit();
     }
 }

@@ -25,6 +25,25 @@ internal sealed class StageRenderer : IDisposable
     private static float X(float source) => source * Game.WorldScale;
     private static float Y(float source) => source * Game.WorldScale;
 
+    public void Preload()
+    {
+        string stageRoot = Path.Combine(Root, "stages", "stage_01");
+        if (Directory.Exists(stageRoot))
+        {
+            foreach (string path in Directory.GetFiles(
+                stageRoot, "*.png", SearchOption.AllDirectories))
+            {
+                string relative = Path.GetRelativePath(Root, path)
+                    .Replace(Path.DirectorySeparatorChar, '/');
+                Load(relative);
+            }
+        }
+
+        int chunkCount = (int)MathF.Ceiling(Game.WorldW / ChunkWidth);
+        for (int index = 0; index < chunkCount; index++)
+            GetStaticChunk(index);
+    }
+
     public void DrawBackground(Graphics g, float cameraX, float zoom)
     {
         float cameraSourceX = cameraX / Game.WorldScale;

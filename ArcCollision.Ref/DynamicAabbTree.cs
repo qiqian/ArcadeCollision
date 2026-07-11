@@ -18,58 +18,56 @@ internal sealed class DynamicAabbTree
     }
 
     private Node[] _nodes = new Node[16];
-    private readonly Dictionary<int, int> _proxies = new();
     private int[] _queryStack = new int[64];
+    private int[] _pairStackA = new int[64];
+    private int[] _pairStackB = new int[64];
     private int _root = -1;
     private int _freeList;
     private int _nodeCount;
+    private int _leafCount;
 
     public DynamicAabbTree() => InitializeFreeList(0);
 
-    public int Count => _proxies.Count;
+    public int Count => _leafCount;
 
     public void Clear()
     {
-        _proxies.Clear();
         _root = -1;
         _nodeCount = 0;
+        _leafCount = 0;
         InitializeFreeList(0);
     }
 
-    public void Insert(int id, in BpBounds fatBounds)
+    /// <summary>Creates a leaf and returns its direct proxy index.</summary>
+    public int CreateProxy(int id, in BpBounds fatBounds)
     {
-        if (_proxies.ContainsKey(id))
-            throw new ArgumentException($"Dynamic proxy id {id} already exists.", nameof(id));
-
         int leaf = AllocateNode();
         _nodes[leaf].Bounds = fatBounds;
         _nodes[leaf].Id = id;
         _nodes[leaf].Height = 0;
         _nodes[leaf].Child1 = -1;
         _nodes[leaf].Child2 = -1;
-        _proxies.Add(id, leaf);
         InsertLeaf(leaf);
+        _leafCount++;
+        return leaf;
     }
 
-    public bool Move(int id, in BpBounds bounds, in BpBounds fatBounds)
+    public bool MoveProxy(int proxy, in BpBounds bounds, in BpBounds fatBounds)
     {
-        int leaf = _proxies[id];
-        if (_nodes[leaf].Bounds.Contains(bounds))
+        if (_nodes[proxy].Bounds.Contains(bounds))
             return false;
 
-        RemoveLeaf(leaf);
-        _nodes[leaf].Bounds = fatBounds;
-        InsertLeaf(leaf);
+        RemoveLeaf(proxy);
+        _nodes[proxy].Bounds = fatBounds;
+        InsertLeaf(proxy);
         return true;
     }
 
-    public bool Remove(int id)
+    public void DestroyProxy(int proxy)
     {
-        if (!_proxies.Remove(id, out int leaf))
-            return false;
-        RemoveLeaf(leaf);
-        FreeNode(leaf);
-        return true;
+        RemoveLeaf(proxy);
+        FreeNode(proxy);
+        _leafCount--;
     }
 
     public void Query(in BpBounds bounds, List<int> results)
@@ -97,6 +95,61 @@ internal sealed class DynamicAabbTree
             }
         }
     }
+
+    internal void ComputeSelfPairs(List<(int A, int B)> results)
+    {
+        if (_root == -1 || _leafCount < 2)
+            return;
+
+        int count = 0;
+        PushPair(ref count, _root, _root);
+        while (count != 0)
+        {
+            count--;
+            int a = _pairStackA[count];
+            int b = _pairStackB[count];
+            ref Node nodeA = ref _nodes[a];
+            ref Node nodeB = ref _nodes[b];
+
+            if (a == b)
+            {
+                if (nodeA.IsLeaf) continue;
+                PushPair(ref count, nodeA.Child1, nodeA.Child1);
+                PushPair(ref count, nodeA.Child1, nodeA.Child2);
+                PushPair(ref count, nodeA.Child2, nodeA.Child2);
+                continue;
+            }
+
+            if (!nodeA.Bounds.Overlaps(nodeB.Bounds))
+                continue;
+            if (nodeA.IsLeaf && nodeB.IsLeaf)
+            {
+                results.Add(nodeA.Id < nodeB.Id
+                    ? (nodeA.Id, nodeB.Id)
+                    : (nodeB.Id, nodeA.Id));
+                continue;
+            }
+
+            if (nodeB.IsLeaf
+                || (!nodeA.IsLeaf && nodeA.Bounds.Perimeter >= nodeB.Bounds.Perimeter))
+            {
+                PushPair(ref count, nodeA.Child1, b);
+                PushPair(ref count, nodeA.Child2, b);
+            }
+            else
+            {
+                PushPair(ref count, a, nodeB.Child1);
+                PushPair(ref count, a, nodeB.Child2);
+            }
+        }
+    }
+
+    internal int RootIndex => _root;
+    internal bool IsLeaf(int index) => _nodes[index].IsLeaf;
+    internal BpBounds BoundsAt(int index) => _nodes[index].Bounds;
+    internal int Child1At(int index) => _nodes[index].Child1;
+    internal int Child2At(int index) => _nodes[index].Child2;
+    internal int IdAt(int index) => _nodes[index].Id;
 
     private void InsertLeaf(int leaf)
     {
@@ -333,5 +386,17 @@ internal sealed class DynamicAabbTree
         if (count == _queryStack.Length)
             Array.Resize(ref _queryStack, _queryStack.Length * 2);
         _queryStack[count++] = value;
+    }
+
+    private void PushPair(ref int count, int a, int b)
+    {
+        if (count == _pairStackA.Length)
+        {
+            Array.Resize(ref _pairStackA, _pairStackA.Length * 2);
+            Array.Resize(ref _pairStackB, _pairStackB.Length * 2);
+        }
+        _pairStackA[count] = a;
+        _pairStackB[count] = b;
+        count++;
     }
 }
