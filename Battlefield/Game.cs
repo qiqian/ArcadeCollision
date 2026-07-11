@@ -60,7 +60,9 @@ internal sealed class Game
     public float CamMaxY => CameraBottom;
     public Fighter TaxMan => _taxMan;
 
-    private readonly SpatialHash _hash = new(80f);
+    private readonly SpatialHash _hash = new(80f);          // body capsules (separation)
+    private readonly SpatialHash _hurtHash = new(160f);     // hurt boxes (hit broadphase)
+    private readonly List<int> _hitCandidates = new();
     private readonly Random _rng = new();
     private Fighter _taxMan = null!;
     private Vec2 _move;
@@ -1121,6 +1123,19 @@ internal sealed class Game
 
     private void ResolveHits()
     {
+        // Broadphase: index every attackable hurt box in the SpatialHash once,
+        // then each active hit window only narrow-phase-tests the candidates its
+        // own bounds map to, instead of scanning the whole fighter list.
+        _hurtHash.Clear();
+        for (int i = 0; i < Fighters.Count; i++)
+        {
+            Fighter target = Fighters[i];
+            if (target.Dead || !target.CombatActive || target.IsInvulnerable)
+                continue;
+            _hurtHash.Insert(i, BoundsOf(target.CurrentHurtShape()));
+        }
+        if (_hurtHash.Count == 0) return;
+
         foreach (Fighter attacker in Fighters)
         {
             if (!attacker.CombatActive
@@ -1129,10 +1144,15 @@ internal sealed class Game
                 || !attacker.Attack.TryWindowAt(attacker.AttackTime, out HitWindow hit))
                 continue;
 
-            foreach (Fighter target in Fighters)
+            _hurtHash.Query(HitBounds(attacker, hit), _hitCandidates);
+            foreach (int index in _hitCandidates)
             {
-                if (target == attacker || target.Faction == attacker.Faction
-                    || target.Dead || !target.CombatActive || target.IsInvulnerable)
+                Fighter target = Fighters[index];
+                if (target == attacker || target.Faction == attacker.Faction)
+                    continue;
+                // Re-check state that an earlier hit this frame may have changed
+                // (the broadphase snapshot is from the start of the pass).
+                if (target.Dead || !target.CombatActive || target.IsInvulnerable)
                     continue;
                 if (MathF.Abs(attacker.Pos.Y - target.Pos.Y) > HitLane)
                     continue;
@@ -1146,10 +1166,21 @@ internal sealed class Game
         }
     }
 
+    private static Vec2 HitCenter(Fighter attacker, in HitWindow hit) =>
+        attacker.Pos + new Vec2(attacker.Facing * hit.Box.Center.X, hit.Box.Center.Y - attacker.SkinY);
+
+    /// <summary>World-space AABB of an active hit window, for the broadphase query.</summary>
+    private static Aabb HitBounds(Fighter attacker, in HitWindow hit)
+    {
+        Vec2 center = HitCenter(attacker, hit);
+        if (hit.ShapeKind == HitShapeKind.HorizontalCapsule)
+            return new Aabb(center, new Vec2(hit.CapsuleHeight * .5f, hit.CapsuleRadius));
+        return BoundsOf(new BoxShape(center, hit.Box.HalfSize, hit.Box.Rotation * attacker.Facing));
+    }
+
     private static bool HitOverlaps(Fighter attacker, HitWindow hit, BoxShape hurt)
     {
-        Vec2 center = attacker.Pos
-            + new Vec2(attacker.Facing * hit.Box.Center.X, hit.Box.Center.Y - attacker.SkinY);
+        Vec2 center = HitCenter(attacker, hit);
         if (hit.ShapeKind == HitShapeKind.HorizontalCapsule)
         {
             float halfSpine = MathF.Max(0f, hit.CapsuleHeight * .5f - hit.CapsuleRadius);

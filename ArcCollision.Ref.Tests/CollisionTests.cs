@@ -1,4 +1,5 @@
 using ArcCollision;
+using System.Reflection;
 using Xunit;
 
 namespace ArcCollision.Tests;
@@ -87,6 +88,21 @@ public class DiscreteTests
         var after = Collide.CircleVsCircle(a2, b);
         Assert.True(after.Depth <= Eps);
     }
+
+    [Fact]
+    public void ClosestSegments_LargeCrossing_DoesNotOverflowDegreeFourRatio()
+    {
+        float distance = Distance.ClosestPointsSegmentSegment(
+            new Vec2(-900_000, -900_000), new Vec2(900_000, 900_000),
+            new Vec2(-900_000, 900_000), new Vec2(900_000, -900_000),
+            out Vec2 first, out Vec2 second);
+
+        Assert.Equal(0f, distance, 1f / 256f);
+        Assert.Equal(0f, first.X, 1f / 256f);
+        Assert.Equal(0f, first.Y, 1f / 256f);
+        Assert.Equal(first.X, second.X, 1f / 256f);
+        Assert.Equal(first.Y, second.Y, 1f / 256f);
+    }
 }
 
 public class SweepTests
@@ -128,6 +144,30 @@ public class SweepTests
     }
 
     [Fact]
+    public void MovingCircleVsAabb_ReportsContactOnBoxSurface()
+    {
+        var mover = new Circle(new Vec2(-5, 0), 0.5f);
+        var box = new Aabb(new Vec2(0, 0), new Vec2(1, 1));
+        var hit = Sweep.MovingCircleVsAabb(mover, new Vec2(10, 0), box);
+
+        Assert.True(hit.Hit);
+        Assert.Equal(-1f, hit.Point.X, 1f / 256f);
+        Assert.Equal(0f, hit.Point.Y, 1f / 256f);
+    }
+
+    [Fact]
+    public void RayVsCircle_LargeCoordinates_DoNotOverflowLongDiscriminant()
+    {
+        var hit = Sweep.RayVsCircle(
+            new Vec2(-900_000f, 0), new Vec2(1_800_000f, 0),
+            new Circle(Vec2.Zero, 100f));
+
+        Assert.True(hit.Hit);
+        Assert.Equal((900_000f - 100f) / 1_800_000f, hit.Time, 2f / 65536f);
+        Assert.Equal(-1f, hit.Normal.X, 1f / 256f);
+    }
+
+    [Fact]
     public void MovingCircleVsCircle_ContactTime()
     {
         var mover = new Circle(new Vec2(-5, 0), 0.5f);
@@ -162,5 +202,39 @@ public class BroadphaseTests
         var pairs = new List<(int, int)>(hash.Pairs());
         Assert.Single(pairs);
         Assert.Equal((1, 2), pairs[0]);
+    }
+
+    [Fact]
+    public void SpatialHash_NegativeFractionalCellsUseFloorDivision()
+    {
+        var hash = new SpatialHash(1f / 256f);
+        var tiny = new Aabb(new Vec2(-1f / 256f, -1f / 256f), Vec2.Zero);
+        hash.Insert(7, tiny);
+
+        Assert.Contains(7, hash.Query(tiny));
+        hash.Remove(7);
+        Assert.Empty(hash.Query(tiny));
+    }
+
+    [Fact]
+    public void SpatialHash_InternalStateContainsNoFloatingPointFields()
+    {
+        FieldInfo[] fields = typeof(SpatialHash).GetFields(BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.DoesNotContain(fields, f => f.FieldType == typeof(float) || f.FieldType == typeof(double));
+
+        FieldInfo cells = Assert.Single(fields, f => f.Name == "_cells");
+        Type cellType = cells.FieldType.GetGenericArguments()[0];
+        Assert.All(cellType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
+            f => Assert.Equal(typeof(long), f.FieldType));
+    }
+
+    [Fact]
+    public void FixedBoundaryRejectsNonFiniteAndUnsafeCoordinates()
+    {
+        var unit = new Circle(Vec2.Zero, 1f);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Collide.PointInCircle(new Vec2(float.NaN, 0), unit));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Collide.PointInCircle(new Vec2(2_000_000f, 0), unit));
     }
 }

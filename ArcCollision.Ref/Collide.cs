@@ -6,116 +6,137 @@ namespace ArcCollision;
 /// Discrete (static) overlap tests. Every function returns a <see cref="Manifold"/>
 /// whose normal points from the first shape towards the second.
 ///
-/// This is the correctness reference: implementations favour clarity and well
-/// defined degenerate-case behaviour over raw speed.
+/// The math runs on an all-integer 24.8 fixed-point core: float arguments are
+/// scaled by 256 at the boundary, everything inside is integer arithmetic
+/// (64-bit, with scaled long products for degree-four expressions), and results are scaled back by
+/// 1/256 on return. This is the correctness reference: implementations favour
+/// clarity and well defined degenerate-case behaviour over raw speed.
 /// </summary>
 public static class Collide
 {
     // ---------------------------------------------------------------- Point
 
-    public static bool PointInCircle(Vec2 p, Circle c) => p.DistanceSquared(c.Center) <= c.Radius * c.Radius;
+    public static bool PointInCircle(Vec2 p, Circle c)
+    {
+        FxVec2 pf = FxVec2.From(p);
+        FxCircle cf = FxCircle.From(c);
+        return pf.DistSq(cf.Center) <= cf.Radius * cf.Radius;
+    }
 
     public static bool PointInAabb(Vec2 p, Aabb box)
     {
-        Vec2 d = p - box.Center;
-        return MathF.Abs(d.X) <= box.HalfExtents.X && MathF.Abs(d.Y) <= box.HalfExtents.Y;
+        FxVec2 pf = FxVec2.From(p);
+        FxAabb bf = FxAabb.From(box);
+        return Math.Abs(pf.X - bf.Center.X) <= bf.Half.X
+            && Math.Abs(pf.Y - bf.Center.Y) <= bf.Half.Y;
     }
 
     public static bool PointInCapsule(Vec2 p, Capsule cap)
     {
-        Vec2 closest = Distance.ClosestPointOnSegment(p, cap.A, cap.B);
-        return p.DistanceSquared(closest) <= cap.Radius * cap.Radius;
+        FxVec2 pf = FxVec2.From(p);
+        FxVec2 closest = Distance.ClosestPointOnSegmentFx(pf, FxVec2.From(cap.A), FxVec2.From(cap.B), out _);
+        long r = Fx.From(cap.Radius);
+        return pf.DistSq(closest) <= r * r;
     }
 
     // -------------------------------------------------------- Circle / Circle
 
-    public static Manifold CircleVsCircle(Circle a, Circle b)
-    {
-        Vec2 delta = b.Center - a.Center;
-        float r = a.Radius + b.Radius;
-        float distSq = delta.LengthSquared;
-        if (distSq > r * r)
-            return Manifold.None;
+    public static Manifold CircleVsCircle(Circle a, Circle b) =>
+        CircleVsCircleFx(FxCircle.From(a), FxCircle.From(b)).ToManifold();
 
-        float dist = MathF.Sqrt(distSq);
+    internal static FxManifold CircleVsCircleFx(FxCircle a, FxCircle b)
+    {
+        FxVec2 delta = b.Center - a.Center;
+        long r = a.Radius + b.Radius;
+        long distSq = delta.LengthSq;
+        if (distSq > r * r)
+            return FxManifold.None;
+
+        long dist = Fx.Sqrt(distSq);
         // Degenerate: concentric circles -> pick an arbitrary but stable axis.
-        Vec2 normal = dist > 1e-6f ? delta * (1f / dist) : Vec2.UnitX;
-        float depth = r - dist;
-        Vec2 contact = a.Center + normal * (a.Radius - depth * 0.5f);
-        return new Manifold(true, normal, depth, contact);
+        FxVec2 normal = dist > 0 ? delta.NormalizedFx(FxVec2.UnitX) : FxVec2.UnitX;
+        long depth = r - dist;
+        FxVec2 contact = a.Center + normal.MulUnit(a.Radius - depth / 2);
+        return new FxManifold(true, normal, depth, contact);
     }
 
     // ------------------------------------------------------------ Aabb / Aabb
 
-    public static Manifold AabbVsAabb(Aabb a, Aabb b)
+    public static Manifold AabbVsAabb(Aabb a, Aabb b) =>
+        AabbVsAabbFx(FxAabb.From(a), FxAabb.From(b)).ToManifold();
+
+    internal static FxManifold AabbVsAabbFx(FxAabb a, FxAabb b)
     {
-        Vec2 delta = b.Center - a.Center;
-        float overlapX = (a.HalfExtents.X + b.HalfExtents.X) - MathF.Abs(delta.X);
-        if (overlapX <= 0f)
-            return Manifold.None;
-        float overlapY = (a.HalfExtents.Y + b.HalfExtents.Y) - MathF.Abs(delta.Y);
-        if (overlapY <= 0f)
-            return Manifold.None;
+        FxVec2 delta = b.Center - a.Center;
+        long overlapX = (a.Half.X + b.Half.X) - Math.Abs(delta.X);
+        if (overlapX <= 0)
+            return FxManifold.None;
+        long overlapY = (a.Half.Y + b.Half.Y) - Math.Abs(delta.Y);
+        if (overlapY <= 0)
+            return FxManifold.None;
 
         // Resolve along the axis of least penetration.
         if (overlapX < overlapY)
         {
-            float sign = delta.X < 0f ? -1f : 1f;
-            var normal = new Vec2(sign, 0f);
-            float contactX = a.Center.X + sign * a.HalfExtents.X;
-            return new Manifold(true, normal, overlapX, new Vec2(contactX, b.Center.Y));
+            long sign = delta.X < 0 ? -1 : 1;
+            var normal = new FxVec2(sign * Fx.One, 0);
+            long contactX = a.Center.X + sign * a.Half.X;
+            return new FxManifold(true, normal, overlapX, new FxVec2(contactX, b.Center.Y));
         }
         else
         {
-            float sign = delta.Y < 0f ? -1f : 1f;
-            var normal = new Vec2(0f, sign);
-            float contactY = a.Center.Y + sign * a.HalfExtents.Y;
-            return new Manifold(true, normal, overlapY, new Vec2(b.Center.X, contactY));
+            long sign = delta.Y < 0 ? -1 : 1;
+            var normal = new FxVec2(0, sign * Fx.One);
+            long contactY = a.Center.Y + sign * a.Half.Y;
+            return new FxManifold(true, normal, overlapY, new FxVec2(b.Center.X, contactY));
         }
     }
 
     // ---------------------------------------------------------- Circle / Aabb
 
-    public static Manifold CircleVsAabb(Circle c, Aabb box)
+    public static Manifold CircleVsAabb(Circle c, Aabb box) =>
+        CircleVsAabbFx(FxCircle.From(c), FxAabb.From(box)).ToManifold();
+
+    internal static FxManifold CircleVsAabbFx(FxCircle c, FxAabb box)
     {
-        Vec2 closest = Distance.ClosestPointOnAabb(c.Center, box);
-        Vec2 delta = closest - c.Center;
-        float distSq = delta.LengthSquared;
+        FxVec2 closest = Distance.ClosestPointOnAabbFx(c.Center, box);
+        FxVec2 delta = closest - c.Center;
+        long distSq = delta.LengthSq;
 
         if (distSq > c.Radius * c.Radius)
-            return Manifold.None;
+            return FxManifold.None;
 
-        if (distSq > 1e-12f)
+        if (distSq > 0)
         {
             // Center is outside the box: normal points to the nearest face/corner.
-            float dist = MathF.Sqrt(distSq);
-            Vec2 normal = delta * (1f / dist);
-            float depth = c.Radius - dist;
-            return new Manifold(true, normal, depth, closest);
+            long dist = Fx.Sqrt(distSq);
+            FxVec2 normal = delta.NormalizedFx(FxVec2.UnitX);
+            long depth = c.Radius - dist;
+            return new FxManifold(true, normal, depth, closest);
         }
 
         // Center is inside the box: eject along the nearest face. `out` is the
         // outward face direction; the normal stays A->B (towards the box centre)
         // so SeparationForA = -normal*depth pushes the circle out that face,
         // matching the outside branch above.
-        Vec2 d = c.Center - box.Center;
-        float overlapX = box.HalfExtents.X - MathF.Abs(d.X);
-        float overlapY = box.HalfExtents.Y - MathF.Abs(d.Y);
+        FxVec2 d = c.Center - box.Center;
+        long overlapX = box.Half.X - Math.Abs(d.X);
+        long overlapY = box.Half.Y - Math.Abs(d.Y);
         if (overlapX < overlapY)
         {
-            float outSign = d.X < 0f ? -1f : 1f;
-            var normal = new Vec2(-outSign, 0f);
-            float depth = overlapX + c.Radius;
-            Vec2 contact = new(box.Center.X + outSign * box.HalfExtents.X, c.Center.Y);
-            return new Manifold(true, normal, depth, contact);
+            long outSign = d.X < 0 ? -1 : 1;
+            var normal = new FxVec2(-outSign * Fx.One, 0);
+            long depth = overlapX + c.Radius;
+            var contact = new FxVec2(box.Center.X + outSign * box.Half.X, c.Center.Y);
+            return new FxManifold(true, normal, depth, contact);
         }
         else
         {
-            float outSign = d.Y < 0f ? -1f : 1f;
-            var normal = new Vec2(0f, -outSign);
-            float depth = overlapY + c.Radius;
-            Vec2 contact = new(c.Center.X, box.Center.Y + outSign * box.HalfExtents.Y);
-            return new Manifold(true, normal, depth, contact);
+            long outSign = d.Y < 0 ? -1 : 1;
+            var normal = new FxVec2(0, -outSign * Fx.One);
+            long depth = overlapY + c.Radius;
+            var contact = new FxVec2(c.Center.X, box.Center.Y + outSign * box.Half.Y);
+            return new FxManifold(true, normal, depth, contact);
         }
     }
 
@@ -123,22 +144,30 @@ public static class Collide
 
     public static Manifold CircleVsCapsule(Circle c, Capsule cap)
     {
-        Vec2 closest = Distance.ClosestPointOnSegment(c.Center, cap.A, cap.B);
+        FxCircle cf = FxCircle.From(c);
+        FxVec2 closest = Distance.ClosestPointOnSegmentFx(
+            cf.Center, FxVec2.From(cap.A), FxVec2.From(cap.B), out _);
         // Treat the closest point on the spine as a circle of radius cap.Radius.
-        return CircleVsCircle(c, new Circle(closest, cap.Radius));
+        return CircleVsCircleFx(cf, new FxCircle(closest, Fx.From(cap.Radius))).ToManifold();
     }
 
     public static Manifold CapsuleVsCapsule(Capsule a, Capsule b)
     {
-        Distance.ClosestPointsSegmentSegment(a.A, a.B, b.A, b.B, out Vec2 c1, out Vec2 c2);
-        return CircleVsCircle(new Circle(c1, a.Radius), new Circle(c2, b.Radius));
+        Distance.ClosestPointsSegmentSegmentFx(
+            FxVec2.From(a.A), FxVec2.From(a.B), FxVec2.From(b.A), FxVec2.From(b.B),
+            out FxVec2 c1, out FxVec2 c2);
+        return CircleVsCircleFx(
+            new FxCircle(c1, Fx.From(a.Radius)),
+            new FxCircle(c2, Fx.From(b.Radius))).ToManifold();
     }
 
     public static Manifold CapsuleVsAabb(Capsule cap, Aabb box)
     {
         // Sample the closest point on the spine to the box centre, then reduce
         // to a circle-vs-box test. Adequate for the shapes arcade games use.
-        Vec2 spinePoint = Distance.ClosestPointOnSegment(box.Center, cap.A, cap.B);
-        return CircleVsAabb(new Circle(spinePoint, cap.Radius), box);
+        FxAabb bf = FxAabb.From(box);
+        FxVec2 spinePoint = Distance.ClosestPointOnSegmentFx(
+            bf.Center, FxVec2.From(cap.A), FxVec2.From(cap.B), out _);
+        return CircleVsAabbFx(new FxCircle(spinePoint, Fx.From(cap.Radius)), bf).ToManifold();
     }
 }

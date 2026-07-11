@@ -53,8 +53,11 @@ public readonly struct Aabb
 
     public bool Overlaps(Aabb b)
     {
-        return MathF.Abs(Center.X - b.Center.X) <= (HalfExtents.X + b.HalfExtents.X)
-            && MathF.Abs(Center.Y - b.Center.Y) <= (HalfExtents.Y + b.HalfExtents.Y);
+        // Integer core: quantize to 24.8 fixed point and compare exactly.
+        return Math.Abs(Fx.From(Center.X) - Fx.From(b.Center.X))
+                <= Fx.From(HalfExtents.X) + Fx.From(b.HalfExtents.X)
+            && Math.Abs(Fx.From(Center.Y) - Fx.From(b.Center.Y))
+                <= Fx.From(HalfExtents.Y) + Fx.From(b.HalfExtents.Y);
     }
 }
 

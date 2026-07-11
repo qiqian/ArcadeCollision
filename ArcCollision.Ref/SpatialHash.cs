@@ -7,24 +7,43 @@ namespace ArcCollision;
 /// A uniform-grid spatial hash for broadphase queries. Entities are inserted by
 /// their AABB and can be queried by region or enumerated as candidate pairs.
 ///
+/// Bounds are stored in 24.8 fixed point and bucketing/overlap tests are pure
+/// integer math (floats convert at the public boundary).
+///
 /// Choose a cell size roughly equal to the average entity size for best results.
 /// </summary>
 public sealed class SpatialHash
 {
-    private readonly float _cellSize;
-    private readonly float _invCellSize;
-    private readonly Dictionary<long, List<int>> _cells = new();
-    private readonly Dictionary<int, Aabb> _bounds = new();
+    private readonly record struct Cell(long X, long Y);
+
+    private readonly struct Bounds
+    {
+        public readonly long MinX, MinY, MaxX, MaxY;
+
+        public Bounds(Aabb box)
+        {
+            MinX = Fx.From(box.Center.X) - Fx.From(box.HalfExtents.X);
+            MinY = Fx.From(box.Center.Y) - Fx.From(box.HalfExtents.Y);
+            MaxX = Fx.From(box.Center.X) + Fx.From(box.HalfExtents.X);
+            MaxY = Fx.From(box.Center.Y) + Fx.From(box.HalfExtents.Y);
+        }
+
+        public bool Overlaps(in Bounds b) =>
+            MinX <= b.MaxX && b.MinX <= MaxX && MinY <= b.MaxY && b.MinY <= MaxY;
+    }
+
+    private readonly long _cellSizeFx;
+    private readonly Dictionary<Cell, List<int>> _cells = new();
+    private readonly Dictionary<int, Bounds> _bounds = new();
 
     public SpatialHash(float cellSize)
     {
-        if (cellSize <= 0f)
+        _cellSizeFx = Fx.From(cellSize);
+        if (_cellSizeFx <= 0)
             throw new ArgumentOutOfRangeException(nameof(cellSize), "Cell size must be positive.");
-        _cellSize = cellSize;
-        _invCellSize = 1f / cellSize;
     }
 
-    public float CellSize => _cellSize;
+    public float CellSize => Fx.To(_cellSizeFx);
     public int Count => _bounds.Count;
 
     public void Clear()
@@ -39,10 +58,11 @@ public sealed class SpatialHash
         if (_bounds.ContainsKey(id))
             Remove(id);
 
-        _bounds[id] = bounds;
-        ForEachCell(bounds, (cx, cy) =>
+        var fx = new Bounds(bounds);
+        _bounds[id] = fx;
+        ForEachCell(fx, (cx, cy) =>
         {
-            long key = Key(cx, cy);
+            Cell key = new(cx, cy);
             if (!_cells.TryGetValue(key, out var list))
             {
                 list = new List<int>();
@@ -54,11 +74,11 @@ public sealed class SpatialHash
 
     public void Remove(int id)
     {
-        if (!_bounds.TryGetValue(id, out Aabb bounds))
+        if (!_bounds.TryGetValue(id, out Bounds fx))
             return;
-        ForEachCell(bounds, (cx, cy) =>
+        ForEachCell(fx, (cx, cy) =>
         {
-            long key = Key(cx, cy);
+            Cell key = new(cx, cy);
             if (_cells.TryGetValue(key, out var list))
             {
                 list.Remove(id);
@@ -73,14 +93,15 @@ public sealed class SpatialHash
     public void Query(Aabb region, List<int> results)
     {
         results.Clear();
+        var fx = new Bounds(region);
         var seen = new HashSet<int>();
-        ForEachCell(region, (cx, cy) =>
+        ForEachCell(fx, (cx, cy) =>
         {
-            if (_cells.TryGetValue(Key(cx, cy), out var list))
+            if (_cells.TryGetValue(new Cell(cx, cy), out var list))
             {
                 foreach (int id in list)
                 {
-                    if (seen.Add(id) && _bounds[id].Overlaps(region))
+                    if (seen.Add(id) && _bounds[id].Overlaps(fx))
                         results.Add(id);
                 }
             }
@@ -125,19 +146,15 @@ public sealed class SpatialHash
         }
     }
 
-    private void ForEachCell(Aabb bounds, Action<int, int> action)
+    private void ForEachCell(in Bounds fx, Action<long, long> action)
     {
-        Vec2 min = bounds.Min;
-        Vec2 max = bounds.Max;
-        int minX = (int)MathF.Floor(min.X * _invCellSize);
-        int minY = (int)MathF.Floor(min.Y * _invCellSize);
-        int maxX = (int)MathF.Floor(max.X * _invCellSize);
-        int maxY = (int)MathF.Floor(max.Y * _invCellSize);
+        long minX = Fx.FloorDiv(fx.MinX, _cellSizeFx);
+        long minY = Fx.FloorDiv(fx.MinY, _cellSizeFx);
+        long maxX = Fx.FloorDiv(fx.MaxX, _cellSizeFx);
+        long maxY = Fx.FloorDiv(fx.MaxY, _cellSizeFx);
 
-        for (int cy = minY; cy <= maxY; cy++)
-            for (int cx = minX; cx <= maxX; cx++)
+        for (long cy = minY; cy <= maxY; cy++)
+            for (long cx = minX; cx <= maxX; cx++)
                 action(cx, cy);
     }
-
-    private static long Key(int x, int y) => ((long)x << 32) | (uint)y;
 }

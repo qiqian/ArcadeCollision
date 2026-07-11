@@ -8,86 +8,101 @@ namespace ArcCollision;
 ///
 /// Ray/segment functions take an origin and a full displacement vector; the
 /// returned <see cref="SweepHit.Time"/> is the fraction of that displacement at
-/// first contact.
+/// first contact. Like the discrete tests, the math is all-integer: positions
+/// in 24.8 fixed point and times in 16.16. Degree-four discriminants are
+/// uniformly scaled before multiplication to keep arithmetic in Int64.
 /// </summary>
 public static class Sweep
 {
     /// <summary>Ray (origin + d) versus circle. <paramref name="d"/> is the full motion.</summary>
-    public static SweepHit RayVsCircle(Vec2 origin, Vec2 d, Circle circle)
+    public static SweepHit RayVsCircle(Vec2 origin, Vec2 d, Circle circle) =>
+        RayVsCircleFx(FxVec2.From(origin), FxVec2.From(d), FxCircle.From(circle)).ToSweepHit();
+
+    internal static FxSweep RayVsCircleFx(FxVec2 origin, FxVec2 d, FxCircle circle)
     {
         // Solve |origin + t*d - center|^2 = r^2 for smallest t in [0,1].
-        Vec2 m = origin - circle.Center;
-        float a = d.LengthSquared;
-        if (a < 1e-12f)
+        FxVec2 m = origin - circle.Center;
+        long a = d.LengthSq;                       // squared scale
+        if (a == 0)
         {
             // No motion: treat as a static containment check.
-            return m.LengthSquared <= circle.Radius * circle.Radius
-                ? new SweepHit(true, 0f, m.Normalized(Vec2.UnitX), origin)
-                : SweepHit.Miss;
+            return m.LengthSq <= circle.Radius * circle.Radius
+                ? new FxSweep(true, 0, m.NormalizedFx(FxVec2.UnitX), origin)
+                : FxSweep.Miss;
         }
 
-        float b = m.Dot(d);
-        float c = m.LengthSquared - circle.Radius * circle.Radius;
+        long b = m.Dot(d);
+        long c = m.LengthSq - circle.Radius * circle.Radius;
 
         // Origin already inside and moving: contact at t=0.
-        if (c <= 0f)
+        if (c <= 0)
         {
-            Vec2 n0 = m.Normalized(-d.Normalized(Vec2.UnitX));
-            return new SweepHit(true, 0f, n0, origin);
+            FxVec2 n0 = m.NormalizedFx(-d.NormalizedFx(FxVec2.UnitX));
+            return new FxSweep(true, 0, n0, origin);
         }
 
-        float disc = b * b - a * c;
-        if (disc < 0f)
-            return SweepHit.Miss;
+        int shift = Fx.ProductShift(a, b, c);
+        long scaledA = Fx.ScaleProductOperand(a, shift);
+        long scaledB = Fx.ScaleProductOperand(b, shift);
+        long scaledC = Fx.ScaleProductOperand(c, shift);
+        if (scaledA == 0)
+            return FxSweep.Miss;
+        long disc = scaledB * scaledB - scaledA * scaledC;
+        if (disc < 0)
+            return FxSweep.Miss;
 
-        float t = (-b - MathF.Sqrt(disc)) / a;
-        if (t < 0f || t > 1f)
-            return SweepHit.Miss;
+        long sqrtDisc = Fx.Sqrt(disc);
+        long t16 = Fx.RatioT(-scaledB - sqrtDisc, scaledA);
+        if (t16 < 0 || t16 > Fx.TOne)
+            return FxSweep.Miss;
 
-        Vec2 point = origin + d * t;
-        Vec2 normal = (point - circle.Center).Normalized(Vec2.UnitX);
-        return new SweepHit(true, t, normal, point);
+        FxVec2 point = origin + d.MulT(t16);
+        FxVec2 normal = (point - circle.Center).NormalizedFx(FxVec2.UnitX);
+        return new FxSweep(true, t16, normal, point);
     }
 
     /// <summary>Ray (origin + d) versus AABB using the slab method.</summary>
-    public static SweepHit RayVsAabb(Vec2 origin, Vec2 d, Aabb box)
-    {
-        Vec2 min = box.Min;
-        Vec2 max = box.Max;
+    public static SweepHit RayVsAabb(Vec2 origin, Vec2 d, Aabb box) =>
+        RayVsAabbFx(FxVec2.From(origin), FxVec2.From(d), FxAabb.From(box)).ToSweepHit();
 
-        float tMin = 0f;
-        float tMax = 1f;
-        Vec2 normal = Vec2.Zero;
+    internal static FxSweep RayVsAabbFx(FxVec2 origin, FxVec2 d, FxAabb box)
+    {
+        FxVec2 min = box.Min;
+        FxVec2 max = box.Max;
+
+        long tMin = 0;
+        long tMax = Fx.TOne;
+        FxVec2 normal = FxVec2.Zero;
 
         // X slab
-        if (!Slab(origin.X, d.X, min.X, max.X, new Vec2(-1f, 0f), new Vec2(1f, 0f),
+        if (!Slab(origin.X, d.X, min.X, max.X, new FxVec2(-Fx.One, 0), new FxVec2(Fx.One, 0),
                   ref tMin, ref tMax, ref normal))
-            return SweepHit.Miss;
+            return FxSweep.Miss;
         // Y slab
-        if (!Slab(origin.Y, d.Y, min.Y, max.Y, new Vec2(0f, -1f), new Vec2(0f, 1f),
+        if (!Slab(origin.Y, d.Y, min.Y, max.Y, new FxVec2(0, -Fx.One), new FxVec2(0, Fx.One),
                   ref tMin, ref tMax, ref normal))
-            return SweepHit.Miss;
+            return FxSweep.Miss;
 
-        Vec2 point = origin + d * tMin;
-        return new SweepHit(true, tMin, normal, point);
+        FxVec2 point = origin + d.MulT(tMin);
+        return new FxSweep(true, tMin, normal, point);
     }
 
     private static bool Slab(
-        float origin, float dir, float slabMin, float slabMax,
-        Vec2 nMin, Vec2 nMax, ref float tMin, ref float tMax, ref Vec2 normal)
+        long origin, long dir, long slabMin, long slabMax,
+        FxVec2 nMin, FxVec2 nMax, ref long tMin, ref long tMax, ref FxVec2 normal)
     {
-        const float eps = 1e-9f;
-        if (MathF.Abs(dir) < eps)
+        if (dir == 0)
         {
             // Parallel to the slab: miss if the origin is outside it.
             return origin >= slabMin && origin <= slabMax;
         }
 
-        float inv = 1f / dir;
-        float t1 = (slabMin - origin) * inv;
-        float t2 = (slabMax - origin) * inv;
-        Vec2 n1 = nMin;
-        Vec2 n2 = nMax;
+        // Slab entry/exit times as 16.16; deltas are degree-1 so a 64-bit shift
+        // is safe for any sane world size.
+        long t1 = Fx.RatioT(slabMin - origin, dir);
+        long t2 = Fx.RatioT(slabMax - origin, dir);
+        FxVec2 n1 = nMin;
+        FxVec2 n2 = nMax;
         if (t1 > t2)
         {
             (t1, t2) = (t2, t1);
@@ -111,15 +126,17 @@ public static class Sweep
     /// </summary>
     public static SweepHit MovingCircleVsCircle(Circle mover, Vec2 motion, Circle target)
     {
-        var expanded = new Circle(target.Center, target.Radius + mover.Radius);
-        SweepHit hit = RayVsCircle(mover.Center, motion, expanded);
+        var moverFx = FxCircle.From(mover);
+        var targetFx = FxCircle.From(target);
+        var expanded = new FxCircle(targetFx.Center, targetFx.Radius + moverFx.Radius);
+        FxSweep hit = RayVsCircleFx(moverFx.Center, FxVec2.From(motion), expanded);
         if (!hit.Hit)
             return SweepHit.Miss;
 
         // Report the contact point on the target surface, not the expanded one.
-        Vec2 moverAt = mover.Center + motion * hit.Time;
-        Vec2 point = moverAt - hit.Normal * mover.Radius;
-        return new SweepHit(true, hit.Time, hit.Normal, point);
+        FxVec2 moverAt = moverFx.Center + FxVec2.From(motion).MulT(hit.Time16);
+        FxVec2 point = moverAt - hit.Normal.MulUnit(moverFx.Radius);
+        return new FxSweep(true, hit.Time16, hit.Normal, point).ToSweepHit();
     }
 
     /// <summary>
@@ -130,38 +147,46 @@ public static class Sweep
     /// </summary>
     public static SweepHit MovingCircleVsAabb(Circle mover, Vec2 motion, Aabb box)
     {
-        float r = mover.Radius;
-        Aabb expanded = box.Expanded(r);
-        SweepHit best = SweepHit.Miss;
+        var moverFx = FxCircle.From(mover);
+        var boxFx = FxAabb.From(box);
+        FxVec2 motionFx = FxVec2.From(motion);
+        long r = moverFx.Radius;
+        var expanded = new FxAabb(boxFx.Center, new FxVec2(boxFx.Half.X + r, boxFx.Half.Y + r));
+        FxSweep best = FxSweep.Miss;
 
-        SweepHit faceHit = RayVsAabb(mover.Center, motion, expanded);
+        FxSweep faceHit = RayVsAabbFx(moverFx.Center, motionFx, expanded);
         if (faceHit.Hit)
         {
             // Only accept the face hit when contact lies on an actual face region
             // (not the rounded corner zone), otherwise defer to the corner tests.
-            Vec2 at = mover.Center + motion * faceHit.Time;
-            Vec2 min = box.Min;
-            Vec2 max = box.Max;
+            FxVec2 at = moverFx.Center + motionFx.MulT(faceHit.Time16);
+            FxVec2 min = boxFx.Min;
+            FxVec2 max = boxFx.Max;
             bool cornerZone = (at.X < min.X || at.X > max.X) && (at.Y < min.Y || at.Y > max.Y);
             if (!cornerZone)
                 best = faceHit;
         }
 
         // Corner circles.
-        Span<Vec2> corners = stackalloc Vec2[4]
+        Span<FxVec2> corners = stackalloc FxVec2[4]
         {
-            box.Min,
-            new Vec2(box.Max.X, box.Min.Y),
-            box.Max,
-            new Vec2(box.Min.X, box.Max.Y),
+            boxFx.Min,
+            new FxVec2(boxFx.Max.X, boxFx.Min.Y),
+            boxFx.Max,
+            new FxVec2(boxFx.Min.X, boxFx.Max.Y),
         };
-        foreach (Vec2 corner in corners)
+        foreach (FxVec2 corner in corners)
         {
-            SweepHit h = RayVsCircle(mover.Center, motion, new Circle(corner, r));
-            if (h.Hit && (!best.Hit || h.Time < best.Time))
+            FxSweep h = RayVsCircleFx(moverFx.Center, motionFx, new FxCircle(corner, r));
+            if (h.Hit && (!best.Hit || h.Time16 < best.Time16))
                 best = h;
         }
 
-        return best;
+        if (!best.Hit)
+            return SweepHit.Miss;
+
+        FxVec2 moverAtImpact = moverFx.Center + motionFx.MulT(best.Time16);
+        FxVec2 contact = moverAtImpact - best.Normal.MulUnit(r);
+        return new FxSweep(true, best.Time16, best.Normal, contact).ToSweepHit();
     }
 }
