@@ -64,7 +64,10 @@ internal sealed class Game
     private readonly Random _rng = new();
     private Fighter _taxMan = null!;
     private Vec2 _move;
-    private bool _attackPressed, _jumpPressed;
+    // Presses are buffered for a few frames so an input during the jump impulse
+    // or a hit-freeze isn't silently dropped (the buffer is consumed on use).
+    private const float InputBufferTime = .15f;
+    private float _attackBuffer, _jumpBuffer;
 
     public Game() => Reset();
 
@@ -203,12 +206,15 @@ internal sealed class Game
     public void SetInput(Vec2 move, bool attack, bool jump)
     {
         _move = move;
-        _attackPressed = attack;
-        _jumpPressed = jump;
+        if (attack) _attackBuffer = InputBufferTime;
+        if (jump) _jumpBuffer = InputBufferTime;
     }
 
     public void Update(float dt)
     {
+        _attackBuffer = MathF.Max(0f, _attackBuffer - dt);
+        _jumpBuffer = MathF.Max(0f, _jumpBuffer - dt);
+
         if (Hitstop > 0f)
         {
             Hitstop = MathF.Max(0f, Hitstop - dt);
@@ -246,8 +252,11 @@ internal sealed class Game
         {
             if (p.JumpLanding || !p.JumpLaunched) return;
             ApplyAirControl(p);
-            if (_attackPressed && !p.AirAttackUsed && p.Def.AirAttack != null)
+            if (_attackBuffer > 0f && !p.AirAttackUsed && p.Def.AirAttack != null)
+            {
+                _attackBuffer = 0f;
                 StartAirAttack(p);
+            }
             return;
         }
         if (p.State == FState.AirAttack)
@@ -255,9 +264,12 @@ internal sealed class Game
 
         if (p.State == FState.Attack && p.Scripted == ScriptedState.None)
         {
-            if (_attackPressed && p.Attack != null && p.Attack.ComboNext >= 0
+            if (_attackBuffer > 0f && p.Attack != null && p.Attack.ComboNext >= 0
                 && p.AttackTime <= p.Attack.ComboWindow)
+            {
+                _attackBuffer = 0f;
                 p.ComboQueued = true;
+            }
             return;
         }
 
@@ -268,10 +280,16 @@ internal sealed class Game
         p.Vel = direction * p.Def.Speed * (p.TurnTimer > 0f ? .6f : 1f);
         SetLocomotion(p, direction.LengthSquared > .001f ? FState.Walk : FState.Idle);
 
-        if (_jumpPressed)
+        if (_jumpBuffer > 0f)
+        {
+            _jumpBuffer = 0f;
             StartJump(p);
-        else if (_attackPressed)
+        }
+        else if (_attackBuffer > 0f)
+        {
+            _attackBuffer = 0f;
             StartAttack(p, 0, 1);
+        }
     }
 
     private void ApplyAirControl(Fighter fighter)
@@ -942,13 +960,12 @@ internal sealed class Game
                     break;
 
                 case FState.AirAttack:
+                    // Chad's air attack is configured with DISTANCE_FROM_GROUND(250),
+                    // but the source compares a negative in-air skin y against +250 —
+                    // the condition can never fire, so the attack (and its hitbox,
+                    // enabled from 0.125s) effectively lasts until landing.
+                    // IntegrateJump's ground contact handles the landing transition.
                     IntegrateJump(fighter, dt);
-                    if (fighter.SkinVelY < 0f && fighter.SkinY <= 250f * WorldScale)
-                    {
-                        fighter.SetState(FState.Jump);
-                        fighter.JumpLaunched = true;
-                        fighter.StateTime = MathF.Max(fighter.StateTime, fighter.Def.JumpImpulseTime);
-                    }
                     break;
 
                 case FState.Ko:
