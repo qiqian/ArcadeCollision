@@ -8,33 +8,44 @@ using System.Windows.Forms;
 namespace ArcCollision.Battlefield;
 
 /// <summary>
-/// "Battlefield" - a compact arcade beat-'em-up (inspired by Knights of Valour /
-/// 街机三国) that stress-tests the ArcCollision library with dozens of jostling
-/// bodies, melee swings and swept arrows.
+/// "Battlefield" — an arcade beat-'em-up in the spirit of Knights of Valour /
+/// 街机三国. Runs the whole crowd on the ArcCollision library while delivering
+/// arcade-style hit feedback: combos, hitstop, screen shake, slash arcs, sparks
+/// and floating damage numbers.
 /// </summary>
 public sealed class GameForm : Form
 {
     private const int OriginX = 10;
-    private const int OriginY = 76;
+    private const int OriginY = 78;
 
     private readonly Game _game = new();
     private readonly HashSet<Keys> _keys = new();
+    private readonly HashSet<Keys> _prev = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly System.Windows.Forms.Timer _timer = new();
+    private readonly Random _rng = new();
     private long _lastTicks;
+    private float _titleFade = 3.0f;
+
+    private readonly Font _fBig = new("Segoe UI", 40f, FontStyle.Bold);
+    private readonly Font _fTitle = new("Segoe UI Semibold", 16f, FontStyle.Bold);
+    private readonly Font _fHud = new("Consolas", 11f, FontStyle.Bold);
+    private readonly Font _fCombo = new("Segoe UI", 30f, FontStyle.Bold);
+    private readonly Font _fDmg = new("Segoe UI", 12f, FontStyle.Bold);
+    private readonly Font _fDmgCrit = new("Segoe UI", 18f, FontStyle.Bold);
 
     public GameForm()
     {
-        Text = "ArcCollision — Battlefield";
+        Text = "ArcCollision — Battlefield 三国";
         ClientSize = new Size((int)Game.ArenaWidth + OriginX * 2, (int)Game.ArenaHeight + OriginY + 12);
-        BackColor = Color.FromArgb(16, 18, 22);
+        BackColor = Color.FromArgb(12, 12, 16);
         DoubleBuffered = true;
         KeyPreview = true;
         MaximizeBox = false;
         FormBorderStyle = FormBorderStyle.FixedSingle;
 
         _lastTicks = _clock.ElapsedTicks;
-        _timer.Interval = 16;
+        _timer.Interval = 15;
         _timer.Tick += OnTick;
         _timer.Start();
     }
@@ -45,7 +56,10 @@ public sealed class GameForm : Form
     {
         _keys.Add(e.KeyCode);
         if (e.KeyCode == Keys.R && _game.GameOver)
+        {
             _game.Reset();
+            _titleFade = 1.2f;
+        }
         base.OnKeyDown(e);
     }
 
@@ -55,18 +69,18 @@ public sealed class GameForm : Form
         base.OnKeyUp(e);
     }
 
+    private bool Down(Keys k) => _keys.Contains(k);
+    private bool Pressed(Keys k) => _keys.Contains(k) && !_prev.Contains(k);
+
     private Vec2 ReadMove()
     {
         float x = 0, y = 0;
-        if (_keys.Contains(Keys.A) || _keys.Contains(Keys.Left)) x -= 1;
-        if (_keys.Contains(Keys.D) || _keys.Contains(Keys.Right)) x += 1;
-        if (_keys.Contains(Keys.W) || _keys.Contains(Keys.Up)) y -= 1;
-        if (_keys.Contains(Keys.S) || _keys.Contains(Keys.Down)) y += 1;
+        if (Down(Keys.A) || Down(Keys.Left)) x -= 1;
+        if (Down(Keys.D) || Down(Keys.Right)) x += 1;
+        if (Down(Keys.W) || Down(Keys.Up)) y -= 1;
+        if (Down(Keys.S) || Down(Keys.Down)) y += 1;
         return new Vec2(x, y);
     }
-
-    private bool ReadAttack() =>
-        _keys.Contains(Keys.J) || _keys.Contains(Keys.Space) || _keys.Contains(Keys.K);
 
     // --------------------------------------------------------------- loop
 
@@ -75,10 +89,18 @@ public sealed class GameForm : Form
         long now = _clock.ElapsedTicks;
         float dt = (float)((now - _lastTicks) / (double)Stopwatch.Frequency);
         _lastTicks = now;
-        if (dt > 0.05f) dt = 0.05f; // avoid spiral-of-death on stalls
+        if (dt > 0.05f) dt = 0.05f;
+        if (_titleFade > 0f) _titleFade -= dt;
 
-        _game.SetInput(ReadMove(), ReadAttack());
+        bool attack = Pressed(Keys.J) || Pressed(Keys.Z);
+        bool heavy = Pressed(Keys.K) || Pressed(Keys.X);
+        bool dash = Pressed(Keys.Space) || Pressed(Keys.L) || Pressed(Keys.ShiftKey);
+
+        _game.SetInput(ReadMove(), attack, heavy, dash);
         _game.Update(dt);
+
+        _prev.Clear();
+        _prev.UnionWith(_keys);
         Invalidate();
     }
 
@@ -90,162 +112,261 @@ public sealed class GameForm : Form
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(BackColor);
 
-        DrawArena(g);
+        float sx = 0, sy = 0;
+        if (_game.ShakeMag > 0.1f)
+        {
+            sx = (float)(_rng.NextDouble() - 0.5) * _game.ShakeMag * 2f;
+            sy = (float)(_rng.NextDouble() - 0.5) * _game.ShakeMag * 2f;
+        }
 
-        var state = g.Save();
-        g.TranslateTransform(OriginX, OriginY);
+        GraphicsState world = g.Save();
+        g.TranslateTransform(OriginX + sx, OriginY + sy);
+        g.SetClip(new RectangleF(-OriginX, -OriginY, ClientSize.Width, ClientSize.Height));
 
-        // depth sort: draw far (small y) first
+        DrawBackground(g);
+
+        foreach (var d in _game.Dusts)
+            DrawDust(g, d);
+
+        foreach (var f in _game.Fighters)
+            CharacterArt.DrawShadow(g, f);
+
         var order = new List<Fighter>(_game.Fighters);
         order.Sort((a, b) => a.Pos.Y.CompareTo(b.Pos.Y));
-
         foreach (var f in order)
-            DrawShadow(g, f);
-        foreach (var f in order)
-            DrawFighter(g, f);
-        foreach (var p in _game.Projectiles)
-            DrawProjectile(g, p);
+            CharacterArt.Draw(g, f);
 
-        g.Restore(state);
+        foreach (var s in _game.Sparks)
+            DrawSpark(g, s);
+        foreach (var n in _game.Numbers)
+            DrawNumber(g, n);
+
+        g.ResetClip();
+        g.Restore(world);
+
+        if (_game.FlashFx > 0.01f)
+            using (var fl = new SolidBrush(Color.FromArgb((int)(90 * Math.Clamp(_game.FlashFx, 0f, 1f)), 255, 255, 255)))
+                g.FillRectangle(fl, 0, 0, ClientSize.Width, ClientSize.Height);
 
         DrawHud(g);
+        if (_titleFade > 0f)
+            DrawTitle(g);
         if (_game.GameOver)
             DrawGameOver(g);
     }
 
-    private void DrawArena(Graphics g)
+    // ---- world ----
+
+    private void DrawBackground(Graphics g)
     {
-        var rect = new Rectangle(OriginX, OriginY, (int)Game.ArenaWidth, (int)Game.ArenaHeight);
-        using var brush = new LinearGradientBrush(rect,
-            Color.FromArgb(58, 74, 52), Color.FromArgb(38, 50, 36), LinearGradientMode.Vertical);
-        g.FillRectangle(brush, rect);
+        var arena = new RectangleF(0, 0, Game.ArenaWidth, Game.ArenaHeight);
 
-        using var stripe = new SolidBrush(Color.FromArgb(18, 255, 255, 255));
-        for (int x = 0; x < Game.ArenaWidth; x += 80)
-            g.FillRectangle(stripe, OriginX + x, OriginY, 40, (int)Game.ArenaHeight);
+        // back wall
+        using (var wall = new LinearGradientBrush(
+            new RectangleF(0, 0, Game.ArenaWidth, Game.FloorTop),
+            Color.FromArgb(46, 40, 54), Color.FromArgb(30, 28, 40), LinearGradientMode.Vertical))
+            g.FillRectangle(wall, 0, 0, Game.ArenaWidth, Game.FloorTop);
 
-        using var border = new Pen(Color.FromArgb(140, 150, 110), 3f);
-        g.DrawRectangle(border, rect);
+        // hanging banners (三国 vibe)
+        Color[] bcol = { Color.FromArgb(180, 60, 60), Color.FromArgb(60, 90, 180), Color.FromArgb(200, 170, 70) };
+        for (int i = 0; i < 7; i++)
+        {
+            float x = 90 + i * 165;
+            Color c = bcol[i % bcol.Length];
+            using var b = new SolidBrush(Color.FromArgb(220, c));
+            g.FillPolygon(b, new[]
+            {
+                new PointF(x - 16, 0), new PointF(x + 16, 0),
+                new PointF(x + 16, Game.FloorTop - 18), new PointF(x, Game.FloorTop - 8),
+                new PointF(x - 16, Game.FloorTop - 18),
+            });
+            using var em = new SolidBrush(Color.FromArgb(230, 235, 220));
+            g.FillEllipse(em, x - 7, 22, 14, 14);
+        }
+
+        // ground
+        using (var ground = new LinearGradientBrush(
+            new RectangleF(0, Game.FloorTop, Game.ArenaWidth, Game.ArenaHeight - Game.FloorTop),
+            Color.FromArgb(96, 84, 64), Color.FromArgb(66, 58, 46), LinearGradientMode.Vertical))
+            g.FillRectangle(ground, 0, Game.FloorTop, Game.ArenaWidth, Game.ArenaHeight - Game.FloorTop);
+
+        // perspective floor lines
+        using (var line = new Pen(Color.FromArgb(30, 0, 0, 0), 2f))
+        {
+            for (float y = Game.FloorTop + 40; y < Game.ArenaHeight; y += 46)
+                g.DrawLine(line, 0, y, Game.ArenaWidth, y);
+        }
+
+        using (var edge = new Pen(Color.FromArgb(20, 0, 0, 0), 6f))
+            g.DrawLine(edge, 0, Game.FloorTop, Game.ArenaWidth, Game.FloorTop);
+        using (var border = new Pen(Color.FromArgb(120, 100, 70), 3f))
+            g.DrawRectangle(border, arena.X, arena.Y, arena.Width, arena.Height);
     }
 
-    private static void DrawShadow(Graphics g, Fighter f)
+    private static void DrawDust(Graphics g, Dust d)
     {
-        if (!f.Alive) return;
-        using var b = new SolidBrush(Color.FromArgb(70, 0, 0, 0));
-        float rx = f.Radius * 1.05f, ry = f.Radius * 0.5f;
-        g.FillEllipse(b, f.Pos.X - rx, f.Pos.Y + f.Radius * 0.55f - ry, rx * 2, ry * 2);
+        float t = d.Age / d.Life;
+        int a = (int)(120 * (1f - t));
+        if (a <= 0) return;
+        float r = d.Size * (0.6f + t);
+        using var b = new SolidBrush(Color.FromArgb(a, 170, 155, 130));
+        g.FillEllipse(b, d.Pos.X - r, d.Pos.Y - r, r * 2, r * 2);
     }
 
-    private void DrawFighter(Graphics g, Fighter f)
+    private static void DrawSpark(Graphics g, HitSpark s)
     {
-        if (!f.Alive) return;
+        float t = s.Age / s.Life;
+        float k = 1f - t;
+        if (k <= 0) return;
 
-        // melee swing arc
-        if (f.Attacking)
-            DrawSwing(g, f);
+        GraphicsState gs = g.Save();
+        g.TranslateTransform(s.Pos.X, s.Pos.Y);
+        g.RotateTransform(s.Angle * 180f / MathF.PI + s.Age * 200f);
+        float rad = (s.Heavy ? 26f : 15f) * s.Size * (0.5f + t);
 
-        Color body = f.Faction == Faction.Player
-            ? Color.FromArgb(90, 170, 255)
-            : f.Kind == EnemyKind.Archer ? Color.FromArgb(120, 210, 130) : Color.FromArgb(230, 100, 96);
-        if (f.HurtFlash > 0f)
-            body = Blend(body, Color.White, 0.6f);
-
-        float r = f.Radius;
-        using (var fill = new SolidBrush(body))
-            g.FillEllipse(fill, f.Pos.X - r, f.Pos.Y - r, r * 2, r * 2);
-        using (var edge = new Pen(Color.FromArgb(30, 30, 40), 2f))
-            g.DrawEllipse(edge, f.Pos.X - r, f.Pos.Y - r, r * 2, r * 2);
-
-        // facing marker (a little "weapon" nub)
-        Vec2 dir = new(f.Facing, 0f);
-        Vec2 tip = f.Pos + dir * (r + 6f);
-        using (var pen = new Pen(Color.FromArgb(240, 240, 245), 3f))
-            g.DrawLine(pen, f.Pos.X + dir.X * r * 0.3f, f.Pos.Y, tip.X, tip.Y);
-
-        DrawHealthBar(g, f);
+        Color col = s.Heavy ? Color.FromArgb((int)(255 * k), 255, 180, 90) : Color.FromArgb((int)(255 * k), 255, 245, 200);
+        using (var pen = new Pen(col, s.Heavy ? 3.5f : 2.2f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+        {
+            int spokes = s.Heavy ? 8 : 6;
+            for (int i = 0; i < spokes; i++)
+            {
+                double ang = i * Math.PI * 2 / spokes;
+                float ix = (float)Math.Cos(ang) * rad * 0.35f;
+                float iy = (float)Math.Sin(ang) * rad * 0.35f;
+                float ox = (float)Math.Cos(ang) * rad;
+                float oy = (float)Math.Sin(ang) * rad;
+                g.DrawLine(pen, ix, iy, ox, oy);
+            }
+        }
+        using (var core = new SolidBrush(Color.FromArgb((int)(255 * k), 255, 255, 255)))
+            g.FillEllipse(core, -rad * 0.28f, -rad * 0.28f, rad * 0.56f, rad * 0.56f);
+        g.Restore(gs);
     }
 
-    private static void DrawSwing(Graphics g, Fighter f)
+    private void DrawNumber(Graphics g, DamageNumber n)
     {
-        Capsule s = f.Swing();
-        Color c = f.AttackActive
-            ? Color.FromArgb(180, 255, 240, 140)
-            : Color.FromArgb(70, 255, 255, 255);
-        using var pen = new Pen(c, f.AttackActive ? 3f : 1.5f);
-        Vec2 dir = (s.B - s.A).Normalized(Vec2.UnitX);
-        Vec2 n = dir.Perp * s.Radius;
-        g.DrawLine(pen, s.A.X + n.X, s.A.Y + n.Y, s.B.X + n.X, s.B.Y + n.Y);
-        g.DrawLine(pen, s.A.X - n.X, s.A.Y - n.Y, s.B.X - n.X, s.B.Y - n.Y);
-        g.DrawEllipse(pen, s.B.X - s.Radius, s.B.Y - s.Radius, s.Radius * 2, s.Radius * 2);
+        float t = n.Age / n.Life;
+        int a = (int)(255 * (1f - t * t));
+        Font font = n.Crit ? _fDmgCrit : _fDmg;
+        string text = n.Value.ToString();
+        Color fill = n.Crit ? Color.FromArgb(a, 255, 190, 70) : Color.FromArgb(a, 255, 245, 180);
+        using var outline = new SolidBrush(Color.FromArgb(a, 20, 15, 10));
+        using var brush = new SolidBrush(fill);
+        // cheap outline
+        g.DrawString(text, font, outline, n.Pos.X + 1, n.Pos.Y + 1);
+        g.DrawString(text, font, brush, n.Pos.X, n.Pos.Y);
     }
 
-    private static void DrawHealthBar(Graphics g, Fighter f)
-    {
-        if (f.Faction == Faction.Enemy && f.Health >= f.MaxHealth)
-            return;
-        float w = f.Radius * 2f;
-        float x = f.Pos.X - f.Radius;
-        float y = f.Pos.Y - f.Radius - 10f;
-        float pct = Math.Clamp(f.Health / f.MaxHealth, 0f, 1f);
-        using var bg = new SolidBrush(Color.FromArgb(180, 20, 20, 20));
-        using var fg = new SolidBrush(f.Faction == Faction.Player ? Color.FromArgb(90, 200, 255) : Color.FromArgb(230, 90, 90));
-        g.FillRectangle(bg, x, y, w, 4f);
-        g.FillRectangle(fg, x, y, w * pct, 4f);
-    }
-
-    private static void DrawProjectile(Graphics g, Projectile p)
-    {
-        if (!p.Alive) return;
-        Vec2 dir = p.Vel.Normalized(Vec2.UnitX);
-        Vec2 tail = p.Pos - dir * 14f;
-        using var pen = new Pen(Color.FromArgb(255, 235, 170), 2.5f);
-        g.DrawLine(pen, tail.X, tail.Y, p.Pos.X, p.Pos.Y);
-        using var head = new SolidBrush(Color.FromArgb(255, 250, 210));
-        g.FillEllipse(head, p.Pos.X - 3f, p.Pos.Y - 3f, 6f, 6f);
-    }
+    // ---- HUD ----
 
     private void DrawHud(Graphics g)
     {
-        using var title = new Font("Segoe UI Semibold", 13f, FontStyle.Bold);
-        using var body = new Font("Consolas", 10.5f);
         using var white = new SolidBrush(Color.White);
-        using var dim = new SolidBrush(Color.FromArgb(190, 210, 220));
+        using var dim = new SolidBrush(Color.FromArgb(200, 210, 220));
 
-        g.DrawString("BATTLEFIELD", title, white, 12, 8);
+        // player plate
+        g.DrawString("赵云  ZHAO YUN", _fTitle, white, 14, 10);
+        var hp = new RectangleF(16, 40, 300, 20);
+        float pct = Math.Clamp(_game.Player.Health / _game.Player.MaxHealth, 0f, 1f);
+        using (var bg = new SolidBrush(Color.FromArgb(60, 30, 30)))
+            g.FillRectangle(bg, hp);
+        using (var fg = new LinearGradientBrush(hp, Color.FromArgb(120, 220, 255), Color.FromArgb(60, 140, 230), LinearGradientMode.Vertical))
+            g.FillRectangle(fg, hp.X, hp.Y, hp.Width * pct, hp.Height);
+        using (var pen = new Pen(Color.FromArgb(180, 190, 200), 1.5f))
+            g.DrawRectangle(pen, hp.X, hp.Y, hp.Width, hp.Height);
 
-        // player HP bar
-        float hpPct = Math.Clamp(_game.Player.Health / _game.Player.MaxHealth, 0f, 1f);
-        var hpRect = new RectangleF(200, 14, 260, 20);
-        using (var bg = new SolidBrush(Color.FromArgb(60, 60, 70)))
-            g.FillRectangle(bg, hpRect);
-        using (var fg = new SolidBrush(Color.FromArgb(90, 200, 255)))
-            g.FillRectangle(fg, hpRect.X, hpRect.Y, hpRect.Width * hpPct, hpRect.Height);
-        using (var pen = new Pen(Color.FromArgb(150, 160, 170)))
-            g.DrawRectangle(pen, hpRect.X, hpRect.Y, hpRect.Width, hpRect.Height);
-        g.DrawString($"HP {_game.Player.Health:0}/{_game.Player.MaxHealth:0}", body, white, hpRect.X + 8, hpRect.Y + 2);
+        // lives
+        for (int i = 0; i < _game.Lives; i++)
+            DrawLifeIcon(g, 330 + i * 22, 44);
 
-        g.DrawString($"SCORE {_game.Score}    WAVE {_game.Wave + 1}", title, white, 500, 10);
-        g.DrawString($"broadphase pairs: {_game.BroadphasePairs}   entities: {_game.Fighters.Count}", body, dim, 500, 40);
-        g.DrawString("Move: WASD / Arrows    Attack: J / Space", body, dim, 900, 12);
-        g.DrawString("Powered by ArcCollision", body, dim, 900, 40);
+        // wave + score
+        string wave = $"WAVE {_game.Wave + 1}";
+        var wsz = g.MeasureString(wave, _fTitle);
+        g.DrawString(wave, _fTitle, white, (ClientSize.Width - wsz.Width) / 2, 12);
+        string score = $"SCORE {_game.Score:00000}";
+        var ssz = g.MeasureString(score, _fTitle);
+        g.DrawString(score, _fTitle, white, ClientSize.Width - ssz.Width - 16, 12);
+        string best = $"best combo x{_game.BestCombo}";
+        var bsz = g.MeasureString(best, _fHud);
+        g.DrawString(best, _fHud, dim, ClientSize.Width - bsz.Width - 16, 44);
+
+        // combo meter
+        if (_game.Combo >= 2)
+        {
+            float pop = 1f + Math.Clamp((_game.ComboTimer - 1.9f) / 0.3f, 0f, 1f) * 0.5f;
+            string c = $"{_game.Combo} HIT";
+            var st = g.Save();
+            float cx = ClientSize.Width / 2f;
+            float cy = OriginY + 34;
+            g.TranslateTransform(cx, cy);
+            g.ScaleTransform(pop, pop);
+            var csz = g.MeasureString(c, _fCombo);
+            using var shadow = new SolidBrush(Color.FromArgb(160, 0, 0, 0));
+            using var combo = new SolidBrush(_game.Combo >= 10 ? Color.FromArgb(255, 120, 90) : Color.FromArgb(255, 220, 120));
+            g.DrawString(c, _fCombo, shadow, -csz.Width / 2 + 2, 2);
+            g.DrawString(c, _fCombo, combo, -csz.Width / 2, 0);
+            g.Restore(st);
+        }
+
+        using var hint = new SolidBrush(Color.FromArgb(150, 200, 210));
+        g.DrawString("Move WASD / Arrows    Attack J   Heavy K   Dash Space",
+            _fHud, hint, 16, ClientSize.Height - 24);
+    }
+
+    private static void DrawLifeIcon(Graphics g, float x, float y)
+    {
+        using var b = new SolidBrush(Color.FromArgb(230, 90, 90));
+        var p = new GraphicsPath();
+        p.AddPolygon(new[]
+        {
+            new PointF(x, y + 12), new PointF(x - 8, y + 3),
+            new PointF(x - 8, y - 2), new PointF(x - 4, y - 6),
+            new PointF(x, y - 2), new PointF(x + 4, y - 6),
+            new PointF(x + 8, y - 2), new PointF(x + 8, y + 3),
+        });
+        g.FillPath(b, p);
+        p.Dispose();
+    }
+
+    private void DrawTitle(Graphics g)
+    {
+        int a = (int)(255 * Math.Clamp(_titleFade / 1.2f, 0f, 1f));
+        using var brush = new SolidBrush(Color.FromArgb(a, 255, 230, 150));
+        using var sub = new SolidBrush(Color.FromArgb(a, 220, 220, 230));
+        var sz = g.MeasureString("BATTLEFIELD", _fBig);
+        g.DrawString("BATTLEFIELD", _fBig, brush, (ClientSize.Width - sz.Width) / 2, ClientSize.Height * 0.36f);
+        string s = "powered by ArcCollision — defeat the endless army!";
+        var sz2 = g.MeasureString(s, _fTitle);
+        g.DrawString(s, _fTitle, sub, (ClientSize.Width - sz2.Width) / 2, ClientSize.Height * 0.36f + 58);
     }
 
     private void DrawGameOver(Graphics g)
     {
-        using var shade = new SolidBrush(Color.FromArgb(150, 0, 0, 0));
+        using var shade = new SolidBrush(Color.FromArgb(170, 0, 0, 0));
         g.FillRectangle(shade, 0, 0, ClientSize.Width, ClientSize.Height);
-        using var big = new Font("Segoe UI", 40f, FontStyle.Bold);
-        using var small = new Font("Segoe UI", 14f);
         using var brush = new SolidBrush(Color.White);
-        var sz = g.MeasureString("GAME OVER", big);
-        g.DrawString("GAME OVER", big, brush, (ClientSize.Width - sz.Width) / 2, ClientSize.Height / 2 - 70);
-        string msg = $"Score {_game.Score}   —   press R to fight again";
-        var sz2 = g.MeasureString(msg, small);
-        g.DrawString(msg, small, brush, (ClientSize.Width - sz2.Width) / 2, ClientSize.Height / 2 + 10);
+        var sz = g.MeasureString("GAME OVER", _fBig);
+        g.DrawString("GAME OVER", _fBig, brush, (ClientSize.Width - sz.Width) / 2, ClientSize.Height / 2f - 80);
+        string msg = $"Score {_game.Score}    Best Combo x{_game.BestCombo}    Waves {_game.Wave + 1}";
+        var sz2 = g.MeasureString(msg, _fTitle);
+        g.DrawString(msg, _fTitle, brush, (ClientSize.Width - sz2.Width) / 2, ClientSize.Height / 2f);
+        string r = "press R to fight again";
+        var sz3 = g.MeasureString(r, _fTitle);
+        g.DrawString(r, _fTitle, brush, (ClientSize.Width - sz3.Width) / 2, ClientSize.Height / 2f + 40);
     }
 
-    private static Color Blend(Color a, Color b, float t) => Color.FromArgb(
-        (int)(a.R + (b.R - a.R) * t),
-        (int)(a.G + (b.G - a.G) * t),
-        (int)(a.B + (b.B - a.B) * t));
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _timer.Dispose();
+            _fBig.Dispose();
+            _fTitle.Dispose();
+            _fHud.Dispose();
+            _fCombo.Dispose();
+            _fDmg.Dispose();
+            _fDmgCrit.Dispose();
+        }
+        base.Dispose(disposing);
+    }
 }
