@@ -14,4 +14,33 @@
     <ProjectReference Include="..\ArcCollision.Ref\ArcCollision.Ref.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="Assets\**">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!-- The ignored Godot checkout is optional.  When present, mirror the original
+       PNG resource layout under Template so runtime paths remain auditable. -->
+  <ItemGroup Condition="Exists('..\template-beat-em-up')">
+    <None Include="..\template-beat-em-up\stages\stage_01\**\*.png" Link="Template\stages\stage_01\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\template-beat-em-up\characters\playable\chad\resources\sprites\**\*.png" Link="Template\characters\playable\chad\resources\sprites\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\template-beat-em-up\characters\enemies\sargent\resources\sprites\**\*.png" Link="Template\characters\enemies\sargent\resources\sprites\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\template-beat-em-up\characters\enemies\tax_man\resources\sprites\**\*.png" Link="Template\characters\enemies\tax_man\resources\sprites\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\template-beat-em-up\ui\gameplay_hud\**\*.png" Link="Template\ui\gameplay_hud\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Vortice.Direct2D1" Version="3.8.3" />
+  </ItemGroup>
+
 </Project>

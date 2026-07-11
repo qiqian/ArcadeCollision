@@ -7,6 +7,8 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/main/Dotnet.gitignore
 
+template-beat-em-up
+
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/
@@ -56,3 +58,4 @@ CodeCoverage/
 TestResult.xml
 nunit-*.xml
 /.vs
+/.claude

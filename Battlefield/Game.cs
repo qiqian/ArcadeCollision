@@ -3,145 +3,99 @@ using System.Collections.Generic;
 
 namespace ArcCollision.Battlefield;
 
-internal enum Faction { Player, Enemy }
-internal enum EnemyKind { None, Grunt, Brute }
-internal enum AnimState { Idle, Walk, Attack, Hurt, Dead }
-
-/// <summary>A combatant. The body is a circle on the floor plane; everything the
-/// player sees (limbs, weapon, poses) is derived from these fields by CharacterArt.</summary>
-internal sealed class Fighter
+// These collections remain part of GameForm's rendering contract. Combat no
+// longer creates arcade score/combo particles; source-timed Tax Man VFX are
+// rendered directly by GameForm from attack/state time.
+#pragma warning disable CS0649 // compatibility-only renderer DTO fields
+internal struct HitSpark { public Vec2 Pos; public float Age, Life, Angle, Size; public bool Heavy; }
+internal struct DamageNumber { public Vec2 Pos; public Vec2 Vel; public float Age, Life; public int Value; public bool Crit; }
+internal struct Dust { public Vec2 Pos; public Vec2 Vel; public float Age, Life, Size; }
+internal enum EffectKind { Explosion, Coin }
+internal struct EffectSprite
 {
-    public Faction Faction;
-    public EnemyKind Kind;
-    public Vec2 Pos;
-    public Vec2 Vel;
-    public float Radius = 16f;
-    public float Speed = 150f;
-    public float Health;
-    public float MaxHealth;
-    public float Facing = 1f;            // -1 left, +1 right
-    public float Scale = 1f;
-    public Vec2 KnockVel;
-    public float HurtFlash;
-    public float Invuln;
-
-    // animation
-    public AnimState State = AnimState.Idle;
-    public float StateTime;
-    public float WalkPhase;
-    public float AnimClock;
-    public float DeathTimer;
-    public float Lean;                    // signed body lean for poses
-
-    // attack
-    public float AttackTimer = -1f;       // counts down while swinging
-    public float AttackDuration = 0.4f;
-    public float AttackWindup = 0.14f;
-    public float AttackActiveDur = 0.12f;
-    public float AttackCooldown;
-    public float Reach = 46f;
-    public float Damage = 16f;
-    public float KnockPower = 220f;
-    public bool Launcher;
-    public int ComboStep;
-    public float ComboResetTimer;
-    public readonly HashSet<Fighter> HitThisSwing = new();
-
-    public float ThinkTimer;
-
-    public bool Dead => State == AnimState.Dead;
-    public bool Attacking => State == AnimState.Attack;
-    public bool CanAct => State is AnimState.Idle or AnimState.Walk;
-    public Circle Body => new(Pos, Radius);
-
-    /// <summary>Elapsed time since the current swing started.</summary>
-    public float AttackElapsed => AttackDuration - AttackTimer;
-
-    public bool AttackActive =>
-        Attacking && AttackElapsed >= AttackWindup && AttackElapsed <= AttackWindup + AttackActiveDur;
-
-    /// <summary>Melee hitbox: a capsule reaching out in the facing direction.</summary>
-    public Capsule Swing()
-    {
-        Vec2 dir = new(Facing, 0f);
-        Vec2 start = Pos + dir * (Radius * 0.3f);
-        Vec2 end = Pos + dir * (Radius + Reach);
-        return new Capsule(start, end, Radius * 0.85f);
-    }
+    public EffectKind Kind;
+    public Vec2 Pos, Vel;
+    public float Age, Life, Scale, Spin;
+    public bool Gravity;
 }
-
-internal struct HitSpark
-{
-    public Vec2 Pos;
-    public float Age;
-    public float Life;
-    public float Angle;
-    public float Size;
-    public bool Heavy;
-}
-
-internal struct DamageNumber
-{
-    public Vec2 Pos;
-    public Vec2 Vel;
-    public float Age;
-    public float Life;
-    public int Value;
-    public bool Crit;
-}
-
-internal struct Dust
-{
-    public Vec2 Pos;
-    public Vec2 Vel;
-    public float Age;
-    public float Life;
-    public float Size;
-}
+#pragma warning restore CS0649
 
 /// <summary>
-/// The whole beat-'em-up simulation. It is a game first, but the moment-to-moment
-/// physics runs entirely on the ArcCollision library:
-///   * SpatialHash + CircleVsCircle  keep the crowd of bodies from overlapping
-///   * CircleVsCapsule               resolves every sword / spear / hammer hit
+/// Combat-only translation of Quiver's Downtown Beatdown source. Source-space
+/// values are mapped once from 1920x1080 by WorldScale; there is no vertical
+/// viewport crop.
 /// </summary>
 internal sealed class Game
 {
-    public const float ArenaWidth = 1180f;
-    public const float ArenaHeight = 540f;
-    public const float FloorTop = 90f;   // characters can't walk above this (keeps heads off the HUD)
+    public const float ArenaW = 1280f;
+    public const float WorldScale = 2f / 3f;
+    // Kept for compatibility with presentation code. The actual vertical view
+    // follows QuiverLevelCamera (player Y - 100, clamped by room limits).
+    public const float SourceViewTop = 0f;
+    public const float WorldW = 16070f * WorldScale;
+    // Walkable edges from Stage_01's CeilingLimits and BottomLimit collision
+    // shapes (character radius is applied in ClampArena).
+    public const float FloorY0 = 653f * WorldScale;
+    public const float FloorY1 = 1107f * WorldScale;
+    public const float XMin = 0f;
+    public const float XMax = WorldW;
+
+    private const float GravityUp = 3000f * WorldScale;
+    private const float GravityDown = 3000f * 2.5f * WorldScale;
+    private const float MaxLaunch = 2000f * WorldScale;
+    private const float HitLane = 60f * WorldScale;
+    private const float HitFreeze = 3f / 60f;
+    private const float ArriveRange = 10f * WorldScale;
 
     public readonly List<Fighter> Fighters = new();
     public readonly List<HitSpark> Sparks = new();
     public readonly List<DamageNumber> Numbers = new();
     public readonly List<Dust> Dusts = new();
+    public readonly List<EffectSprite> Effects = new();
     public Fighter Player = null!;
 
-    public int Score;
-    public int Wave;
-    public int Lives = 3;
-    public int Combo;
-    public int BestCombo;
+    // Obsolete arcade counters are intentionally harmless because GameForm may
+    // still read them.
+    public int Score, Lives, Combo, BestCombo;
     public float ComboTimer;
-    public bool GameOver;
+    public bool GameOver, Win;
+    public float Hitstop, ShakeMag, FlashFx;
 
-    // juice
-    public float Hitstop;
-    public float ShakeMag;
-    public float FlashFx;                 // full-screen white flash on big hits
+    internal sealed class FightRoom
+    {
+        public required float TriggerX;
+        public required float Left, Top, Right, Bottom;
+        public required SpawnData[][] Waves;
+        public float Zoom = 1f;
+        public float AfterLeft, AfterTop, AfterRight, AfterBottom, AfterZoom = 1f;
+        public bool Boss, EngagesBoss;
+        public bool Started, Cleared, WaveSpawned;
+        public int WaveIndex;
+        public float SpawnTimer;
+    }
 
-    private readonly SpatialHash _hash = new(72f);
+    internal readonly record struct SpawnData(Vec2 Start, Vec2 Target, bool WalkIn);
+
+    public readonly List<FightRoom> Rooms = new();
+    public FightRoom? ActiveRoom;
+    public int RoomsCleared;
+    public float CameraLeft, CameraRight = WorldW, CameraZoom = 1f;
+    public float CameraTop = -280f * WorldScale, CameraBottom = 1200f * WorldScale;
+    public float CamMinX => CameraLeft;
+    public float CamMaxX => CameraRight;
+    public float CamMinY => CameraTop;
+    public float CamMaxY => CameraBottom;
+    public Fighter TaxMan => _taxMan;
+
+    private readonly SpatialHash _hash = new(80f);
     private readonly Random _rng = new();
-    private float _spawnTimer;
-    private float _respawnTimer;
-
+    private Fighter _taxMan = null!;
     private Vec2 _move;
-    private bool _attackPressed;
-    private bool _heavyPressed;
-    private bool _dashPressed;
-    private float _dashCd;
+    private bool _attackPressed, _jumpPressed;
 
     public Game() => Reset();
+
+    private static Vec2 P(float x, float y) => new(x * WorldScale, y * WorldScale);
 
     public void Reset()
     {
@@ -149,571 +103,1312 @@ internal sealed class Game
         Sparks.Clear();
         Numbers.Clear();
         Dusts.Clear();
-        Score = 0;
-        Wave = 0;
-        Lives = 3;
-        Combo = 0;
-        BestCombo = 0;
-        ComboTimer = 0;
-        GameOver = false;
-        Hitstop = 0;
-        ShakeMag = 0;
-        _spawnTimer = 1.0f;
-        _respawnTimer = 0;
-        SpawnPlayer();
-    }
+        Effects.Clear();
+        Score = Lives = Combo = BestCombo = 0;
+        ComboTimer = 0f;
+        GameOver = Win = false;
+        Hitstop = ShakeMag = FlashFx = 0f;
+        ActiveRoom = null;
+        RoomsCleared = 0;
+        CameraLeft = 0f;
+        CameraRight = WorldW;
+        CameraTop = -280f * WorldScale;
+        CameraBottom = 1200f * WorldScale;
+        CameraZoom = 1f;
 
-    private void SpawnPlayer()
-    {
+        BuildStage();
         Player = new Fighter
         {
+            Def = CharacterDef.Chad,
             Faction = Faction.Player,
-            Pos = new Vec2(ArenaWidth * 0.5f, ArenaHeight * 0.62f),
-            Radius = 19f,
-            Scale = 1.08f,
-            Speed = 235f,
-            MaxHealth = 240f,
-            Health = 240f,
-            Reach = 62f,
-            Invuln = 1.2f,
+            Pos = P(824, 800),
+            Health = CharacterDef.Chad.MaxHealth,
         };
         Fighters.Add(Player);
+
+        // stage_01.tscn contains Tax Man from scene load at (15208, 861).
+        // He exists now but is not put in the active character list until the
+        // guard room engages him; this preserves disabled collisions and lets
+        // the existing renderer draw the seated presentation.
+        _taxMan = new Fighter
+        {
+            Def = CharacterDef.TaxMan,
+            Faction = Faction.Enemy,
+            Pos = P(15208, 861),
+            Health = CharacterDef.TaxMan.MaxHealth,
+            Facing = -1f,
+            CombatActive = false,
+            TaxSeat = TaxSeatState.AwaitReveal,
+            TaxHealthBaseline = CharacterDef.TaxMan.MaxHealth,
+        };
     }
 
-    public void SetInput(Vec2 move, bool attack, bool heavy, bool dash)
+    private void BuildStage()
+    {
+        Rooms.Clear();
+        static SpawnData S(float sx, float sy, float tx, float ty, bool walk = true) =>
+            new(P(sx, sy), P(tx, ty), walk);
+
+        Rooms.Add(new FightRoom
+        {
+            TriggerX = 1053 * WorldScale,
+            Left = 267 * WorldScale,
+            Top = -280 * WorldScale,
+            Right = 2526 * WorldScale,
+            Bottom = 1191 * WorldScale,
+            Zoom = .849934f,
+            AfterLeft = 267 * WorldScale,
+            AfterTop = -280 * WorldScale,
+            AfterRight = 5775 * WorldScale,
+            AfterBottom = 1190 * WorldScale,
+            Waves = new[] { new[] { S(2312, 794, 2312, 794, false) } },
+        });
+        Rooms.Add(new FightRoom
+        {
+            TriggerX = 4417 * WorldScale,
+            Left = 2924 * WorldScale,
+            Top = -280 * WorldScale,
+            Right = 6259 * WorldScale,
+            Bottom = 1195 * WorldScale,
+            AfterLeft = 2924 * WorldScale,
+            AfterTop = -280 * WorldScale,
+            AfterRight = 8635 * WorldScale,
+            AfterBottom = 1195 * WorldScale,
+            Waves = new[]
+            {
+                new[] { S(6372, 790, 5656, 697), S(2755, 862, 3630, 1019) },
+                new[]
+                {
+                    S(6372, 790, 5656, 697), S(6372, 790, 5726, 1011),
+                    S(2755, 862, 3630, 1019), S(2755, 862, 3471, 704),
+                },
+            },
+        });
+        Rooms.Add(new FightRoom
+        {
+            TriggerX = 7525 * WorldScale,
+            Left = 6838 * WorldScale,
+            Top = -320 * WorldScale,
+            Right = 9734 * WorldScale,
+            Bottom = 1195 * WorldScale,
+            Zoom = .9f,
+            AfterLeft = 6838 * WorldScale,
+            AfterTop = -320 * WorldScale,
+            AfterRight = 15832 * WorldScale,
+            AfterBottom = 1195 * WorldScale,
+            Waves = new[]
+            {
+                new[]
+                {
+                    S(9906, 840, 9046, 696), S(9906, 840, 9182, 864),
+                    S(9906, 840, 9306, 1004), S(9906, 840, 9326, 696),
+                    S(9906, 840, 9462, 864), S(9906, 840, 9586, 1004),
+                },
+            },
+        });
+        Rooms.Add(new FightRoom
+        {
+            TriggerX = 13498 * WorldScale,
+            Left = 13499 * WorldScale,
+            Top = -320 * WorldScale,
+            Right = 15815 * WorldScale,
+            Bottom = 1195 * WorldScale,
+            Zoom = .829016f,
+            EngagesBoss = true,
+            Waves = new[]
+            {
+                new[] { S(16019, 728, 14987, 620), S(16019, 728, 15247, 928) },
+            },
+        });
+        Rooms.Add(new FightRoom
+        {
+            TriggerX = float.MaxValue,
+            Left = 12587 * WorldScale,
+            Top = -320 * WorldScale,
+            Right = 15827 * WorldScale,
+            Bottom = 1195 * WorldScale,
+            Zoom = .712871f,
+            Boss = true,
+            Waves = Array.Empty<SpawnData[]>(),
+        });
+    }
+
+    public void SetInput(Vec2 move, bool attack, bool jump)
     {
         _move = move;
         _attackPressed = attack;
-        _heavyPressed = heavy;
-        _dashPressed = dash;
+        _jumpPressed = jump;
     }
-
-    // -------------------------------------------------------------- main loop
 
     public void Update(float dt)
     {
-        // These tick in real time so impacts still "shake" while frozen.
-        if (ShakeMag > 0f) ShakeMag = MathF.Max(0f, ShakeMag - dt * 26f);
-        if (FlashFx > 0f) FlashFx = MathF.Max(0f, FlashFx - dt * 4f);
-        if (_dashCd > 0f) _dashCd -= dt;
-
         if (Hitstop > 0f)
         {
-            Hitstop -= dt;   // freeze frame for impact weight
+            Hitstop = MathF.Max(0f, Hitstop - dt);
             return;
         }
 
-        if (GameOver)
+        // QuiverActionKnockoutLaunch slows the tree to 0.2 when the player dies.
+        if (!Player.Alive && !Player.Dead)
+            dt *= .2f;
+
+        UpdateHiddenTax(dt);
+        if (!GameOver)
         {
-            AnimateOnly(dt);
-            return;
+            UpdatePlayer();
+            UpdateEnemies(dt);
         }
 
-        UpdateCombo(dt);
-        UpdatePlayer(dt);
-        UpdateEnemies(dt);
         AdvanceStates(dt);
-        ResolveAttacks();
         Integrate(dt);
         ResolveBodies();
-        ClampToArena();
+        ClampArena();
+        ResolveHits();
         UpdateEffects(dt);
         Cleanup();
-        Spawning(dt);
+        StageUpdate(dt);
     }
 
-    private void AnimateOnly(float dt)
-    {
-        AdvanceStates(dt);
-        Integrate(dt);
-        UpdateEffects(dt);
-    }
+    // ---------------------------------------------------------------- player
 
-    private void UpdateCombo(float dt)
+    private void UpdatePlayer()
     {
-        if (ComboTimer > 0f)
+        Fighter p = Player;
+        if (p.Dead || !p.CombatActive) return;
+
+        if (p.State == FState.Jump)
         {
-            ComboTimer -= dt;
-            if (ComboTimer <= 0f)
-                Combo = 0;
+            if (p.JumpLanding || !p.JumpLaunched) return;
+            ApplyAirControl(p);
+            if (_attackPressed && !p.AirAttackUsed && p.Def.AirAttack != null)
+                StartAirAttack(p);
+            return;
         }
-    }
-
-    // -------------------------------------------------------------- player
-
-    private void UpdatePlayer(float dt)
-    {
-        var p = Player;
-        if (p.Dead)
+        if (p.State == FState.AirAttack)
             return;
 
-        p.AttackCooldown -= dt;
+        if (p.State == FState.Attack && p.Scripted == ScriptedState.None)
+        {
+            if (_attackPressed && p.Attack != null && p.Attack.ComboNext >= 0
+                && p.AttackTime <= p.Attack.ComboWindow)
+                p.ComboQueued = true;
+            return;
+        }
 
-        if (p.CanAct)
-        {
-            Vec2 dir = _move.Normalized(Vec2.Zero);
-            p.Vel = dir * p.Speed;
-            if (MathF.Abs(dir.X) > 0.01f)
-                p.Facing = dir.X < 0 ? -1f : 1f;
-            p.State = dir.LengthSquared > 0.01f ? AnimState.Walk : AnimState.Idle;
+        if (!p.CanAct) return;
+        Vec2 direction = _move.Normalized(Vec2.Zero);
+        if (MathF.Abs(direction.X) > .01f)
+            Face(p, MathF.Sign(direction.X));
+        p.Vel = direction * p.Def.Speed * (p.TurnTimer > 0f ? .6f : 1f);
+        SetLocomotion(p, direction.LengthSquared > .001f ? FState.Walk : FState.Idle);
 
-            if (_dashPressed && _dashCd <= 0f)
-                StartDash(p, dir);
-            else if (_heavyPressed && p.AttackCooldown <= 0f)
-                StartSwing(p, heavy: true);
-            else if (_attackPressed && p.AttackCooldown <= 0f)
-                StartSwing(p, heavy: false);
-        }
-        else if (p.Attacking)
-        {
-            // small forward drift while committing to a swing
-            p.Vel = new Vec2(p.Facing, 0f) * (p.Launcher ? 60f : 90f);
-        }
-        else
-        {
-            p.Vel = Vec2.Zero;
-        }
+        if (_jumpPressed)
+            StartJump(p);
+        else if (_attackPressed)
+            StartAttack(p, 0, 1);
     }
 
-    private void StartDash(Fighter p, Vec2 dir)
+    private void ApplyAirControl(Fighter fighter)
     {
-        Vec2 d = dir.LengthSquared > 0.01f ? dir : new Vec2(p.Facing, 0f);
-        p.KnockVel += d * 520f;
-        p.Invuln = MathF.Max(p.Invuln, 0.32f);
-        _dashCd = 0.7f;
-        for (int i = 0; i < 8; i++)
-            SpawnDust(p.Pos, -d * 60f + RandVec(40f));
+        float input = MathF.Sign(_move.X);
+        if (input == 0f) return;
+        float max = fighter.Def.Speed * fighter.Def.AirControl;
+        bool opposite = MathF.Sign(fighter.Vel.X) != input;
+        if (opposite || MathF.Abs(fighter.Vel.X) <= max)
+            fighter.Vel = new Vec2(input * max, 0f);
+        Face(fighter, input);
     }
 
-    // ------------------------------------------------------------- enemy AI
+    private void StartJump(Fighter fighter)
+    {
+        fighter.SetState(FState.Jump);
+        fighter.Vel = new Vec2(fighter.Vel.X, 0f);
+        fighter.SkinY = 0f;
+        fighter.SkinVelY = 0f;
+        fighter.JumpLaunched = false;
+        fighter.JumpLanding = false;
+        fighter.AirAttackUsed = false;
+    }
+
+    private void StartAirAttack(Fighter fighter)
+    {
+        fighter.SetState(FState.AirAttack);
+        fighter.Attack = fighter.Def.AirAttack;
+        fighter.AttackTime = 0f;
+        fighter.AirAttackUsed = true;
+        fighter.ResetAttackHits();
+    }
+
+    // --------------------------------------------------------------- enemy AI
 
     private void UpdateEnemies(float dt)
     {
-        foreach (var f in Fighters)
+        if (Player.Dead) return;
+        foreach (Fighter fighter in Fighters)
         {
-            if (f.Faction != Faction.Enemy || f.Dead)
+            if (fighter.Faction != Faction.Enemy || fighter.Dead || !fighter.CombatActive)
                 continue;
 
-            f.AttackCooldown -= dt;
-            Vec2 toPlayer = Player.Pos - f.Pos;
-            float dist = toPlayer.Length;
-            Vec2 dir = toPlayer.Normalized(Vec2.UnitX);
-
-            if (!f.CanAct)
+            if (fighter.SpawnWalking)
+            {
+                Vec2 delta = fighter.SpawnTarget - fighter.Pos;
+                if (delta.LengthSquared <= ArriveRange * ArriveRange)
+                {
+                    fighter.Pos = fighter.SpawnTarget;
+                    fighter.SpawnWalking = false;
+                    EnterAiWait(fighter);
+                }
+                else
+                {
+                    Face(fighter, MathF.Sign(delta.X));
+                    AiWalk(fighter, delta);
+                }
                 continue;
-
-            if (MathF.Abs(dir.X) > 0.05f)
-                f.Facing = dir.X < 0 ? -1f : 1f;
-
-            float strikeRange = f.Radius + Player.Radius + f.Reach * 0.55f;
-            if (!Player.Dead && dist <= strikeRange && f.AttackCooldown <= 0f)
-            {
-                f.Vel = Vec2.Zero;
-                StartSwing(f, heavy: f.Kind == EnemyKind.Brute);
             }
-            else if (dist > strikeRange)
+            if (!fighter.CanAct) continue;
+
+            switch (fighter.Ai)
             {
-                // approach with a little sideways jitter so they don't stack in a line
-                f.ThinkTimer -= dt;
-                if (f.ThinkTimer <= 0f)
-                    f.ThinkTimer = 0.4f + (float)_rng.NextDouble() * 0.6f;
-                Vec2 strafe = dir.Perp * (MathF.Sin(f.AnimClock * 2.2f) * 0.35f);
-                f.Vel = (dir + strafe).Normalized(dir) * f.Speed;
-                f.State = AnimState.Walk;
-            }
-            else
-            {
-                f.Vel = Vec2.Zero;
-                f.State = AnimState.Idle;
-            }
-        }
-    }
+                case AiState.Wait:
+                    AiIdle(fighter);
+                    fighter.AiTimer -= dt;
+                    if (fighter.AiTimer <= 0f)
+                        AiDecide(fighter);
+                    break;
 
-    // ------------------------------------------------------------- swings
+                case AiState.Chase:
+                    UpdateChase(fighter, dt);
+                    break;
 
-    private void StartSwing(Fighter f, bool heavy)
-    {
-        f.State = AnimState.Attack;
-        f.StateTime = 0;
-        f.HitThisSwing.Clear();
+                case AiState.PreAttackPause:
+                    AiIdle(fighter);
+                    fighter.AiTimer -= dt;
+                    if (fighter.AiTimer <= 0f)
+                    {
+                        fighter.Ai = AiState.SingleAttack;
+                        StartAttack(fighter, 0, 1);
+                    }
+                    break;
 
-        if (f.Faction == Faction.Player)
-        {
-            if (heavy)
-            {
-                f.ComboStep = 0;
-                f.Launcher = true;
-                f.AttackDuration = 0.52f;
-                f.AttackWindup = 0.20f;
-                f.AttackActiveDur = 0.14f;
-                f.Damage = 46f;
-                f.KnockPower = 620f;
-                f.Reach = 78f;
-                f.AttackCooldown = 0.55f;
-                ShakeMag = MathF.Max(ShakeMag, 5f);
-            }
-            else
-            {
-                f.ComboStep = f.ComboResetTimer > 0f ? (f.ComboStep + 1) % 3 : 0;
-                f.Launcher = f.ComboStep == 2;
-                f.AttackDuration = 0.30f;
-                f.AttackWindup = 0.07f;
-                f.AttackActiveDur = 0.11f;
-                f.Damage = f.ComboStep == 2 ? 30f : 18f;
-                f.KnockPower = f.ComboStep == 2 ? 460f : 180f;
-                f.Reach = f.ComboStep == 2 ? 70f : 58f;
-                f.AttackCooldown = 0.16f;
-                f.ComboResetTimer = f.AttackDuration + 0.45f;
-            }
-        }
-        else if (f.Kind == EnemyKind.Brute)
-        {
-            f.Launcher = true;
-            f.AttackDuration = 0.9f;
-            f.AttackWindup = 0.5f;      // big telegraph
-            f.AttackActiveDur = 0.14f;
-            f.Damage = 34f;
-            f.KnockPower = 520f;
-            f.AttackCooldown = 1.4f;
-        }
-        else
-        {
-            f.Launcher = false;
-            f.AttackDuration = 0.55f;
-            f.AttackWindup = 0.30f;     // readable telegraph
-            f.AttackActiveDur = 0.12f;
-            f.Damage = 12f;
-            f.KnockPower = 240f;
-            f.AttackCooldown = 0.9f + (float)_rng.NextDouble() * 0.5f;
-        }
+                case AiState.ComboPause:
+                    AiIdle(fighter);
+                    fighter.AiTimer -= dt;
+                    if (fighter.AiTimer <= 0f)
+                    {
+                        fighter.Ai = AiState.Attacking;
+                        StartAttack(fighter, 0, 3);
+                    }
+                    break;
 
-        f.AttackTimer = f.AttackDuration;
-    }
+                case AiState.MoveToDashMarker:
+                {
+                    Vec2 delta = fighter.AiTarget - fighter.Pos;
+                    if (delta.LengthSquared <= ArriveRange * ArriveRange)
+                    {
+                        fighter.Pos = fighter.AiTarget;
+                        fighter.Ai = AiState.Align;
+                        fighter.AiTimer = 5f;
+                    }
+                    else
+                    {
+                        Face(fighter, MathF.Sign(delta.X));
+                        AiWalk(fighter, delta);
+                    }
+                    break;
+                }
 
-    private void ResolveAttacks()
-    {
-        foreach (var f in Fighters)
-        {
-            if (!f.AttackActive)
-                continue;
-
-            Capsule swing = f.Swing();
-            foreach (var t in Fighters)
-            {
-                if (t == f || t.Dead || t.Faction == f.Faction || t.Invuln > 0f)
-                    continue;
-                if (f.HitThisSwing.Contains(t))
-                    continue;
-                if (!Collide.CircleVsCapsule(t.Body, swing).Colliding)
-                    continue;
-
-                f.HitThisSwing.Add(t);
-                Vec2 hitPoint = t.Pos + new Vec2(-f.Facing, 0f) * t.Radius + new Vec2(0f, -t.Radius * 0.4f);
-                ApplyHit(f, t, hitPoint);
+                case AiState.Align:
+                {
+                    fighter.AiTimer -= dt;
+                    float dy = Player.Pos.Y - fighter.Pos.Y;
+                    if (MathF.Abs(dy) <= ArriveRange || fighter.AiTimer <= 0f)
+                    {
+                        Face(fighter, MathF.Sign(Player.Pos.X - fighter.Pos.X));
+                        StartDash(fighter);
+                    }
+                    else
+                        AiWalk(fighter, new Vec2(0f, dy));
+                    break;
+                }
             }
         }
     }
 
-    private void ApplyHit(Fighter attacker, Fighter target, Vec2 point)
+    private void UpdateChase(Fighter fighter, float dt)
     {
-        bool crit = attacker.Launcher;
-        target.Health -= attacker.Damage;
-        target.HurtFlash = 0.14f;
+        fighter.AiTimer -= dt;
+        float offset = (fighter.Def.SpriteSet == "taxman" ? 280f : 230f) * WorldScale;
+        float side = fighter.Pos.X >= Player.Pos.X ? 1f : -1f;
+        Vec2 target = Player.Pos + new Vec2(side * offset, 0f);
+        Vec2 delta = target - fighter.Pos;
+        bool arrived = MathF.Abs(fighter.Pos.Y - Player.Pos.Y) <= HitLane
+            && delta.LengthSquared <= ArriveRange * ArriveRange;
 
-        Vec2 knockDir = new(attacker.Facing, 0f);
-        target.KnockVel += knockDir * attacker.KnockPower;
-        if (crit)
-            target.KnockVel += new Vec2(0f, (_rng.Next(2) == 0 ? -1 : 1) * attacker.KnockPower * 0.15f);
-
-        // juice scaled by damage
-        float power = Math.Clamp(attacker.Damage / 40f, 0.25f, 1.2f);
-        Hitstop = MathF.Max(Hitstop, crit ? 0.10f : 0.04f + power * 0.03f);
-        ShakeMag = MathF.Max(ShakeMag, crit ? 9f : 3f + power * 3f);
-        if (crit) FlashFx = MathF.Max(FlashFx, 0.6f);
-
-        SpawnSpark(point, MathF.Atan2(knockDir.Y, knockDir.X), crit);
-        SpawnNumber(point + new Vec2(0, -14), (int)attacker.Damage, crit);
-
-        if (target.Health <= 0f)
+        if (!arrived && fighter.AiTimer > 0f)
         {
-            EnterDeath(target, knockDir);
-            if (target.Faction == Faction.Enemy)
-            {
-                Score += (target.Kind == EnemyKind.Brute ? 300 : 100) + Combo * 5;
-                if (attacker.Faction == Faction.Player)
-                    BumpCombo();
-            }
-        }
-        else
-        {
-            EnterHurt(target);
-            if (attacker.Faction == Faction.Player && target.Faction == Faction.Enemy)
-                BumpCombo();
-        }
-    }
-
-    private void BumpCombo()
-    {
-        Combo++;
-        BestCombo = Math.Max(BestCombo, Combo);
-        ComboTimer = 2.2f;
-    }
-
-    private void EnterHurt(Fighter f)
-    {
-        if (f.Dead)
+            Face(fighter, MathF.Sign(Player.Pos.X - fighter.Pos.X));
+            AiWalk(fighter, delta);
             return;
-        f.State = AnimState.Hurt;
-        f.StateTime = 0;
-        f.AttackTimer = -1f;
-        f.Lean = -MathF.Sign(f.KnockVel.X == 0 ? f.Facing : f.KnockVel.X);
-    }
+        }
 
-    private void EnterDeath(Fighter f, Vec2 dir)
-    {
-        f.State = AnimState.Dead;
-        f.StateTime = 0;
-        f.DeathTimer = 1.1f;
-        f.Health = 0;
-        f.AttackTimer = -1f;
-        for (int i = 0; i < 6; i++)
-            SpawnDust(f.Pos, RandVec(90f));
-
-        if (f.Faction == Faction.Player)
+        AiIdle(fighter);
+        if (fighter.Def.SpriteSet == "sarge")
         {
-            Lives--;
-            _respawnTimer = 1.4f;
+            // sarge.tscn Chase sequence: Chase -> fixed 0.2 wait -> Attack1.
+            fighter.Ai = AiState.PreAttackPause;
+            fighter.AiTimer = .2f;
+        }
+        else
+        {
+            fighter.Ai = AiState.Attacking;
+            if (fighter.AiAttackChoice == 2) StartArea(fighter);
+            else StartAttack(fighter, 0, 1);
         }
     }
 
-    // ------------------------------------------------------------- states
+    private void AiDecide(Fighter fighter)
+    {
+        if (fighter.Def.SpriteSet != "taxman")
+        {
+            fighter.Ai = AiState.Chase;
+            fighter.AiTimer = 5f;
+            return;
+        }
+
+        double combo, dash, area;
+        if (fighter.BossPhase == 0)
+            (combo, dash, area) = (1.40816, .591839, 0);
+        else if (fighter.BossPhase == 1)
+            (combo, dash, area) = (1.19884, 1.19315, .60801);
+        else
+            (combo, dash, area) = (.608845, 1.49911, .892046);
+
+        double draw = _rng.NextDouble() * (combo + dash + area);
+        if (draw < combo)
+        {
+            fighter.AiAttackChoice = 0;
+            fighter.Ai = AiState.Chase;
+            fighter.AiTimer = 5f;
+        }
+        else if (draw < combo + dash)
+        {
+            fighter.AiAttackChoice = 1;
+            Vec2 left = P(12866, 763);
+            Vec2 right = P(15014, 772);
+            fighter.AiTarget = fighter.Pos.DistanceSquared(left) <= fighter.Pos.DistanceSquared(right)
+                ? left : right;
+            fighter.Ai = AiState.MoveToDashMarker;
+        }
+        else
+        {
+            fighter.AiAttackChoice = 2;
+            fighter.Ai = AiState.Chase;
+            fighter.AiTimer = 5f;
+        }
+    }
+
+    private void EnterAiWait(Fighter fighter)
+    {
+        fighter.Ai = AiState.Wait;
+        if (fighter.Def.SpriteSet != "taxman")
+            fighter.AiTimer = 1f + (float)_rng.NextDouble() * 2f;
+        else if (fighter.BossPhase == 0)
+            fighter.AiTimer = 1f;
+        else if (fighter.BossPhase == 1)
+            fighter.AiTimer = .5f + (float)_rng.NextDouble() * .5f;
+        else
+            fighter.AiTimer = .2f + (float)_rng.NextDouble() * .5f;
+    }
+
+    private static void AiIdle(Fighter fighter)
+    {
+        fighter.Vel = Vec2.Zero;
+        SetLocomotion(fighter, FState.Idle);
+    }
+
+    private static void AiWalk(Fighter fighter, Vec2 delta)
+    {
+        Vec2 direction = delta.Normalized(Vec2.Zero);
+        float modifier = fighter.TurnTimer > 0f ? .6f : 1f;
+        fighter.Vel = direction * fighter.Def.Speed * modifier;
+        SetLocomotion(fighter, direction.LengthSquared > .001f ? FState.Walk : FState.Idle);
+    }
+
+    private static void SetLocomotion(Fighter fighter, FState state)
+    {
+        if (fighter.State != state)
+            fighter.SetState(state);
+    }
+
+    private static void Face(Fighter fighter, float facing)
+    {
+        if (facing == 0f || facing == fighter.Facing) return;
+        fighter.Facing = facing;
+        fighter.TurnTimer = fighter.Def.SpriteSet == "sarge" ? .25f : .125f;
+    }
+
+    // ---------------------------------------------------------------- attacks
+
+    private void StartAttack(Fighter fighter, int index, int autoCombo)
+    {
+        fighter.SetState(FState.Attack);
+        fighter.ComboIndex = index;
+        fighter.Attack = fighter.Def.Combo[index];
+        fighter.AttackTime = 0f;
+        fighter.ComboQueued = false;
+        fighter.AutoCombo = autoCombo;
+        fighter.Scripted = ScriptedState.None;
+        fighter.ResetAttackHits();
+        BeginAttackFlags(fighter);
+    }
+
+    private void StartDash(Fighter fighter)
+    {
+        fighter.SetState(FState.Attack);
+        fighter.Attack = fighter.Def.Dash;
+        fighter.AttackTime = 0f;
+        fighter.DashConnected = false;
+        fighter.Ai = AiState.DashCharging;
+        fighter.Scripted = ScriptedState.None;
+        fighter.ResetAttackHits();
+        BeginAttackFlags(fighter);
+    }
+
+    private void StartArea(Fighter fighter)
+    {
+        fighter.SetState(FState.Attack);
+        fighter.Attack = fighter.Def.Area;
+        fighter.AttackTime = 0f;
+        fighter.Ai = AiState.Attacking;
+        fighter.Scripted = ScriptedState.None;
+        fighter.ResetAttackHits();
+        BeginAttackFlags(fighter);
+    }
+
+    private void StartRetaliate(Fighter fighter)
+    {
+        fighter.SetState(FState.Attack);
+        fighter.Attack = fighter.Def.Retaliate;
+        fighter.AttackTime = 0f;
+        fighter.Ai = AiState.Attacking;
+        fighter.Scripted = ScriptedState.None;
+        fighter.ResetAttackHits();
+        BeginAttackFlags(fighter);
+    }
+
+    private static void BeginAttackFlags(Fighter fighter)
+    {
+        if (fighter.Def.SpriteSet == "taxman")
+            fighter.Invuln = 0f; // Tax attack animations explicitly clear invulnerability at frame 0.
+        bool armor = fighter.Attack?.HasSuperArmorAt(0f) == true;
+        if (armor && !fighter.HasSuperArmor)
+            fighter.KnockAmount = 0f;
+        fighter.HasSuperArmor = armor;
+        if (fighter.Attack?.IsInvulnerableAt(0f) == true)
+            fighter.KnockAmount = 0f;
+    }
+
+    // ----------------------------------------------------------------- states
 
     private void AdvanceStates(float dt)
     {
-        foreach (var f in Fighters)
+        foreach (Fighter fighter in Fighters)
         {
-            f.AnimClock += dt;
-            if (f.ComboResetTimer > 0f) f.ComboResetTimer -= dt;
-            if (f.Invuln > 0f) f.Invuln -= dt;
-            if (f.HurtFlash > 0f) f.HurtFlash -= dt;
-            f.StateTime += dt;
+            fighter.StateTime += dt;
+            if (fighter.Invuln > 0f && fighter.Invuln < 900f)
+                fighter.Invuln = MathF.Max(0f, fighter.Invuln - dt);
+            if (fighter.HurtFlash > 0f)
+                fighter.HurtFlash = MathF.Max(0f, fighter.HurtFlash - dt);
+            if (fighter.TurnTimer > 0f)
+                fighter.TurnTimer = MathF.Max(0f, fighter.TurnTimer - dt);
 
-            float speed = f.Vel.Length;
-            if (f.State == AnimState.Walk || (f.State == AnimState.Idle && speed > 5f))
-                f.WalkPhase += dt * (6f + speed * 0.03f);
-
-            switch (f.State)
+            switch (fighter.State)
             {
-                case AnimState.Attack:
-                    f.AttackTimer -= dt;
-                    f.Lean = MathF.Min(1f, f.Lean + dt * 6f); // lean into the strike
-                    if (f.AttackTimer <= 0f)
+                case FState.Jump:
+                    if (!fighter.JumpLaunched && !fighter.JumpLanding
+                        && fighter.StateTime >= fighter.Def.JumpImpulseTime)
                     {
-                        f.State = AnimState.Idle;
-                        f.Lean = 0;
+                        fighter.JumpLaunched = true;
+                        fighter.SkinVelY = fighter.Def.JumpSpeed;
+                    }
+                    else if (fighter.JumpLanding)
+                    {
+                        fighter.LandedTimer -= dt;
+                        if (fighter.LandedTimer <= 0f)
+                        {
+                            fighter.JumpLanding = false;
+                            fighter.SetState(_move.LengthSquared > .001f ? FState.Walk : FState.Idle);
+                        }
                     }
                     break;
-                case AnimState.Hurt:
-                    if (f.StateTime > 0.26f)
+
+                case FState.Attack:
+                    AdvanceAttack(fighter, dt);
+                    break;
+
+                case FState.AirAttack:
+                    fighter.AttackTime += dt;
+                    break;
+
+                case FState.Hurt:
+                    fighter.HurtTimer -= dt;
+                    if (fighter.HurtTimer <= 0f)
                     {
-                        f.State = AnimState.Idle;
-                        f.Lean = 0;
+                        if (fighter.Def.SpriteSet == "taxman")
+                            FinishTaxHurt(fighter);
+                        else
+                        {
+                            fighter.SetState(FState.Idle);
+                            if (fighter.Faction == Faction.Enemy
+                                && fighter.Ai == AiState.SingleAttack)
+                            {
+                                fighter.Ai = AiState.ComboPause;
+                                fighter.AiTimer = .5f;
+                            }
+                            else if (fighter.Faction == Faction.Enemy
+                                && fighter.Ai == AiState.Attacking)
+                                EnterAiWait(fighter);
+                        }
                     }
                     break;
-                case AnimState.Dead:
-                    f.DeathTimer -= dt;
+
+                case FState.Landed:
+                    fighter.LandedTimer -= dt;
+                    if (fighter.LandedTimer <= 0f)
+                    {
+                        if (fighter.Def.SpriteSet == "taxman")
+                        {
+                            fighter.Invuln = 0f;
+                            if (fighter.Alive)
+                            {
+                                fighter.TaxPendingArea = false;
+                                StartArea(fighter);
+                            }
+                            else EnterDeath(fighter);
+                        }
+                        else
+                            fighter.SetState(fighter.Alive ? FState.GetUp : FState.Dead);
+                    }
+                    break;
+
+                case FState.GetUp:
+                    if (fighter.StateTime >= fighter.Def.GetUpTime)
+                        fighter.SetState(FState.Idle);
+                    break;
+
+                case FState.Dead:
+                    fighter.DeathTimer -= dt;
                     break;
             }
         }
     }
 
-    // ------------------------------------------------------------- physics
+    private void AdvanceAttack(Fighter fighter, float dt)
+    {
+        AttackData? attack = fighter.Attack;
+        if (attack == null) return;
+
+        if (attack == fighter.Def.Dash && !fighter.DashConnected)
+            fighter.AttackTime = MathF.Min(.833333f, fighter.AttackTime + dt);
+        else
+            fighter.AttackTime += dt;
+
+        bool armor = attack.HasSuperArmorAt(fighter.AttackTime);
+        if (armor && !fighter.HasSuperArmor)
+            fighter.KnockAmount = 0f;
+        fighter.HasSuperArmor = armor;
+
+        if (fighter.Scripted != ScriptedState.None)
+        {
+            if (fighter.AttackTime < attack.Total) return;
+            if (fighter.Scripted == ScriptedState.Bounce)
+            {
+                if (fighter.Alive)
+                {
+                    fighter.SetState(FState.Landed);
+                    fighter.LandedTimer = fighter.Def.LandedTime;
+                }
+                else
+                    EnterDeath(fighter);
+            }
+            else
+                FinishTaxHurtKnockout(fighter);
+            return;
+        }
+
+        if (attack.ComboNext >= 0 && fighter.AttackTime >= attack.ComboWindow)
+        {
+            bool chain = fighter.Faction == Faction.Player
+                ? fighter.ComboQueued
+                : fighter.AutoCombo > 1;
+            if (chain)
+            {
+                int remaining = fighter.Faction == Faction.Player ? 1 : fighter.AutoCombo - 1;
+                StartAttack(fighter, attack.ComboNext, remaining);
+                return;
+            }
+        }
+
+        if (fighter.AttackTime >= attack.Total)
+            FinishAttack(fighter);
+    }
+
+    private void FinishAttack(Fighter fighter)
+    {
+        fighter.SetState(FState.Idle);
+        if (fighter.Faction != Faction.Enemy) return;
+
+        if (fighter.Def.SpriteSet == "sarge" && fighter.Ai == AiState.SingleAttack)
+        {
+            fighter.Ai = AiState.ComboPause;
+            fighter.AiTimer = .5f;
+        }
+        else
+        {
+            if (fighter.Def.SpriteSet == "taxman")
+                fighter.ConsecutiveHits = 0;
+            EnterAiWait(fighter);
+        }
+    }
+
+    private void EnterHurt(Fighter target, HitWindow hit)
+    {
+        target.SetState(FState.Hurt);
+        target.HurtHigh = hit.Hurt == HurtType.High;
+        target.HurtTimer = .5f;
+        target.Vel = Vec2.Zero;
+    }
+
+    private void EnterTaxHurt(Fighter target, HitWindow hit)
+    {
+        target.TaxCumulatedDamage +=
+            (target.TaxHealthBaseline - target.Health) / (float)target.MaxHealth;
+        float previous = target.TaxHealthBaseline / (float)target.MaxHealth;
+        float current = target.Health / (float)target.MaxHealth;
+
+        bool changedPhase = false;
+        if (target.Alive && target.BossPhase == 0 && previous > .5f && current <= .5f)
+        {
+            target.BossPhase = 1;
+            changedPhase = true;
+        }
+        else if (target.Alive && target.BossPhase == 1 && previous > .15f && current <= .15f)
+        {
+            target.BossPhase = 2;
+            changedPhase = true;
+        }
+
+        target.ConsecutiveHits++;
+        if (target.ConsecutiveHits >= 7)
+        {
+            target.Invuln = 999f;
+            target.KnockAmount = 0f;
+        }
+
+        if (!target.Alive || changedPhase || target.TaxCumulatedDamage > .1f)
+        {
+            if (changedPhase)
+            {
+                target.TaxPendingArea = true;
+                ResetTaxDamage(target);
+            }
+            target.SetState(FState.Attack);
+            target.Attack = CharacterDef.TaxHurtKnockout;
+            target.AttackTime = 0f;
+            target.Scripted = ScriptedState.TaxHurtKnockout;
+            target.ResetAttackHits();
+            target.KnockAmount = 0f;
+            target.HasSuperArmor = true;
+            return;
+        }
+
+        target.SetState(FState.Hurt);
+        target.HurtHigh = target.TaxCumulatedDamage > .05f;
+        target.HurtTimer = .833334f;
+        target.Vel = Vec2.Zero;
+    }
+
+    private void FinishTaxHurt(Fighter target)
+    {
+        bool retaliate = target.TaxCumulatedDamage >= .1f;
+        ResetTaxDamage(target);
+        if (retaliate) StartRetaliate(target);
+        else
+        {
+            target.SetState(FState.Idle);
+            if (target.ConsecutiveHits >= 7)
+            {
+                // TaxManAiStateMachine.WaitForIdle clears the temporary
+                // seven-hit invulnerability before resuming the chosen attack.
+                target.Invuln = 0f;
+                AiDecide(target);
+            }
+            else EnterAiWait(target);
+        }
+    }
+
+    private void FinishTaxHurtKnockout(Fighter target)
+    {
+        bool kneeled = !target.Alive || target.TaxPendingArea;
+        if (kneeled)
+        {
+            target.SetState(FState.Landed);
+            target.LandedTimer = 1f;
+            target.Invuln = 1f;
+            target.HasSuperArmor = true;
+        }
+        else
+        {
+            ResetTaxDamage(target);
+            StartRetaliate(target);
+        }
+    }
+
+    private static void ResetTaxDamage(Fighter target)
+    {
+        target.TaxCumulatedDamage = 0f;
+        target.TaxHealthBaseline = target.Health;
+    }
+
+    private void EnterKo(Fighter target, Fighter attacker, HitWindow hit)
+    {
+        Vec2 direction = AttackData.LaunchDir(hit.LaunchAngleDeg);
+        float horizontal = attacker.Pos.X <= target.Pos.X ? 1f : -1f;
+        Vec2 current = new(target.Vel.X, target.SkinVelY);
+        Vec2 added = new Vec2(direction.X * horizontal, direction.Y)
+            * (target.KnockAmount * WorldScale);
+        Vec2 velocity = current + added;
+        if (velocity.Length > MaxLaunch)
+            velocity = velocity.Normalized(Vec2.Zero) * MaxLaunch;
+
+        target.SetState(FState.Ko);
+        target.Vel = new Vec2(velocity.X, 0f);
+        target.SkinVelY = velocity.Y;
+        target.KnockAmount = 0f;
+        target.Bounces = 0;
+        target.JumpLanding = false;
+        target.InThroneBounce = false;
+        target.WallContact = 0;
+        if (target.Faction == Faction.Enemy)
+            EnterAiWait(target);
+    }
+
+    private void EnterBounce(Fighter fighter)
+    {
+        fighter.SkinY = 0f;
+        fighter.SkinVelY = 0f;
+        fighter.Vel = Vec2.Zero;
+        fighter.Bounces++;
+        fighter.SetState(FState.Attack);
+        fighter.Attack = new AttackData { Clip = "ko_bounce", Total = fighter.Def.BounceTime };
+        fighter.AttackTime = 0f;
+        fighter.Scripted = ScriptedState.Bounce;
+    }
+
+    private static void EnterDeath(Fighter fighter)
+    {
+        fighter.SetState(FState.Dead);
+        fighter.DeathTimer = fighter.Def.SpriteSet == "taxman" ? 4.54167f : .5f;
+        fighter.CombatActive = false;
+        fighter.Vel = Vec2.Zero;
+        fighter.SkinY = 0f;
+        fighter.SkinVelY = 0f;
+    }
+
+    // ---------------------------------------------------------------- physics
 
     private void Integrate(float dt)
     {
-        foreach (var f in Fighters)
+        foreach (Fighter fighter in Fighters)
         {
-            float moveScale = f.State switch
+            switch (fighter.State)
             {
-                AnimState.Attack => 0.25f,
-                AnimState.Hurt => 0f,
-                AnimState.Dead => 0f,
-                _ => 1f,
-            };
-            f.Pos += (f.Vel * moveScale + f.KnockVel) * dt;
-            f.KnockVel *= MathF.Exp(-9f * dt);
+                case FState.Idle:
+                case FState.Walk:
+                    fighter.Pos += fighter.Vel * dt;
+                    break;
+
+                case FState.Attack when fighter.Attack != null:
+                    if (fighter.Attack == fighter.Def.Dash)
+                        IntegrateDash(fighter, dt);
+                    else if (fighter.AttackTime >= fighter.Attack.LungeStart
+                        && fighter.AttackTime < fighter.Attack.LungeEnd)
+                        fighter.Pos += new Vec2(fighter.Facing * fighter.Attack.LungeSpeed, 0f) * dt;
+                    break;
+
+                case FState.Jump:
+                    if (!fighter.JumpLaunched || fighter.JumpLanding) break;
+                    IntegrateJump(fighter, dt);
+                    break;
+
+                case FState.AirAttack:
+                    IntegrateJump(fighter, dt);
+                    if (fighter.SkinVelY < 0f && fighter.SkinY <= 250f * WorldScale)
+                    {
+                        fighter.SetState(FState.Jump);
+                        fighter.JumpLaunched = true;
+                        fighter.StateTime = MathF.Max(fighter.StateTime, fighter.Def.JumpImpulseTime);
+                    }
+                    break;
+
+                case FState.Ko:
+                    fighter.Pos += new Vec2(fighter.Vel.X, 0f) * dt;
+                    fighter.SkinY += fighter.SkinVelY * dt;
+                    fighter.SkinVelY -= (fighter.SkinVelY > 0f ? GravityUp : GravityDown) * dt;
+                    HandleThroneBounce(fighter);
+                    if (fighter.SkinY <= 0f && fighter.SkinVelY < 0f)
+                        EnterBounce(fighter);
+                    break;
+            }
         }
+    }
+
+    private void IntegrateJump(Fighter fighter, float dt)
+    {
+        fighter.Pos += new Vec2(fighter.Vel.X, 0f) * dt;
+        fighter.SkinY += fighter.SkinVelY * dt;
+        fighter.SkinVelY -= (fighter.SkinVelY > 0f ? GravityUp : GravityDown) * dt;
+        if (fighter.SkinY <= 0f && fighter.SkinVelY < 0f)
+        {
+            fighter.SkinY = 0f;
+            fighter.SkinVelY = 0f;
+            fighter.Vel = Vec2.Zero;
+            fighter.SetState(FState.Jump);
+            fighter.JumpLaunched = true;
+            fighter.JumpLanding = true;
+            fighter.StateTime = MathF.Max(fighter.Def.JumpImpulseTime, fighter.StateTime);
+            fighter.LandedTimer = .125f;
+        }
+    }
+
+    private void IntegrateDash(Fighter fighter, float dt)
+    {
+        if (!fighter.DashConnected)
+        {
+            if (fighter.AttackTime >= .166667f)
+                fighter.Pos += new Vec2(fighter.Facing * 2700f * WorldScale, 0f) * dt;
+
+            // dash_attack_begin's animated obstacle detector.
+            Vec2 detectorCenter = fighter.Pos
+                + new Vec2(fighter.Facing * 449.5f * WorldScale, -256f * WorldScale);
+            Aabb detector = new(detectorCenter, P(663f * .5f, 514.75f * .5f));
+            bool contactedPlayer = fighter.AttackTime >= .208334f
+                && Collide.CapsuleVsAabb(Player.Body, detector).Colliding;
+            float span = fighter.Def.BodyHalfSpine + fighter.Def.Radius;
+            float left = ActiveRoom?.Left ?? XMin;
+            float right = ActiveRoom?.Right ?? XMax;
+            bool contactedWall = fighter.Pos.X - span <= left || fighter.Pos.X + span >= right;
+            if (contactedPlayer || contactedWall)
+            {
+                fighter.DashConnected = true;
+                fighter.AttackTime = .833333f;
+            }
+        }
+        else if (fighter.AttackTime < 1.25f)
+            fighter.Pos += new Vec2(fighter.Facing * 2700f * WorldScale, 0f) * dt;
+    }
+
+    private void HandleThroneBounce(Fighter fighter)
+    {
+        if (ActiveRoom?.Boss != true)
+        {
+            fighter.InThroneBounce = false;
+            return;
+        }
+
+        // stage_01/ThroneBounce: Area (15127,537) + shape (220,-56),
+        // RectangleShape2D(124,1688).
+        Aabb throne = new(P(15347, 481), P(62, 844));
+        bool overlapping = BoundsOf(fighter.CurrentHurtShape()).Overlaps(throne);
+        if (overlapping && !fighter.InThroneBounce)
+        {
+            fighter.Health = Math.Max(0, fighter.Health - 5);
+            fighter.Vel = new Vec2(-fighter.Vel.X, 0f);
+            fighter.StateTime = 0f;
+            Hitstop = HitFreeze;
+        }
+        fighter.InThroneBounce = overlapping;
     }
 
     private void ResolveBodies()
     {
         _hash.Clear();
         for (int i = 0; i < Fighters.Count; i++)
-            if (!Fighters[i].Dead)
-                _hash.Insert(i, Fighters[i].Body.Bounds);
-
-        for (int pass = 0; pass < 2; pass++)
         {
-            foreach (var (ia, ib) in _hash.Pairs())
+            Fighter fighter = Fighters[i];
+            if (!fighter.Dead && fighter.CombatActive)
+                _hash.Insert(i, fighter.Body.Bounds);
+        }
+
+        foreach ((int ia, int ib) in _hash.Pairs())
+        {
+            Fighter a = Fighters[ia], b = Fighters[ib];
+            if (a.Dead || b.Dead || !a.CombatActive || !b.CombatActive) continue;
+            Manifold manifold = Collide.CapsuleVsCapsule(a.Body, b.Body);
+            if (!manifold.Colliding) continue;
+            Vec2 separation = manifold.Normal * (manifold.Depth * .5f);
+            a.Pos -= separation;
+            b.Pos += separation;
+        }
+    }
+
+    private void ClampArena()
+    {
+        float visibleWidth = ArenaW / MathF.Max(.1f, CameraZoom);
+        float cameraMax = MathF.Max(CameraLeft, CameraRight - visibleWidth);
+        float screenLeft = Math.Clamp(Player.Pos.X - visibleWidth * .5f, CameraLeft, cameraMax);
+        float screenRight = screenLeft + visibleWidth;
+        foreach (Fighter fighter in Fighters)
+        {
+            float span = fighter.Def.BodyHalfSpine + fighter.Def.Radius;
+            // QuiverLevelCamera carries the left/right one-way collision walls.
+            // Walk-in spawns stay exempt until they reach their marker.
+            float left = fighter.SpawnWalking ? XMin : screenLeft;
+            float right = fighter.SpawnWalking ? XMax : screenRight;
+            // The second ceiling polygon opens the Tax Man district upward.
+            float topEdge = fighter.Pos.X >= 10784f * WorldScale
+                ? 575f * WorldScale
+                : FloorY0;
+            float minX = left + span;
+            float maxX = right - span;
+            int wall = fighter.Pos.X < minX ? -1 : fighter.Pos.X > maxX ? 1 : 0;
+            if (fighter.State == FState.Ko && wall != 0 && wall != fighter.WallContact)
             {
-                Fighter a = Fighters[ia];
-                Fighter b = Fighters[ib];
-                if (a.Dead || b.Dead)
-                    continue;
+                // QuiverLevelCamera's matching WallHitBox applies five damage
+                // and relaunches by reflecting the current horizontal velocity.
+                fighter.Health = Math.Max(0, fighter.Health - 5);
+                fighter.Vel = new Vec2(-fighter.Vel.X, 0f);
+                fighter.StateTime = 0f;
+                Hitstop = HitFreeze;
+            }
+            fighter.WallContact = wall;
+            fighter.Pos = new Vec2(
+                Math.Clamp(fighter.Pos.X, minX, maxX),
+                Math.Clamp(fighter.Pos.Y, topEdge + fighter.Def.Radius,
+                    FloorY1 - fighter.Def.Radius));
+        }
+    }
 
-                Manifold m = Collide.CircleVsCircle(a.Body, b.Body);
-                if (!m.Colliding)
-                    continue;
+    // ------------------------------------------------------------------ hits
 
-                float wa = a.Faction == Faction.Player ? 0.15f : 0.5f;
-                float wb = b.Faction == Faction.Player ? 0.15f : 0.5f;
-                float sum = wa + wb;
-                if (sum <= 0f) sum = 1f;
-                Vec2 push = m.Normal * m.Depth;
-                a.Pos -= push * (wa / sum);
-                b.Pos += push * (wb / sum);
+    private void ResolveHits()
+    {
+        foreach (Fighter attacker in Fighters)
+        {
+            if (!attacker.CombatActive
+                || attacker.State is not (FState.Attack or FState.AirAttack)
+                || attacker.Attack == null
+                || !attacker.Attack.TryWindowAt(attacker.AttackTime, out HitWindow hit))
+                continue;
+
+            foreach (Fighter target in Fighters)
+            {
+                if (target == attacker || target.Faction == attacker.Faction
+                    || target.Dead || !target.CombatActive || target.IsInvulnerable)
+                    continue;
+                if (MathF.Abs(attacker.Pos.Y - target.Pos.Y) > HitLane)
+                    continue;
+                BoxShape hurt = target.CurrentHurtShape();
+                if (!HitOverlaps(attacker, hit, hurt))
+                    continue;
+                if (attacker.WasHitBy(target, hit.HitId))
+                    continue;
+                ApplyHit(attacker, target, hit);
             }
         }
     }
 
-    private void ClampToArena()
+    private static bool HitOverlaps(Fighter attacker, HitWindow hit, BoxShape hurt)
     {
-        foreach (var f in Fighters)
+        Vec2 center = attacker.Pos
+            + new Vec2(attacker.Facing * hit.Box.Center.X, hit.Box.Center.Y - attacker.SkinY);
+        if (hit.ShapeKind == HitShapeKind.HorizontalCapsule)
         {
-            f.Pos = new Vec2(
-                Math.Clamp(f.Pos.X, f.Radius + 6f, ArenaWidth - f.Radius - 6f),
-                Math.Clamp(f.Pos.Y, FloorTop, ArenaHeight - 12f));
+            float halfSpine = MathF.Max(0f, hit.CapsuleHeight * .5f - hit.CapsuleRadius);
+            Capsule capsule = new(center - new Vec2(halfSpine, 0f),
+                center + new Vec2(halfSpine, 0f), hit.CapsuleRadius);
+            if (MathF.Abs(hurt.Rotation) < .0001f)
+                return Collide.CapsuleVsAabb(capsule, new Aabb(hurt.Center, hurt.HalfSize)).Colliding;
+            return capsule.Bounds.Overlaps(BoundsOf(hurt));
+        }
+
+        BoxShape attack = new(center, hit.Box.HalfSize, hit.Box.Rotation * attacker.Facing);
+        return OrientedBoxesOverlap(attack, hurt);
+    }
+
+    private void ApplyHit(Fighter attacker, Fighter target, HitWindow hit)
+    {
+        // CombatSystem order: damage (which starts HitFreeze), then knockback.
+        target.Health = Math.Max(0, target.Health - (int)hit.Damage);
+        target.HurtFlash = .14f;
+        Hitstop = HitFreeze;
+
+        target.KnockAmount += (int)hit.Knockback;
+        bool armor = target.HasSuperArmor;
+
+        if (target == Player && _taxMan.TaxSeat is TaxSeatState.Swirl
+                or TaxSeatState.Drink or TaxSeatState.Laugh)
+        {
+            _taxMan.TaxSeat = TaxSeatState.Laugh;
+            _taxMan.TaxSeatTimer = 4.08334f;
+        }
+
+        if (target.Def.SpriteSet == "taxman")
+        {
+            if (!target.Alive || !armor)
+                EnterTaxHurt(target, hit);
+            return;
+        }
+
+        if (target.Airborne && !armor)
+            EnterKo(target, attacker, hit);
+        else if (target.ShouldKnockout)
+            EnterKo(target, attacker, hit);
+        else if (!armor)
+            EnterHurt(target, hit);
+    }
+
+    private static bool OrientedBoxesOverlap(BoxShape a, BoxShape b)
+    {
+        GetAxes(a.Rotation, out Vec2 ax, out Vec2 ay);
+        GetAxes(b.Rotation, out Vec2 bx, out Vec2 by);
+        return OverlapOn(ax, a, b) && OverlapOn(ay, a, b)
+            && OverlapOn(bx, a, b) && OverlapOn(by, a, b);
+    }
+
+    private static bool OverlapOn(Vec2 axis, BoxShape a, BoxShape b)
+    {
+        GetAxes(a.Rotation, out Vec2 ax, out Vec2 ay);
+        GetAxes(b.Rotation, out Vec2 bx, out Vec2 by);
+        float ra = a.HalfSize.X * MathF.Abs(axis.Dot(ax))
+            + a.HalfSize.Y * MathF.Abs(axis.Dot(ay));
+        float rb = b.HalfSize.X * MathF.Abs(axis.Dot(bx))
+            + b.HalfSize.Y * MathF.Abs(axis.Dot(by));
+        return MathF.Abs((b.Center - a.Center).Dot(axis)) <= ra + rb;
+    }
+
+    private static void GetAxes(float rotation, out Vec2 x, out Vec2 y)
+    {
+        float c = MathF.Cos(rotation), s = MathF.Sin(rotation);
+        x = new Vec2(c, s);
+        y = new Vec2(-s, c);
+    }
+
+    private static Aabb BoundsOf(BoxShape box)
+    {
+        GetAxes(box.Rotation, out Vec2 x, out Vec2 y);
+        Vec2 half = new(
+            MathF.Abs(x.X) * box.HalfSize.X + MathF.Abs(y.X) * box.HalfSize.Y,
+            MathF.Abs(x.Y) * box.HalfSize.X + MathF.Abs(y.Y) * box.HalfSize.Y);
+        return new Aabb(box.Center, half);
+    }
+
+    // ------------------------------------------------------------ stage/boss
+
+    private void UpdateHiddenTax(float dt)
+    {
+        if (_taxMan.TaxSeat == TaxSeatState.Active || Fighters.Contains(_taxMan)) return;
+        switch (_taxMan.TaxSeat)
+        {
+            case TaxSeatState.Reveal:
+            case TaxSeatState.Drink:
+            case TaxSeatState.Laugh:
+                _taxMan.TaxSeatTimer -= dt;
+                if (_taxMan.TaxSeatTimer <= 0f)
+                    StartTaxSwirl();
+                break;
+            case TaxSeatState.Swirl:
+                _taxMan.TaxSeatTimer -= dt;
+                if (_taxMan.TaxSeatTimer <= 0f)
+                {
+                    _taxMan.TaxSeat = TaxSeatState.Drink;
+                    _taxMan.TaxSeatTimer = 1.625f;
+                }
+                break;
         }
     }
 
-    // ------------------------------------------------------------- effects
-
-    private void UpdateEffects(float dt)
+    private void StartTaxSwirl()
     {
-        for (int i = Sparks.Count - 1; i >= 0; i--)
+        _taxMan.TaxSeat = TaxSeatState.Swirl;
+        _taxMan.TaxNextDrinkSeconds = _rng.Next(3, 9);
+        _taxMan.TaxSeatTimer = _taxMan.TaxNextDrinkSeconds;
+    }
+
+    private void BeginTaxEngage()
+    {
+        if (!Fighters.Contains(_taxMan))
+            Fighters.Add(_taxMan);
+        _taxMan.TaxSeat = TaxSeatState.Engage;
+        _taxMan.TaxSeatTimer = 1.75f;
+        _taxMan.CombatActive = false;
+        _taxMan.SetState(FState.Idle);
+    }
+
+    private void AdvanceTaxEngage(float dt)
+    {
+        if (_taxMan.TaxSeat != TaxSeatState.Engage) return;
+        _taxMan.TaxSeatTimer -= dt;
+        if (_taxMan.TaxSeatTimer > 0f) return;
+        _taxMan.Pos = P(15072, 861);
+        _taxMan.TaxSeat = TaxSeatState.Active;
+        _taxMan.CombatActive = true;
+        _taxMan.SetState(FState.Idle);
+        EnterAiWait(_taxMan);
+    }
+
+    private void StageUpdate(float dt)
+    {
+        AdvanceTaxEngage(dt);
+        if (Player.Dead)
         {
-            var s = Sparks[i];
-            s.Age += dt;
-            if (s.Age >= s.Life) { Sparks.RemoveAt(i); continue; }
-            Sparks[i] = s;
+            if (Player.DeathTimer <= 0f)
+                GameOver = true;
+            return;
         }
-        for (int i = Numbers.Count - 1; i >= 0; i--)
+
+        int aliveEnemies = 0;
+        foreach (Fighter fighter in Fighters)
+            if (fighter.Faction == Faction.Enemy && fighter.CombatActive && !fighter.Dead)
+                aliveEnemies++;
+
+        if (ActiveRoom != null)
         {
-            var n = Numbers[i];
-            n.Age += dt;
-            n.Pos += n.Vel * dt;
-            n.Vel *= MathF.Exp(-3f * dt);
-            n.Vel += new Vec2(0, 26f * dt); // gentle gravity so it arcs
-            if (n.Age >= n.Life) { Numbers.RemoveAt(i); continue; }
-            Numbers[i] = n;
+            FightRoom room = ActiveRoom;
+            if (room.Boss)
+            {
+                if (_taxMan.Dead && _taxMan.DeathTimer <= 0f)
+                {
+                    room.Cleared = true;
+                    RoomsCleared++;
+                    Win = GameOver = true;
+                    ActiveRoom = null;
+                }
+                return;
+            }
+
+            if (!room.WaveSpawned)
+            {
+                room.SpawnTimer -= dt;
+                if (room.SpawnTimer <= 0f)
+                {
+                    SpawnWave(room.Waves[room.WaveIndex]);
+                    room.WaveSpawned = true;
+                }
+            }
+            else if (aliveEnemies == 0)
+            {
+                room.WaveIndex++;
+                if (room.WaveIndex < room.Waves.Length)
+                {
+                    room.WaveSpawned = false;
+                    room.SpawnTimer = .8f;
+                }
+                else
+                {
+                    room.Cleared = true;
+                    RoomsCleared++;
+                    if (room.EngagesBoss)
+                    {
+                        StartRoom(Rooms[4]);
+                        BeginTaxEngage();
+                    }
+                    else
+                    {
+                        ActiveRoom = null;
+                        CameraLeft = room.AfterLeft;
+                        CameraTop = room.AfterTop;
+                        CameraRight = room.AfterRight;
+                        CameraBottom = room.AfterBottom;
+                        CameraZoom = room.AfterZoom;
+                    }
+                }
+            }
+            return;
         }
-        for (int i = Dusts.Count - 1; i >= 0; i--)
+
+        foreach (FightRoom room in Rooms)
         {
-            var d = Dusts[i];
-            d.Age += dt;
-            d.Pos += d.Vel * dt;
-            d.Vel *= MathF.Exp(-4f * dt);
-            if (d.Age >= d.Life) { Dusts.RemoveAt(i); continue; }
-            Dusts[i] = d;
+            if (room.Started || room.Cleared) continue;
+            if (Player.Pos.X >= room.TriggerX)
+                StartRoom(room);
+            break;
         }
     }
 
-    private void SpawnSpark(Vec2 pos, float angle, bool heavy)
+    private void StartRoom(FightRoom room)
     {
-        Sparks.Add(new HitSpark { Pos = pos, Life = heavy ? 0.32f : 0.22f, Angle = angle, Size = heavy ? 1.5f : 1f, Heavy = heavy });
-    }
-
-    private void SpawnNumber(Vec2 pos, int value, bool crit)
-    {
-        Numbers.Add(new DamageNumber
+        room.Started = true;
+        room.WaveIndex = 0;
+        room.WaveSpawned = room.Boss;
+        room.SpawnTimer = .5f;
+        ActiveRoom = room;
+        CameraLeft = room.Left;
+        CameraTop = room.Top;
+        CameraRight = room.Right;
+        CameraBottom = room.Bottom;
+        CameraZoom = room.Zoom;
+        if (room.EngagesBoss && _taxMan.TaxSeat == TaxSeatState.AwaitReveal)
         {
-            Pos = pos,
-            Vel = new Vec2((float)(_rng.NextDouble() - 0.5) * 40f, -70f),
-            Life = 0.8f,
-            Value = value,
-            Crit = crit,
-        });
+            _taxMan.TaxSeat = TaxSeatState.Reveal;
+            _taxMan.TaxSeatTimer = 2.625f;
+        }
     }
 
-    private void SpawnDust(Vec2 pos, Vec2 vel)
+    private void SpawnWave(SpawnData[] wave)
     {
-        Dusts.Add(new Dust { Pos = pos, Vel = vel, Life = 0.4f + (float)_rng.NextDouble() * 0.2f, Size = 3f + (float)_rng.NextDouble() * 4f });
+        foreach (SpawnData spawn in wave)
+        {
+            Fighter fighter = new()
+            {
+                Def = CharacterDef.Sarge,
+                Faction = Faction.Enemy,
+                Pos = spawn.Start,
+                SpawnTarget = spawn.Target,
+                SpawnWalking = spawn.WalkIn,
+                Health = CharacterDef.Sarge.MaxHealth,
+                Facing = spawn.Target.X < spawn.Start.X ? -1f : 1f,
+            };
+            fighter.AiTimer = 1f + (float)_rng.NextDouble() * 2f;
+            Fighters.Add(fighter);
+        }
     }
-
-    private Vec2 RandVec(float mag) =>
-        new((float)(_rng.NextDouble() - 0.5) * 2f * mag, (float)(_rng.NextDouble() - 0.5) * 2f * mag);
-
-    // ------------------------------------------------------------- lifecycle
 
     private void Cleanup()
     {
         for (int i = Fighters.Count - 1; i >= 0; i--)
         {
-            var f = Fighters[i];
-            if (f.Dead && f.DeathTimer <= 0f)
-            {
-                if (f.Faction == Faction.Player)
-                    Fighters.RemoveAt(i);      // removed; respawn handled below
-                else
-                    Fighters.RemoveAt(i);
-            }
+            Fighter fighter = Fighters[i];
+            if (fighter.Faction == Faction.Enemy && fighter.Dead && fighter.DeathTimer <= 0f)
+                Fighters.RemoveAt(i);
         }
     }
 
-    private void Spawning(float dt)
+    private void UpdateEffects(float dt)
     {
-        // player respawn / game over
-        bool playerPresent = Fighters.Contains(Player);
-        if (!playerPresent && !Player.Dead)
-            playerPresent = false;
-        if (Player.Dead && !Fighters.Contains(Player))
+        for (int i = Sparks.Count - 1; i >= 0; i--)
         {
-            _respawnTimer -= dt;
-            if (_respawnTimer <= 0f)
-            {
-                if (Lives > 0)
-                    SpawnPlayer();
-                else
-                    GameOver = true;
-            }
-            return;
+            HitSpark value = Sparks[i];
+            value.Age += dt;
+            if (value.Age >= value.Life) Sparks.RemoveAt(i); else Sparks[i] = value;
         }
-
-        int alive = 0;
-        foreach (var f in Fighters)
-            if (f.Faction == Faction.Enemy && !f.Dead)
-                alive++;
-
-        _spawnTimer -= dt;
-        int cap = 3 + Wave;
-        if (alive < cap && _spawnTimer <= 0f)
+        for (int i = Numbers.Count - 1; i >= 0; i--)
         {
-            SpawnEnemy();
-            _spawnTimer = MathF.Max(0.4f, 1.5f - Wave * 0.09f);
+            DamageNumber value = Numbers[i];
+            value.Age += dt;
+            if (value.Age >= value.Life) Numbers.RemoveAt(i); else Numbers[i] = value;
         }
-        if (alive == 0 && _spawnTimer <= 0f)
-            Wave++;
-    }
-
-    private void SpawnEnemy()
-    {
-        int edge = _rng.Next(2);
-        float y = FloorTop + (float)_rng.NextDouble() * (ArenaHeight - FloorTop - 20f);
-        Vec2 pos = edge == 0 ? new Vec2(-20f, y) : new Vec2(ArenaWidth + 20f, y);
-
-        bool brute = _rng.NextDouble() < 0.18 && Wave >= 1;
-        var f = new Fighter
+        for (int i = Dusts.Count - 1; i >= 0; i--)
         {
-            Faction = Faction.Enemy,
-            Kind = brute ? EnemyKind.Brute : EnemyKind.Grunt,
-            Pos = pos,
-            Radius = brute ? 26f : 16f,
-            Scale = brute ? 1.5f : 0.98f,
-            Speed = brute ? 78f : 118f + Wave * 4f,
-            MaxHealth = brute ? 160f : 46f,
-            Health = brute ? 160f : 46f,
-            Reach = brute ? 60f : 40f,
-        };
-        Fighters.Add(f);
+            Dust value = Dusts[i];
+            value.Age += dt;
+            if (value.Age >= value.Life) Dusts.RemoveAt(i); else Dusts[i] = value;
+        }
+        for (int i = Effects.Count - 1; i >= 0; i--)
+        {
+            EffectSprite value = Effects[i];
+            value.Age += dt;
+            if (value.Age >= value.Life) Effects.RemoveAt(i); else Effects[i] = value;
+        }
     }
 }
