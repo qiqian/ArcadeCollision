@@ -326,6 +326,23 @@ public class BroadphaseTests
     }
 
     [Fact]
+    public void PolygonRejectsSelfIntersectionAndQuantizedZeroEdges()
+    {
+        var pentagram = new Vec2[5];
+        for (int i = 0; i < pentagram.Length; i++)
+        {
+            int vertex = i * 2 % 5;
+            double angle = Math.PI * 0.5 + vertex * Math.PI * 2.0 / 5.0;
+            pentagram[i] = new Vec2((float)Math.Cos(angle) * 5,
+                (float)Math.Sin(angle) * 5);
+        }
+
+        Assert.Throws<ArgumentException>(() => new Polygon(pentagram));
+        Assert.Throws<ArgumentException>(() => new Polygon(
+            new Vec2(0, 0), new Vec2(1f / 1024f, 0), new Vec2(1, 1), new Vec2(0, 1)));
+    }
+
+    [Fact]
     public void ArcWorld_HybridBroadphaseMatchesBruteForceAfterRandomMoves()
     {
         var world = new ArcWorld(12f);
@@ -505,5 +522,35 @@ public class GenericShapeTests
         Assert.True(rotatedBox.Bounds.Overlaps(rotatedCapsule.Bounds));
         Assert.False(Collide.Overlaps(rotatedCapsule, rotatedBox));
         Assert.False(Collide.ShapeVsShape(rotatedBox, rotatedCapsule).Colliding);
+    }
+
+    [Fact]
+    public void CrossingCapsules_ReportASeparatingMtv()
+    {
+        var horizontal = new Capsule(new Vec2(-5, 0), new Vec2(5, 0), 1);
+        var vertical = new Capsule(new Vec2(0, -5), new Vec2(0, 5), 1);
+
+        Manifold manifold = Collide.CapsuleVsCapsule(horizontal, vertical);
+
+        Assert.True(manifold.Colliding);
+        Assert.Equal(7f, manifold.Depth, 2f / 256f);
+        Capsule separated = horizontal.Moved(
+            manifold.SeparationForA - manifold.Normal * (2f / 256f));
+        Assert.False(Collide.Overlaps(separated, vertical));
+    }
+
+    [Fact]
+    public void AabbContactRemainsInsideBothOverlappingBounds()
+    {
+        var a = new Aabb(Vec2.Zero, new Vec2(1, 1));
+        var b = new Aabb(new Vec2(0.5f, 5), new Vec2(1, 10));
+
+        Manifold manifold = Collide.AabbVsAabb(a, b);
+
+        Assert.True(manifold.Colliding);
+        Assert.True(manifold.Contact.X >= MathF.Max(a.Min.X, b.Min.X)
+            && manifold.Contact.X <= MathF.Min(a.Max.X, b.Max.X));
+        Assert.True(manifold.Contact.Y >= MathF.Max(a.Min.Y, b.Min.Y)
+            && manifold.Contact.Y <= MathF.Min(a.Max.Y, b.Max.Y));
     }
 }

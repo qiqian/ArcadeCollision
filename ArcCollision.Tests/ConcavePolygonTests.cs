@@ -61,20 +61,11 @@ public class ConcavePolygonTests
         Assert.True(m.Colliding);
         Assert.True(m.Depth > 0f);
 
-        // A concave polygon's manifold reports the deepest triangle sub-shape's
-        // MTV; a single step resolves that piece but can push into an adjacent
-        // arm, so total depth is not guaranteed to fall in one step. The correct,
-        // physics-relevant property is that ITERATED MTV resolution converges to
-        // separation, which this loop verifies.
-        Shape moved = LShape;
-        Manifold after = m;
-        for (int step = 0; step < 16 && after.Colliding; step++)
-        {
-            moved = moved.Moved(after.SeparationForA - after.Normal * (2f / 256f));
-            after = Collide.ShapeVsShape(moved, circle);
-        }
+        Shape moved = ((Shape)LShape).Moved(
+            m.SeparationForA - m.Normal * (2f / 256f));
+        Manifold after = Collide.ShapeVsShape(moved, circle);
         Assert.True(!after.Colliding,
-            $"iterated separation did not converge: final depth {after.Depth:R}");
+            $"separation did not resolve overlap: final depth {after.Depth:R}");
     }
 
     // ============================================================ U-shape

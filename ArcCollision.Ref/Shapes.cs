@@ -156,6 +156,7 @@ public sealed class Polygon
         MaxXFx = maxXFx;
         MaxYFx = maxYFx;
         _bounds = Aabb.FromMinMax(new Vec2(minX, minY), new Vec2(maxX, maxY));
+        ValidateSimple(_fixedVertices);
         IsConvex = ComputeConvexity(_fixedVertices);
         TriangleIndices = IsConvex ? Array.Empty<int>() : Triangulate(_fixedVertices);
     }
@@ -190,6 +191,54 @@ public sealed class Polygon
             throw new ArgumentException("Polygon vertices must enclose a non-zero area.", nameof(vertices));
         return true;
     }
+
+    private static void ValidateSimple(FxVec2[] vertices)
+    {
+        int count = vertices.Length;
+        for (int i = 0; i < count; i++)
+        {
+            FxVec2 a = vertices[i];
+            FxVec2 b = vertices[(i + 1) % count];
+            if (a.X == b.X && a.Y == b.Y)
+                throw new ArgumentException(
+                    "Polygon has a zero-length edge after fixed-point quantization.", nameof(vertices));
+
+            FxVec2 c = vertices[(i + 2) % count];
+            if (Cross(a, b, c) == 0 && (b - a).Dot(c - b) < 0)
+                throw new ArgumentException(
+                    "Polygon has overlapping adjacent edges.", nameof(vertices));
+
+            for (int j = i + 1; j < count; j++)
+            {
+                bool adjacent = j == i + 1 || (i == 0 && j == count - 1);
+                if (adjacent) continue;
+
+                FxVec2 c0 = vertices[j];
+                FxVec2 c1 = vertices[(j + 1) % count];
+                if (SegmentsIntersect(a, b, c0, c1))
+                    throw new ArgumentException(
+                        "Polygon must be simple and non-self-intersecting.", nameof(vertices));
+            }
+        }
+    }
+
+    private static bool SegmentsIntersect(FxVec2 a, FxVec2 b, FxVec2 c, FxVec2 d)
+    {
+        long abC = Cross(a, b, c);
+        long abD = Cross(a, b, d);
+        long cdA = Cross(c, d, a);
+        long cdB = Cross(c, d, b);
+
+        if (abC == 0 && OnSegment(a, b, c)) return true;
+        if (abD == 0 && OnSegment(a, b, d)) return true;
+        if (cdA == 0 && OnSegment(c, d, a)) return true;
+        if (cdB == 0 && OnSegment(c, d, b)) return true;
+        return (abC < 0) != (abD < 0) && (cdA < 0) != (cdB < 0);
+    }
+
+    private static bool OnSegment(FxVec2 a, FxVec2 b, FxVec2 p) =>
+        p.X >= Math.Min(a.X, b.X) && p.X <= Math.Max(a.X, b.X)
+        && p.Y >= Math.Min(a.Y, b.Y) && p.Y <= Math.Max(a.Y, b.Y);
 
     private static int[] Triangulate(FxVec2[] vertices)
     {

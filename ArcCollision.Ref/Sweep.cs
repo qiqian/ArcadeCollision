@@ -84,6 +84,18 @@ public static partial class Sweep
                   ref tMin, ref tMax, ref normal))
             return FxSweep.Miss;
 
+        if (normal.IsZero)
+        {
+            long best = origin.X - min.X;
+            normal = -FxAxis.UnitX;
+            long distance = max.X - origin.X;
+            if (distance < best) { best = distance; normal = FxAxis.UnitX; }
+            distance = origin.Y - min.Y;
+            if (distance < best) { best = distance; normal = -FxAxis.UnitY; }
+            distance = max.Y - origin.Y;
+            if (distance < best) normal = FxAxis.UnitY;
+        }
+
         FxVec2 point = origin + d.MulT(tMin);
         return new FxSweep(true, tMin, normal, point);
     }
@@ -133,6 +145,13 @@ public static partial class Sweep
         FxSweep hit = RayVsCircleFx(moverFx.Center, FxVec2.From(motion), expanded);
         if (!hit.Hit)
             return SweepHit.Miss;
+
+        if (hit.Time16 == 0)
+        {
+            FxManifold initial = Collide.CircleVsCircleFx(moverFx, targetFx);
+            if (initial.Colliding)
+                return new FxSweep(true, 0, -initial.Normal, initial.Contact).ToSweepHit();
+        }
 
         // Report the contact point on the target surface, not the expanded one.
         FxVec2 moverAt = moverFx.Center + FxVec2.From(motion).MulT(hit.Time16);
@@ -190,6 +209,13 @@ public static partial class Sweep
         if (!best.Hit)
             return FxSweep.Miss;
 
+        if (best.Time16 == 0)
+        {
+            FxManifold initial = Collide.CircleVsAabbFx(moverFx, boxFx);
+            if (initial.Colliding)
+                return new FxSweep(true, 0, -initial.Normal, initial.Contact);
+        }
+
         FxVec2 moverAtImpact = moverFx.Center + motionFx.MulT(best.Time16);
         FxVec2 contact = moverAtImpact - best.Normal.Scale(r);
         return new FxSweep(true, best.Time16, best.Normal, contact);
@@ -244,6 +270,12 @@ public static partial class Sweep
         FxVec2 motionFx = FxVec2.From(motion);
         FxSweep hit = RayVsAabbFx(moving.Center, motionFx, expanded);
         if (!hit.Hit) return SweepHit.Miss;
+        if (hit.Time16 == 0)
+        {
+            FxManifold initial = Collide.AabbVsAabbFx(moving, stationary);
+            if (initial.Colliding)
+                return new FxSweep(true, 0, -initial.Normal, initial.Contact).ToSweepHit();
+        }
         FxVec2 center = moving.Center + motionFx.MulT(hit.Time16);
         long extent = Fx.RoundDiv(
             Math.Abs(hit.Normal.X) * moving.Half.X

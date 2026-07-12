@@ -12,10 +12,8 @@ namespace ArcCollision.Tests;
 ///  - Circle vs AABB (centre outside): closest point on box surface
 ///  - Circle vs Capsule: midpoint of overlap along circle-to-spine-projection line
 ///
-/// Contact tolerance scales with shape size because the integer-core contact
-/// computation involves multiplying the unit normal by (radius − depth/2).
-/// The integer square-root normalization introduces ±1/256 in each component,
-/// and that error is amplified by the shape radius.
+/// Contact tolerance includes fixed-grid rounding plus the small Q1.30 direction
+/// error amplified by the witness offset.
 /// </summary>
 public class ContactOracleTests
 {
@@ -62,13 +60,12 @@ public class ContactOracleTests
         }
     }
 
-    // Base tolerance: 4 grid cells for sub-pixel rounding.
+    // Base tolerance: 3 grid cells for sub-pixel rounding.
     private const double BaseTol = 3.0 / 256.0;
 
     private static double ScaledTol(float maxRadius)
     {
-        // The integer normal's ±1/256 error multiplied by the offset distance
-        // (up to maxRadius) gives a proportional contact error.
+        // Q1.30 direction rounding is amplified by the witness offset.
         return BaseTol + Math.Abs(maxRadius) * 0.0000002;
     }
 

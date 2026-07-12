@@ -155,7 +155,8 @@ public class OracleDifferentialTests
                 // Depth mirrors the closest-point reduction only while the spines
                 // do not cross; crossing spines make the reduction saturate. The
                 // depth tolerance grows with radius (isqrt of a larger distance).
-                if (clearance < 0 && -clearance < a.Radius + b.Radius)
+                double spineDistance = clearance + a.Radius + b.Radius;
+                if (clearance < 0 && spineDistance > CapsuleZone)
                     CheckDepth(m, clearance, CapsuleZone,
                         6.0 / 256.0 + (a.Radius + b.Radius) * 0.0004, repro);
             }

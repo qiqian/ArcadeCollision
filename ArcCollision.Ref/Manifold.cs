@@ -8,22 +8,16 @@ namespace ArcCollision;
 /// that normal. An exact touch reports <c>Colliding</c> with <c>Depth == 0</c>.
 ///
 /// <para><b>Separation contract.</b> <see cref="SeparationForA"/> /
-/// <see cref="SeparationForB"/> resolve the contact <i>feature this manifold
-/// reports</i>. For convex primitive pairs in shallow contact that fully
-/// separates the shapes in one step. It is NOT guaranteed to eliminate all
-/// overlap in a single step when the reduction is not a true minimum-translation
-/// vector, namely: capsules whose spines deeply cross, and concave polygons
-/// (whose manifold is the deepest convex sub-piece's MTV — pushing out of it can
-/// push into another piece). For those, apply the separation iteratively until
-/// <see cref="Colliding"/> is false; the iteration converges.</para>
+/// <see cref="SeparationForB"/> separate the complete operands in one step after
+/// fixed-grid quantization. Convex pairs return their MTV. Concave unions may
+/// return a longer accumulated or bounds-based separation when a single convex
+/// sub-piece MTV would enter another piece.</para>
 ///
-/// <para><b>Contact accuracy.</b> <see cref="Contact"/> is exact (on the contact
-/// surface) for the circle-reduction paths (circle/circle, circle/aabb,
-/// circle/capsule, capsule/capsule). For the SAT paths (any OBB or polygon) it
-/// is an approximate point: the midpoint of the two support points, clamped into
-/// the operands' overlapping bounds. It is suitable as a contact hint but is not
-/// guaranteed to lie inside a rotated shape's exact interior — compute a clipped
-/// contact manifold externally if you need that.</para>
+/// <para><b>Contact accuracy.</b> <see cref="Contact"/> is a stable contact hint.
+/// During penetration it may be the midpoint between opposing witness surfaces,
+/// rather than a point on either original surface. SAT contacts are additionally
+/// clamped into the operands' overlapping world bounds. Compute a clipped contact
+/// manifold externally if exact surface anchors are required.</para>
 /// </summary>
 public readonly struct Manifold
 {
@@ -42,10 +36,16 @@ public readonly struct Manifold
 
     public static readonly Manifold None = new(false, Vec2.Zero, 0f, Vec2.Zero);
 
-    /// <summary>The minimum translation vector to push A out of B.</summary>
+    /// <summary>
+    /// Translation that pushes A out of B. It is the MTV for convex pairs;
+    /// concave unions may return a slightly longer verified separation.
+    /// </summary>
     public Vec2 SeparationForA => Normal * -Depth;
 
-    /// <summary>The minimum translation vector to push B out of A.</summary>
+    /// <summary>
+    /// Translation that pushes B out of A. It is the MTV for convex pairs;
+    /// concave unions may return a slightly longer verified separation.
+    /// </summary>
     public Vec2 SeparationForB => Normal * Depth;
 }
 

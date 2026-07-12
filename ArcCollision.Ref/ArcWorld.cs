@@ -1,31 +1,42 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace ArcCollision;
 
 /// <summary>
-/// Lightweight collider token. Index and generation identify the ArcWorld slot;
-/// EntityId is caller-owned metadata copied into the handle for immediate logic
-/// lookup after broadphase queries.
+/// Lightweight collider token. Index and generation identify the ArcWorld slot.
+/// EntityId is caller-owned metadata in [0, <see cref="MaxEntityId"/>]; its low
+/// 28 bits share storage with the handle's internal 4-bit world id.
 /// </summary>
 public readonly struct ArcHandle : IEquatable<ArcHandle>
 {
+    internal const int EntityIdBits = 28;
+    public const int MaxEntityId = (1 << EntityIdBits) - 1;
+    private const int EntityIdMask = MaxEntityId;
+
     internal readonly int Index;
     internal readonly uint Generation;
-    public readonly int EntityId;
+    private readonly int _packedEntityId;
 
-    internal ArcHandle(int index, uint generation, int entityId)
+    public int EntityId => _packedEntityId & EntityIdMask;
+    internal uint WorldId => (uint)_packedEntityId >> EntityIdBits;
+
+    internal ArcHandle(int index, uint generation, uint worldId, int entityId)
     {
         Index = index;
         Generation = generation;
-        EntityId = entityId;
+        if (worldId is 0 or > ArcWorld.MaxWorldCount
+            || (uint)entityId > MaxEntityId)
+            throw new ArgumentOutOfRangeException();
+        _packedEntityId = unchecked((int)(worldId << EntityIdBits)) | entityId;
     }
 
     public bool Equals(ArcHandle other) =>
-        Index == other.Index && Generation == other.Generation;
+        Index == other.Index && Generation == other.Generation && WorldId == other.WorldId;
 
     public override bool Equals(object? obj) => obj is ArcHandle other && Equals(other);
-    public override int GetHashCode() => HashCode.Combine(Index, Generation);
+    public override int GetHashCode() => HashCode.Combine(Index, Generation, WorldId);
     public static bool operator ==(ArcHandle left, ArcHandle right) => left.Equals(right);
     public static bool operator !=(ArcHandle left, ArcHandle right) => !left.Equals(right);
 }
@@ -64,9 +75,17 @@ public readonly struct ContactPair
 /// Owns collider shapes and their broadphase proxies. Logic submits shapes on
 /// add/update, receives lightweight handles from broadphase, filters candidates,
 /// then selectively asks the world to compute final manifolds.
+/// At most <see cref="MaxWorldCount"/> worlds may be alive concurrently. Dispose
+/// worlds when finished so their 4-bit id can be reused immediately.
 /// </summary>
-public sealed class ArcWorld
+public sealed class ArcWorld : IDisposable
 {
+    public const int MaxWorldCount = 15;
+    private static readonly object s_worldIdGate = new();
+    private static readonly WeakReference<ArcWorld>?[] s_worldOwners =
+        new WeakReference<ArcWorld>?[MaxWorldCount + 1];
+    private static readonly int[] s_nextHandleGenerations = new int[MaxWorldCount + 1];
+
     private struct Slot
     {
         public Shape Shape;
@@ -80,6 +99,7 @@ public sealed class ArcWorld
     }
 
     private readonly SpatialHash _broadphase;
+    private readonly uint _worldId;
     private readonly List<int> _candidates = new();
     private readonly List<(int A, int B)> _broadphasePairs = new();
     private Slot[] _slots = new Slot[16];
@@ -87,17 +107,19 @@ public sealed class ArcWorld
     private int _freeList = -1;
     private int _activeCount;
     private int _dynamicCount;
+    private int _disposed;
     private uint _revision = 1;
 
     public ArcWorld(float fatMargin = 16f)
     {
         _broadphase = new SpatialHash(fatMargin);
+        _worldId = AllocateWorldId(this);
     }
 
-    public int Count => _activeCount;
-    public int DynamicCount => _dynamicCount;
-    public int StaticCount => _activeCount - _dynamicCount;
-    public float FatMargin => _broadphase.FatMargin;
+    public int Count { get { ThrowIfDisposed(); return _activeCount; } }
+    public int DynamicCount { get { ThrowIfDisposed(); return _dynamicCount; } }
+    public int StaticCount { get { ThrowIfDisposed(); return _activeCount - _dynamicCount; } }
+    public float FatMargin { get { ThrowIfDisposed(); return _broadphase.FatMargin; } }
 
     public ArcHandle Add(int entityId, in Shape shape) => AddCore(entityId, shape, isStatic: false);
     public ArcHandle AddStatic(int entityId, in Shape shape) => AddCore(entityId, shape, isStatic: true);
@@ -107,7 +129,11 @@ public sealed class ArcWorld
     /// additions/updates to keep the first gameplay query free of build work.
     /// Query and ComputePairs still rebuild lazily when this is omitted.
     /// </summary>
-    public void BuildStatic() => _broadphase.BuildStatic();
+    public void BuildStatic()
+    {
+        ThrowIfDisposed();
+        _broadphase.BuildStatic();
+    }
 
     public void Update(ArcHandle handle, in Shape shape)
     {
@@ -145,7 +171,7 @@ public sealed class ArcWorld
         slot.TreeProxy = -1;
         slot.Active = false;
         slot.Static = false;
-        slot.Generation = NextGeneration(slot.Generation);
+        slot.Generation = 0;
         slot.NextFree = _freeList;
         _freeList = handle.Index;
         _activeCount--;
@@ -153,12 +179,15 @@ public sealed class ArcWorld
     }
 
     public bool IsValid(ArcHandle handle) =>
-        (uint)handle.Index < (uint)_slotCount
+        Volatile.Read(ref _disposed) == 0
+        && handle.WorldId == _worldId
+        && (uint)handle.Index < (uint)_slotCount
         && _slots[handle.Index].Active
         && _slots[handle.Index].Generation == handle.Generation;
 
     public void Clear()
     {
+        ThrowIfDisposed();
         _broadphase.Clear();
         _candidates.Clear();
         _broadphasePairs.Clear();
@@ -174,7 +203,7 @@ public sealed class ArcWorld
             slot.TreeProxy = -1;
             slot.Active = false;
             slot.Static = false;
-            slot.Generation = NextGeneration(slot.Generation);
+            slot.Generation = 0;
             slot.NextFree = i + 1 < _slotCount ? i + 1 : -1;
         }
         AdvanceRevision();
@@ -183,6 +212,7 @@ public sealed class ArcWorld
     /// <summary>Collects broadphase candidates only; no manifolds are computed.</summary>
     public void ComputePairs(List<CandidatePair> results)
     {
+        ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(results);
         results.Clear();
         _broadphase.ComputePairs(_broadphasePairs);
@@ -198,6 +228,7 @@ public sealed class ArcWorld
     /// <summary>Returns broadphase handles overlapping a transient query shape.</summary>
     public void Query(in Shape query, List<ArcHandle> results)
     {
+        ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(results);
         results.Clear();
         BpBounds bounds = new(query);
@@ -216,6 +247,7 @@ public sealed class ArcWorld
     /// </summary>
     public bool TryComputeContact(in CandidatePair pair, out ContactPair contact)
     {
+        ThrowIfDisposed();
         if (pair.Revision != _revision || !IsValid(pair.A) || !IsValid(pair.B))
         {
             contact = default;
@@ -238,6 +270,7 @@ public sealed class ArcWorld
     public bool TryComputeContact(
         in Shape query, ArcHandle target, out Manifold manifold)
     {
+        ThrowIfDisposed();
         if (!IsValid(target))
         {
             manifold = Manifold.None;
@@ -249,6 +282,11 @@ public sealed class ArcWorld
 
     private ArcHandle AddCore(int entityId, in Shape shape, bool isStatic)
     {
+        ThrowIfDisposed();
+        if ((uint)entityId > ArcHandle.MaxEntityId)
+            throw new ArgumentOutOfRangeException(nameof(entityId), entityId,
+                $"Entity id must be between 0 and {ArcHandle.MaxEntityId}.");
+
         int index = AllocateSlot();
         ref Slot slot = ref _slots[index];
         slot.Shape = shape;
@@ -257,7 +295,7 @@ public sealed class ArcWorld
         slot.TreeProxy = -1;
         slot.Active = true;
         slot.Static = isStatic;
-        if (slot.Generation == 0) slot.Generation = 1;
+        slot.Generation = AllocateHandleGeneration(_worldId);
 
         if (isStatic)
         {
@@ -291,6 +329,7 @@ public sealed class ArcWorld
 
     private ref Slot GetSlot(ArcHandle handle)
     {
+        ThrowIfDisposed();
         if (!IsValid(handle))
             throw new ArgumentException("Handle is stale or does not belong to this world.", nameof(handle));
         return ref _slots[handle.Index];
@@ -312,7 +351,67 @@ public sealed class ArcWorld
     private ArcHandle CreateHandle(int index)
     {
         ref Slot slot = ref _slots[index];
-        return new ArcHandle(index, slot.Generation, slot.EntityId);
+        return new ArcHandle(index, slot.Generation, _worldId, slot.EntityId);
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        _broadphase.Clear();
+        _candidates.Clear();
+        _broadphasePairs.Clear();
+        Array.Clear(_slots, 0, _slotCount);
+        _slotCount = 0;
+        _freeList = -1;
+        _activeCount = 0;
+        _dynamicCount = 0;
+        ReleaseWorldId(this, _worldId);
+    }
+
+    private static uint AllocateWorldId(ArcWorld owner)
+    {
+        lock (s_worldIdGate)
+        {
+            for (uint id = 1; id <= MaxWorldCount; id++)
+            {
+                WeakReference<ArcWorld>? slot = s_worldOwners[id];
+                if (slot != null && slot.TryGetTarget(out ArcWorld? existing)
+                    && Volatile.Read(ref existing._disposed) == 0)
+                    continue;
+
+                s_worldOwners[id] = new WeakReference<ArcWorld>(owner);
+                return id;
+            }
+        }
+        throw new InvalidOperationException(
+            $"At most {MaxWorldCount} ArcWorld instances may be alive at once.");
+    }
+
+    private static void ReleaseWorldId(ArcWorld owner, uint worldId)
+    {
+        lock (s_worldIdGate)
+        {
+            WeakReference<ArcWorld>? slot = s_worldOwners[worldId];
+            if (slot != null && slot.TryGetTarget(out ArcWorld? existing)
+                && ReferenceEquals(existing, owner))
+                s_worldOwners[worldId] = null;
+        }
+    }
+
+    private static uint AllocateHandleGeneration(uint worldId)
+    {
+        uint generation;
+        do
+        {
+            generation = unchecked((uint)Interlocked.Increment(
+                ref s_nextHandleGenerations[worldId]));
+        } while (generation == 0);
+        return generation;
+    }
+
+    private void ThrowIfDisposed()
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
     }
 
     private void AdvanceRevision()
@@ -321,9 +420,4 @@ public sealed class ArcWorld
         if (_revision == 0) _revision = 1;
     }
 
-    private static uint NextGeneration(uint generation)
-    {
-        generation++;
-        return generation == 0 ? 1u : generation;
-    }
 }

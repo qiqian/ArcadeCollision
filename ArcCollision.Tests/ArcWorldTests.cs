@@ -3,6 +3,10 @@ using Xunit;
 
 namespace ArcCollision.Tests;
 
+[CollectionDefinition("ArcWorld lifecycle", DisableParallelization = true)]
+public sealed class ArcWorldLifecycleCollection { }
+
+[Collection("ArcWorld lifecycle")]
 public class ArcWorldTests
 {
     [Fact]
@@ -17,6 +21,173 @@ public class ArcWorldTests
     public void HandlesCarryEntityIdAndRemainCompact()
     {
         Assert.Equal(12, System.Runtime.CompilerServices.Unsafe.SizeOf<ArcHandle>());
+        Assert.Equal(0x0FFF_FFFF, ArcHandle.MaxEntityId);
+        Assert.Equal(15, ArcWorld.MaxWorldCount);
+    }
+
+    [Fact]
+    public void HandlesFromAnotherWorldAreRejected()
+    {
+        using var first = new ArcWorld();
+        using var second = new ArcWorld();
+        ArcHandle foreign = first.Add(1, new Circle(Vec2.Zero, 1));
+        ArcHandle local = second.Add(2, new Circle(Vec2.Zero, 1));
+
+        Assert.False(second.IsValid(foreign));
+        Assert.True(second.IsValid(local));
+        Assert.Throws<ArgumentException>(() =>
+            second.Update(foreign, new Circle(new Vec2(10, 0), 1)));
+        Assert.Throws<ArgumentException>(() => second.Remove(foreign));
+        Assert.True(second.IsValid(local));
+    }
+
+    [Fact]
+    public void EntityIdUsesLow28BitsAndRejectsOutOfRangeValues()
+    {
+        using var world = new ArcWorld();
+        ArcHandle maximum = world.Add(ArcHandle.MaxEntityId,
+            new Circle(Vec2.Zero, 1));
+
+        Assert.Equal(ArcHandle.MaxEntityId, maximum.EntityId);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            world.Add(-1, new Circle(Vec2.Zero, 1)));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            world.Add(ArcHandle.MaxEntityId + 1, new Circle(Vec2.Zero, 1)));
+    }
+
+    [Fact]
+    public void DisposedWorldIdIsReusedWithoutRevivingOldHandles()
+    {
+        CollectDeadWorlds();
+        var first = new ArcWorld();
+        ArcHandle stale = first.Add(1, new Circle(Vec2.Zero, 1));
+        uint releasedWorldId = stale.WorldId;
+        first.Dispose();
+        first.Dispose();
+
+        using var replacement = new ArcWorld();
+        ArcHandle current = replacement.Add(2, new Circle(Vec2.Zero, 1));
+
+        Assert.Equal(releasedWorldId, current.WorldId);
+        Assert.NotEqual(stale.Generation, current.Generation);
+        Assert.False(replacement.IsValid(stale));
+        Assert.True(replacement.IsValid(current));
+        Assert.Throws<ObjectDisposedException>(() =>
+            first.Add(3, new Circle(Vec2.Zero, 1)));
+    }
+
+    [Fact]
+    public void WorldIdPoolLimitsLiveWorldsToFourBitCapacity()
+    {
+        CollectDeadWorlds();
+        var worlds = new ArcWorld[ArcWorld.MaxWorldCount];
+        try
+        {
+            for (int i = 0; i < worlds.Length; i++)
+                worlds[i] = new ArcWorld();
+
+            Assert.Throws<InvalidOperationException>(() => new ArcWorld());
+            var worldIds = new HashSet<uint>();
+            for (int i = 0; i < worlds.Length; i++)
+            {
+                ArcHandle handle = worlds[i].Add(i, new Circle(Vec2.Zero, 0));
+                Assert.Equal(i, handle.EntityId);
+                Assert.True(worldIds.Add(handle.WorldId));
+            }
+            Assert.Equal(ArcWorld.MaxWorldCount, worldIds.Count);
+        }
+        finally
+        {
+            foreach (ArcWorld? world in worlds) world?.Dispose();
+        }
+    }
+
+    [Fact]
+    public void EveryPackedWorldNibblePreservesEntityIdBits()
+    {
+        CollectDeadWorlds();
+        var worlds = new ArcWorld[ArcWorld.MaxWorldCount];
+        int[] entityIds =
+        {
+            0, 1, 0x07FF_FFFF, 0x0800_0000, ArcHandle.MaxEntityId,
+        };
+        try
+        {
+            for (int i = 0; i < worlds.Length; i++)
+            {
+                worlds[i] = new ArcWorld();
+                int entityId = entityIds[i % entityIds.Length];
+                ArcHandle handle = worlds[i].Add(entityId, new Circle(Vec2.Zero, 0));
+                Assert.Equal((uint)(i + 1), handle.WorldId);
+                Assert.Equal(entityId, handle.EntityId);
+            }
+        }
+        finally
+        {
+            foreach (ArcWorld? world in worlds) world?.Dispose();
+        }
+    }
+
+    [Fact]
+    public void ArbitraryReleasedWorldSlotsAreReused()
+    {
+        CollectDeadWorlds();
+        var worlds = new ArcWorld[ArcWorld.MaxWorldCount];
+        try
+        {
+            for (int i = 0; i < worlds.Length; i++) worlds[i] = new ArcWorld();
+            uint[] released = { 3, 8, 15 };
+            foreach (uint id in released)
+            {
+                worlds[id - 1].Dispose();
+                worlds[id - 1] = null!;
+            }
+
+            var replacements = new List<ArcWorld>();
+            try
+            {
+                for (int i = 0; i < released.Length; i++) replacements.Add(new ArcWorld());
+                uint[] actual = replacements
+                    .Select(world => world.Add(0, new Circle(Vec2.Zero, 0)).WorldId)
+                    .OrderBy(id => id).ToArray();
+                Assert.Equal(released, actual);
+            }
+            finally
+            {
+                foreach (ArcWorld world in replacements) world.Dispose();
+            }
+        }
+        finally
+        {
+            foreach (ArcWorld? world in worlds) world?.Dispose();
+        }
+    }
+
+    [Fact]
+    public void RepeatedWorldRebuildNeverRevivesAStaleHandle()
+    {
+        CollectDeadWorlds();
+        ArcHandle previous = default;
+        uint worldId = 0;
+        var generations = new HashSet<uint>();
+
+        for (int cycle = 0; cycle < 512; cycle++)
+        {
+            using var world = new ArcWorld();
+            ArcHandle current = world.Add(cycle, new Circle(Vec2.Zero, 1));
+            if (cycle == 0) worldId = current.WorldId;
+            Assert.Equal(worldId, current.WorldId);
+            Assert.True(generations.Add(current.Generation));
+            if (cycle != 0) Assert.False(world.IsValid(previous));
+            previous = current;
+        }
+    }
+
+    private static void CollectDeadWorlds()
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
     }
 
     [Fact]

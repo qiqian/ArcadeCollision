@@ -17,15 +17,12 @@ namespace ArcCollision;
 /// report <c>Colliding == true</c> with <c>Depth == 0</c>, matching the boolean
 /// <see cref="Overlaps(in Shape, in Shape)"/> and the broadphase predicates.</para>
 ///
-/// <para><b>Manifold accuracy.</b> Depth and normal are exact for the primitive
-/// paths (circle/circle, circle/aabb, aabb/aabb) and accurate to a small,
-/// size-relative bound for the SAT / rotated paths (any OBB or polygon).
-/// <see cref="Manifold.Contact"/> is exact only for the circle-reduction paths;
-/// on SAT paths it is an approximate point within the operands' overlapping
-/// bounds — see <see cref="Manifold"/>. <see cref="Manifold.SeparationForA"/>
-/// resolves the reported contact feature but is not guaranteed to fully separate
-/// deeply-overlapping capsules or concave polygons in a single step; apply it
-/// iteratively until <c>Colliding</c> is false.</para>
+/// <para><b>Manifold accuracy.</b> Depth and normal are exact for primitive and
+/// convex fixed-grid paths, within projection rounding for rotated geometry.
+/// Deep capsule crossings use their rounded Minkowski difference. Concave unions
+/// accumulate convex-piece separations and return a verified one-step separation;
+/// that separation is not necessarily globally minimal. Contact is a stable hint
+/// rather than a guaranteed clipped surface anchor — see <see cref="Manifold"/>.</para>
 /// </summary>
 public static partial class Collide
 {
@@ -100,14 +97,16 @@ public static partial class Collide
             long sign = delta.X < 0 ? -1 : 1;
             FxAxis normal = sign < 0 ? -FxAxis.UnitX : FxAxis.UnitX;
             long contactX = a.Center.X + sign * a.Half.X;
-            return new FxManifold(true, normal, overlapX, new FxVec2(contactX, b.Center.Y));
+            FxVec2 contact = ClampContact(new FxVec2(contactX, b.Center.Y), a, b);
+            return new FxManifold(true, normal, overlapX, contact);
         }
         else
         {
             long sign = delta.Y < 0 ? -1 : 1;
             FxAxis normal = sign < 0 ? -FxAxis.UnitY : FxAxis.UnitY;
             long contactY = a.Center.Y + sign * a.Half.Y;
-            return new FxManifold(true, normal, overlapY, new FxVec2(b.Center.X, contactY));
+            FxVec2 contact = ClampContact(new FxVec2(b.Center.X, contactY), a, b);
+            return new FxManifold(true, normal, overlapY, contact);
         }
     }
 
@@ -164,20 +163,42 @@ public static partial class Collide
     public static Manifold CircleVsCapsule(Circle c, Capsule cap)
     {
         FxCircle cf = FxCircle.From(c);
-        FxVec2 closest = Distance.ClosestPointOnSegmentFx(
-            cf.Center, FxVec2.From(cap.A), FxVec2.From(cap.B), out _);
-        // Treat the closest point on the spine as a circle of radius cap.Radius.
-        return CircleVsCircleFx(cf, new FxCircle(closest, Fx.From(cap.Radius))).ToManifold();
+        FxVec2 a = FxVec2.From(cap.A);
+        FxVec2 b = FxVec2.From(cap.B);
+        FxVec2 closest = Distance.ClosestPointOnSegmentFx(cf.Center, a, b, out _);
+        FxCircle spinePoint = new(closest, Math.Abs(Fx.From(cap.Radius)));
+        FxVec2 delta = closest - cf.Center;
+        if (delta.LengthSq != 0 || a.X == b.X && a.Y == b.Y)
+            return CircleVsCircleFx(cf, spinePoint).ToManifold();
+
+        long depth = Math.Abs(cf.Radius) + spinePoint.Radius;
+        FxVec2 spine = b - a;
+        FxAxis normal = FxAxis.FromVector(
+            new FxVec2(-spine.Y, spine.X), FxAxis.UnitX);
+        FxVec2 contact = cf.Center + normal.Scale(Math.Abs(cf.Radius) - depth / 2);
+        return new FxManifold(true, normal, depth, contact).ToManifold();
     }
 
     public static Manifold CapsuleVsCapsule(Capsule a, Capsule b)
     {
-        Distance.ClosestPointsSegmentSegmentFx(
-            FxVec2.From(a.A), FxVec2.From(a.B), FxVec2.From(b.A), FxVec2.From(b.B),
-            out FxVec2 c1, out FxVec2 c2);
-        return CircleVsCircleFx(
-            new FxCircle(c1, Fx.From(a.Radius)),
-            new FxCircle(c2, Fx.From(b.Radius))).ToManifold();
+        FxVec2 a0 = FxVec2.From(a.A);
+        FxVec2 a1 = FxVec2.From(a.B);
+        FxVec2 b0 = FxVec2.From(b.A);
+        FxVec2 b1 = FxVec2.From(b.B);
+        long radiusA = Math.Abs(Fx.From(a.Radius));
+        long radiusB = Math.Abs(Fx.From(b.Radius));
+        var difference = new ConvexProxy(
+            a0 - b0, a1 - b0, a1 - b1, a0 - b1, radiusA + radiusB);
+        FxManifold configuration = Sat(
+            difference, new ConvexProxy(FxVec2.Zero, 0));
+        if (!configuration.Colliding) return Manifold.None;
+
+        FxAxis normal = configuration.Normal;
+        FxVec2 contact = ClampContact(
+            Midpoint(CapsuleSupport(a0, a1, radiusA, normal),
+                CapsuleSupport(b0, b1, radiusB, -normal)),
+            SegmentBounds(a0, a1, radiusA), SegmentBounds(b0, b1, radiusB));
+        return new FxManifold(true, normal, configuration.Depth, contact).ToManifold();
     }
 
     public static Manifold CapsuleVsAabb(Capsule cap, Aabb box)
@@ -257,6 +278,9 @@ public static partial class Collide
     {
         int piecesA = PieceCount(a);
         int piecesB = PieceCount(b);
+        if (piecesA > 1 || piecesB > 1)
+            return ConcaveShapeVsShape(a, b, piecesA, piecesB);
+
         FxManifold best = FxManifold.None;
 
         for (int pieceA = 0; pieceA < piecesA; pieceA++)
@@ -269,10 +293,93 @@ public static partial class Collide
                     best = candidate;
             }
         }
-        if (best.Colliding && best.Normal.Dot(ShapeCenter(b) - ShapeCenter(a)) < 0)
-            best = new FxManifold(true, -best.Normal, best.Depth, best.Contact);
         return best.ToManifold();
     }
+
+    private static Manifold ConcaveShapeVsShape(
+        in Shape a, in Shape b, int piecesA, int piecesB)
+    {
+        FxVec2 offset = FxVec2.Zero;
+        FxManifold first = FindDeepestPieceContact(a, b, piecesA, piecesB, offset);
+        if (!first.Colliding) return Manifold.None;
+
+        int iterationLimit = Math.Min(64, 8 + 2 * (piecesA + piecesB));
+        for (int iteration = 0; iteration < iterationLimit; iteration++)
+        {
+            FxManifold candidate = FindDeepestPieceContact(
+                a, b, piecesA, piecesB, offset);
+            if (!candidate.Colliding)
+            {
+                long depth = offset.Length + 2;
+                FxAxis normal = FxAxis.FromVector(-offset, first.Normal);
+                return new FxManifold(true, normal, depth, first.Contact).ToManifold();
+            }
+
+            long stepDepth = candidate.Depth + 2;
+            offset -= candidate.Normal.Scale(stepDepth);
+        }
+
+        BpBounds boundsA = new(a);
+        BpBounds boundsB = new(b);
+        FxVec2 separation = GuaranteedBoundsSeparation(boundsA, boundsB);
+        FxAxis fallbackNormal = FxAxis.FromVector(-separation, first.Normal);
+        return new FxManifold(true, fallbackNormal, separation.Length, first.Contact).ToManifold();
+    }
+
+    private static FxVec2 GuaranteedBoundsSeparation(in BpBounds a, in BpBounds b)
+    {
+        long left = b.MinX - a.MaxX - 2;
+        long right = b.MaxX - a.MinX + 2;
+        long down = b.MinY - a.MaxY - 2;
+        long up = b.MaxY - a.MinY + 2;
+
+        FxVec2 best = new(left, 0);
+        ulong magnitude = Fx.Magnitude(left);
+        if (Fx.Magnitude(right) < magnitude)
+        {
+            best = new FxVec2(right, 0);
+            magnitude = Fx.Magnitude(right);
+        }
+        if (Fx.Magnitude(down) < magnitude)
+        {
+            best = new FxVec2(0, down);
+            magnitude = Fx.Magnitude(down);
+        }
+        if (Fx.Magnitude(up) < magnitude)
+            best = new FxVec2(0, up);
+        return best;
+    }
+
+    private static FxManifold FindDeepestPieceContact(
+        in Shape a, in Shape b, int piecesA, int piecesB, FxVec2 offsetA)
+    {
+        FxManifold best = FxManifold.None;
+        for (int pieceA = 0; pieceA < piecesA; pieceA++)
+        {
+            ConvexProxy proxyA = CreateProxy(a, pieceA).Translated(offsetA);
+            for (int pieceB = 0; pieceB < piecesB; pieceB++)
+            {
+                FxManifold candidate = Sat(proxyA, CreateProxy(b, pieceB));
+                if (candidate.Colliding && IsBetterPieceContact(candidate, best))
+                    best = candidate;
+            }
+        }
+        return best;
+    }
+
+    private static bool IsBetterPieceContact(FxManifold candidate, FxManifold best)
+    {
+        if (!best.Colliding || candidate.Depth > best.Depth) return true;
+        if (candidate.Depth < best.Depth) return false;
+
+        FxAxis candidateAxis = CanonicalAxis(candidate.Normal);
+        FxAxis bestAxis = CanonicalAxis(best.Normal);
+        return candidateAxis.X < bestAxis.X
+            || candidateAxis.X == bestAxis.X && candidateAxis.Y < bestAxis.Y;
+    }
+
+    private static FxAxis CanonicalAxis(FxAxis axis) =>
+        axis.X < 0 || axis.X == 0 && axis.Y < 0 ? -axis : axis;
 
     private static Manifold Reverse(Manifold manifold) => manifold.Colliding
         ? new Manifold(true, -manifold.Normal, manifold.Depth, manifold.Contact)
@@ -384,16 +491,15 @@ public static partial class Collide
     private static Manifold BoxVsBox(in BoxProxy a, in BoxProxy b)
     {
         long depth = long.MaxValue;
+        long overlap = long.MaxValue;
         FxAxis axis = FxAxis.UnitX;
-        if (!TestBoxAxis(a.AxisX, a, b, ref depth, ref axis)
-            || !TestBoxAxis(a.AxisY, a, b, ref depth, ref axis)
-            || !TestBoxAxis(b.AxisX, a, b, ref depth, ref axis)
-            || !TestBoxAxis(b.AxisY, a, b, ref depth, ref axis))
+        if (!TestBoxAxis(a.AxisX, a, b, ref overlap, ref depth, ref axis)
+            || !TestBoxAxis(a.AxisY, a, b, ref overlap, ref depth, ref axis)
+            || !TestBoxAxis(b.AxisX, a, b, ref overlap, ref depth, ref axis)
+            || !TestBoxAxis(b.AxisY, a, b, ref overlap, ref depth, ref axis))
             return Manifold.None;
 
         FxAxis normalAxis = axis;
-        if (normalAxis.Dot(b.Center - a.Center) < 0) normalAxis = -normalAxis;
-        FxVec2 normal = normalAxis.ToFxVec2();
         FxVec2 contact = ClampContact(
             Midpoint(BoxSupport(a, normalAxis), BoxSupport(b, -normalAxis)), BoxBounds(a), BoxBounds(b));
         return new FxManifold(true, normalAxis, depth, contact).ToManifold();
@@ -407,17 +513,23 @@ public static partial class Collide
 
     private static bool TestBoxAxis(
         FxAxis testAxis, in BoxProxy a, in BoxProxy b,
-        ref long bestDepth, ref FxAxis bestAxis)
+        ref long bestOverlap, ref long bestDepth, ref FxAxis bestAxis)
     {
         ProjectBox(a, testAxis, out long minA, out long maxA);
         ProjectBox(b, testAxis, out long minB, out long maxB);
-        long overlap = Math.Min(maxA - minB, maxB - minA);
+        long towardPositive = maxA - minB;
+        long towardNegative = maxB - minA;
+        long overlap = Math.Min(towardPositive, towardNegative);
         if (overlap < 0) return false;
         long depth = Fx.RoundDiv(overlap, FxAxis.One);
-        if (depth < bestDepth)
+        FxAxis oriented = OrientAxis(
+            testAxis, towardPositive, towardNegative, b.Center - a.Center);
+        if (overlap < bestOverlap || overlap == bestOverlap &&
+            IsCanonicalAxisBefore(oriented, bestAxis))
         {
+            bestOverlap = overlap;
             bestDepth = depth;
-            bestAxis = testAxis;
+            bestAxis = oriented;
         }
         return true;
     }
@@ -452,16 +564,17 @@ public static partial class Collide
         FxVec2 b = FxVec2.From(capsule.B);
         long radius = Math.Abs(Fx.From(capsule.Radius));
         long depth = long.MaxValue;
+        long overlap = long.MaxValue;
         FxAxis axis = FxAxis.UnitX;
 
-        if (!TestCapsuleBoxAxis(box.AxisX, a, b, radius, box, ref depth, ref axis)
-            || !TestCapsuleBoxAxis(box.AxisY, a, b, radius, box, ref depth, ref axis))
+        if (!TestCapsuleBoxAxis(box.AxisX, a, b, radius, box, ref overlap, ref depth, ref axis)
+            || !TestCapsuleBoxAxis(box.AxisY, a, b, radius, box, ref overlap, ref depth, ref axis))
             return Manifold.None;
 
         FxVec2 spine = b - a;
         if (spine.LengthSq != 0 && !TestCapsuleBoxAxis(
                 FxAxis.FromVector(new FxVec2(-spine.Y, spine.X), FxAxis.UnitY),
-                a, b, radius, box, ref depth, ref axis))
+                a, b, radius, box, ref overlap, ref depth, ref axis))
             return Manifold.None;
 
         for (int corner = 0; corner < 4; corner++)
@@ -471,14 +584,11 @@ public static partial class Collide
             FxVec2 rawAxis = closest - vertex;
             if (rawAxis.LengthSq != 0 && !TestCapsuleBoxAxis(
                     FxAxis.FromVector(rawAxis, FxAxis.UnitX),
-                    a, b, radius, box, ref depth, ref axis))
+                    a, b, radius, box, ref overlap, ref depth, ref axis))
                 return Manifold.None;
         }
 
         FxAxis normalAxis = axis;
-        FxVec2 center = Midpoint(a, b);
-        if (normalAxis.Dot(box.Center - center) < 0) normalAxis = -normalAxis;
-        FxVec2 normal = normalAxis.ToFxVec2();
         FxVec2 contact = ClampContact(
             Midpoint(CapsuleSupport(a, b, radius, normalAxis), BoxSupport(box, -normalAxis)),
             SegmentBounds(a, b, radius), BoxBounds(box));
@@ -514,17 +624,23 @@ public static partial class Collide
 
     private static bool TestCapsuleBoxAxis(
         FxAxis testAxis, FxVec2 a, FxVec2 b, long radius, in BoxProxy box,
-        ref long bestDepth, ref FxAxis bestAxis)
+        ref long bestOverlap, ref long bestDepth, ref FxAxis bestAxis)
     {
         ProjectCapsule(a, b, radius, testAxis, out long minA, out long maxA);
         ProjectBox(box, testAxis, out long minB, out long maxB);
-        long overlap = Math.Min(maxA - minB, maxB - minA);
+        long towardPositive = maxA - minB;
+        long towardNegative = maxB - minA;
+        long overlap = Math.Min(towardPositive, towardNegative);
         if (overlap < 0) return false;
         long depth = Fx.RoundDiv(overlap, FxAxis.One);
-        if (depth < bestDepth)
+        FxAxis oriented = OrientAxis(testAxis, towardPositive, towardNegative,
+            box.Center - Midpoint(a, b));
+        if (overlap < bestOverlap || overlap == bestOverlap &&
+            IsCanonicalAxisBefore(oriented, bestAxis))
         {
+            bestOverlap = overlap;
             bestDepth = depth;
-            bestAxis = testAxis;
+            bestAxis = oriented;
         }
         return true;
     }
@@ -568,6 +684,7 @@ public static partial class Collide
         private readonly FxVec2[]? _vertices;
         private readonly int[]? _indices;
         private readonly int _indexOffset;
+        private readonly FxVec2 _offset;
 
         public readonly int Count;
         public readonly long Radius;
@@ -604,6 +721,13 @@ public static partial class Collide
                 (v0.Y + v1.Y + v2.Y + v3.Y) / 4);
         }
 
+        public ConvexProxy(
+            FxVec2 v0, FxVec2 v1, FxVec2 v2, FxVec2 v3, long radius)
+            : this(v0, v1, v2, v3)
+        {
+            Radius = radius;
+        }
+
         public ConvexProxy(FxVec2[] vertices)
         {
             this = default;
@@ -622,11 +746,29 @@ public static partial class Collide
             Center = Average(vertices, indices, indexOffset, Count);
         }
 
+        private ConvexProxy(in ConvexProxy source, FxVec2 offset)
+        {
+            _v0 = source._v0;
+            _v1 = source._v1;
+            _v2 = source._v2;
+            _v3 = source._v3;
+            _vertices = source._vertices;
+            _indices = source._indices;
+            _indexOffset = source._indexOffset;
+            _offset = source._offset + offset;
+            Count = source.Count;
+            Radius = source.Radius;
+            Center = source.Center + offset;
+        }
+
+        public ConvexProxy Translated(FxVec2 offset) =>
+            offset.X == 0 && offset.Y == 0 ? this : new ConvexProxy(this, offset);
+
         public FxVec2 Vertex(int index)
         {
             if (_vertices != null)
-                return _vertices[_indices == null ? index : _indices[_indexOffset + index]];
-            return index switch
+                return _vertices[_indices == null ? index : _indices[_indexOffset + index]] + _offset;
+            FxVec2 vertex = index switch
             {
                 0 => _v0,
                 1 => _v1,
@@ -634,6 +776,7 @@ public static partial class Collide
                 3 => _v3,
                 _ => throw new ArgumentOutOfRangeException(nameof(index)),
             };
+            return vertex + _offset;
         }
 
         public int EdgeCount => Count <= 1 ? 0 : Count == 2 ? 1 : Count;
@@ -660,6 +803,7 @@ public static partial class Collide
     private struct SatState
     {
         public long Depth;
+        public long Overlap;
         public FxAxis Axis;
         public bool HasAxis;
     }
@@ -717,7 +861,7 @@ public static partial class Collide
 
     private static FxManifold Sat(in ConvexProxy a, in ConvexProxy b)
     {
-        var state = new SatState { Depth = long.MaxValue };
+        var state = new SatState { Depth = long.MaxValue, Overlap = long.MaxValue };
         if (!TestEdgeAxes(a, a, b, ref state) || !TestEdgeAxes(b, a, b, ref state))
             return FxManifold.None;
 
@@ -737,9 +881,6 @@ public static partial class Collide
         }
 
         FxAxis normalAxis = state.Axis;
-        if (normalAxis.Dot(b.Center - a.Center) < 0)
-            normalAxis = -normalAxis;
-        FxVec2 normal = normalAxis.ToFxVec2();
         FxVec2 pointA = Support(a, normalAxis);
         FxVec2 pointB = Support(b, -normalAxis);
         FxVec2 contact = ClampContact(Midpoint(pointA, pointB), ProxyBounds(a), ProxyBounds(b));
@@ -860,13 +1001,37 @@ public static partial class Collide
 
         long overlap = Math.Min(towardPositive, towardNegative);
         long depth = Fx.RoundDiv(overlap, FxAxis.One);
-        if (!state.HasAxis || depth < state.Depth)
+        FxAxis oriented = OrientAxis(unit, towardPositive, towardNegative,
+            b.Center - a.Center);
+        bool better = !state.HasAxis || overlap < state.Overlap;
+        if (!better && state.HasAxis && overlap == state.Overlap)
+        {
+            better = IsCanonicalAxisBefore(oriented, state.Axis);
+        }
+        if (better)
         {
             state.HasAxis = true;
             state.Depth = depth;
-            state.Axis = unit;
+            state.Overlap = overlap;
+            state.Axis = oriented;
         }
         return true;
+    }
+
+    private static FxAxis OrientAxis(
+        FxAxis axis, long towardPositive, long towardNegative, FxVec2 centerDelta)
+    {
+        if (towardPositive < towardNegative) return axis;
+        if (towardNegative < towardPositive) return -axis;
+        return axis.Dot(centerDelta) < 0 ? -axis : axis;
+    }
+
+    private static bool IsCanonicalAxisBefore(FxAxis candidate, FxAxis current)
+    {
+        FxAxis candidateAxis = CanonicalAxis(candidate);
+        FxAxis currentAxis = CanonicalAxis(current);
+        return candidateAxis.X < currentAxis.X
+            || candidateAxis.X == currentAxis.X && candidateAxis.Y < currentAxis.Y;
     }
 
     private static void Project(
@@ -948,9 +1113,4 @@ public static partial class Collide
             new FxVec2((maxX - minX) / 2, (maxY - minY) / 2));
     }
 
-    private static FxVec2 ShapeCenter(in Shape shape)
-    {
-        BpBounds bounds = new(shape);
-        return new FxVec2(bounds.CenterX, bounds.CenterY);
-    }
 }

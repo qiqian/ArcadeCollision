@@ -44,6 +44,16 @@ public class SweepAccuracyTests
         return max + s.R;
     }
 
+    private static TestGeo.DShape DoubleShape(in Shape shape) => shape.Kind switch
+    {
+        ShapeKind.Circle => TestGeo.DShape.From(shape.Circle),
+        ShapeKind.Aabb => TestGeo.DShape.From(shape.Aabb),
+        ShapeKind.Capsule => TestGeo.DShape.From(shape.Capsule),
+        ShapeKind.Obb => TestGeo.DShape.From(shape.Obb),
+        ShapeKind.Polygon => TestGeo.DShape.From(shape.Polygon),
+        _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+    };
+
     private sealed record OracleSweep(bool DefiniteHit, bool DefiniteMiss, double TouchTime, bool StartsInside);
 
     /// <summary>Sampled + bisected first-touch analysis of clearance(t).</summary>
@@ -274,10 +284,10 @@ public class SweepAccuracyTests
         Assert.True(inside.Hit);
         Assert.Equal(0f, inside.Time);
 
-        // Exact tangent ray (grazes y = 1): accepting or rejecting is legal,
-        // but it must not crash and any hit must be within the motion range.
+        // Touch semantics are inclusive, including an exact tangent.
         SweepHit tangent = Sweep.RayVsCircle(new Vec2(-5f, 1f), new Vec2(10f, 0f), circle);
-        if (tangent.Hit) Assert.InRange(tangent.Time, 0f, 1f);
+        Assert.True(tangent.Hit);
+        Assert.InRange(tangent.Time, 0f, 1f);
 
         // Ray starting exactly on the surface, moving inward → t = 0.
         SweepHit onSurface = Sweep.RayVsCircle(new Vec2(-1f, 0f), new Vec2(2f, 0f), circle);
@@ -292,6 +302,84 @@ public class SweepAccuracyTests
         // Slab-parallel ray exactly on the box boundary must not divide by zero.
         var box = new Aabb(new Vec2(0, 0), new Vec2(1, 1));
         SweepHit parallel = Sweep.RayVsAabb(new Vec2(-5f, 1f), new Vec2(10f, 0f), box);
-        if (parallel.Hit) Assert.InRange(parallel.Time, 0f, 1f);
+        Assert.True(parallel.Hit);
+        Assert.InRange(parallel.Time, 0f, 1f);
+    }
+
+    [Fact]
+    public void InitialOverlap_FastSweepsReturnUnitSeparationNormals()
+    {
+        SweepHit boxes = Sweep.MovingAabbVsAabb(
+            new Aabb(Vec2.Zero, new Vec2(2, 2)), new Vec2(1, 0),
+            new Aabb(new Vec2(1, 0), new Vec2(2, 2)));
+        SweepHit circleBox = Sweep.MovingCircleVsAabb(
+            new Circle(Vec2.Zero, 1), new Vec2(1, 0),
+            new Aabb(Vec2.Zero, new Vec2(5, 5)));
+        SweepHit circleObb = Sweep.MovingCircleVsObb(
+            new Circle(Vec2.Zero, 1), new Vec2(1, 0),
+            new Obb(Vec2.Zero, new Vec2(5, 5), 0.37f));
+
+        foreach (SweepHit hit in new[] { boxes, circleBox, circleObb })
+        {
+            Assert.True(hit.Hit);
+            Assert.Equal(0f, hit.Time);
+            Assert.InRange(hit.Normal.Length, 1f - 2e-6f, 1f + 2e-6f);
+        }
+    }
+
+    [Theory]
+    [InlineData(131, Regime.Origin)]
+    [InlineData(132, Regime.Mid)]
+    public void MovingShapeVsShape_FeatureCastPairsMatchSampledOracle(
+        int seed, Regime regime)
+    {
+        var gen = new FuzzGen(seed, regime);
+        for (int i = 0; i < Iterations / 3; i++)
+        {
+            Shape mover;
+            Shape target;
+            Vec2 at = gen.Position();
+            if (i % 4 == 0)
+            {
+                Capsule capsule = TestGeo.Q(gen.Capsule(at));
+                mover = capsule;
+                target = TestGeo.Q(gen.Obb(gen.Near(
+                    capsule.A, FuzzGen.Reach(capsule) + gen.SizeMax)));
+            }
+            else if (i % 4 == 1)
+            {
+                Obb box = TestGeo.Q(gen.Obb(at));
+                mover = box;
+                target = TestGeo.Q(gen.Capsule(gen.Near(
+                    box.Center, FuzzGen.Reach(box) + gen.SizeMax)));
+            }
+            else
+            {
+                Polygon polygon;
+                try { polygon = TestGeo.Q(gen.ConvexPolygon(at)); }
+                catch (ArgumentException) { continue; }
+                if (!polygon.IsConvex || Tol.IsSliver(polygon)) continue;
+                target = polygon;
+                mover = i % 4 == 2
+                    ? new Shape(TestGeo.Q(gen.Circle(gen.Near(
+                        polygon.Bounds.Center, FuzzGen.Reach(polygon) + gen.SizeMax))))
+                    : new Shape(TestGeo.Q(gen.Capsule(gen.Near(
+                        polygon.Bounds.Center, FuzzGen.Reach(polygon) + gen.SizeMax))));
+            }
+
+            Vec2 motion = TestGeo.Q(new Vec2(
+                gen.NextFloat(-gen.SizeMax * 4, gen.SizeMax * 4),
+                gen.NextFloat(-gen.SizeMax * 4, gen.SizeMax * 4)));
+            TestGeo.DShape dm = DoubleShape(mover);
+            TestGeo.DShape dt = DoubleShape(target);
+            double gray = 8.0 / 256.0 + (Reach(dm) + Reach(dt)) * 0.0000001;
+            string repro = $"[{regime} seed={seed} i={i}] {mover.Kind} motion "
+                + $"{TestGeo.Dump(motion)} vs {target.Kind}";
+
+            Assert.Equal(SweepAlgorithm.FeatureCast, Sweep.GetAlgorithm(mover, target));
+            SweepHit hit = Sweep.MovingShapeVsShape(mover, motion, target);
+            OracleSweep oracle = Analyze(dm, dt, motion, gray);
+            CheckSweep(hit, oracle, dm, dt, motion, gray, repro);
+        }
     }
 }

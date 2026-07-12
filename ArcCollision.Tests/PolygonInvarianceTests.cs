@@ -151,19 +151,11 @@ public class PolygonInvarianceTests
             Manifold m = Collide.ShapeVsShape(polyShape, other);
             if (!m.Colliding || m.Depth <= 0f) continue;
 
-            // The manifold reports one triangle sub-shape's MTV; for a concave
-            // (or deeply overlapping) case a single step can push into another
-            // piece, so the physics-relevant guarantee is that ITERATED MTV
-            // resolution converges to separation.
-            Shape moved = polyShape;
-            Manifold after = m;
-            for (int step = 0; step < 24 && after.Colliding; step++)
-            {
-                moved = moved.Moved(after.SeparationForA - after.Normal * (2f / 256f));
-                after = Collide.ShapeVsShape(moved, other);
-            }
+            Shape moved = polyShape.Moved(
+                m.SeparationForA - m.Normal * (2f / 256f));
+            Manifold after = Collide.ShapeVsShape(moved, other);
             Assert.True(!after.Colliding,
-                $"iterated separation did not converge (depth {m.Depth:R} -> {after.Depth:R}): {repro}");
+                $"separation did not resolve overlap (depth {m.Depth:R} -> {after.Depth:R}): {repro}");
             resolved++;
         }
 

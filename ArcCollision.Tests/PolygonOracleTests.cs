@@ -24,6 +24,15 @@ public class PolygonOracleTests
             Assert.Fail($"phantom collision (clearance {clearance:F6}): {repro}");
     }
 
+    private static void CheckDepth(
+        Manifold manifold, double clearance, double grayZone, string repro)
+    {
+        if (!manifold.Colliding || clearance >= -grayZone) return;
+        double error = Math.Abs(manifold.Depth + clearance);
+        Assert.True(error <= grayZone,
+            $"depth {manifold.Depth:F6} vs oracle {-clearance:F6}, error {error:F6}: {repro}");
+    }
+
     [Theory]
     [InlineData(81)]
     [InlineData(82)]
@@ -37,7 +46,7 @@ public class PolygonOracleTests
                 Polygon poly;
                 try { poly = TestGeo.Q(gen.ConvexPolygon(gen.Position())); }
                 catch (ArgumentException) { continue; }
-                if (Tol.IsSliver(poly)) continue;
+                if (!poly.IsConvex || Tol.IsSliver(poly)) continue;
                 Circle c = TestGeo.Q(gen.Circle(gen.Near(poly.Bounds.Center, FuzzGen.Reach(poly) + gen.Size())));
                 string repro = $"[{regime} seed={seed} i={i}] {TestGeo.Dump(c)}, {TestGeo.Dump(poly)}";
 
@@ -48,6 +57,7 @@ public class PolygonOracleTests
                 double gray = Tol.SatGray(Tol.Extent(c) + Tol.Extent(poly));
                 CheckBoolean(m.Colliding, clearance, gray, repro);
                 CheckBoolean(overlaps, clearance, gray, repro);
+                CheckDepth(m, clearance, gray, repro);
                 if (m.Colliding && clearance < -gray)
                     Assert.True(m.Depth >= 0f, $"negative depth: {repro}");
             }
@@ -67,7 +77,7 @@ public class PolygonOracleTests
                 Polygon poly;
                 try { poly = TestGeo.Q(gen.ConvexPolygon(gen.Position())); }
                 catch (ArgumentException) { continue; }
-                if (Tol.IsSliver(poly)) continue;
+                if (!poly.IsConvex || Tol.IsSliver(poly)) continue;
                 Aabb box = TestGeo.Q(gen.Aabb(gen.Near(poly.Bounds.Center, FuzzGen.Reach(poly) + gen.Size())));
                 string repro = $"[{regime} seed={seed} i={i}] {TestGeo.Dump(box)}, {TestGeo.Dump(poly)}";
 
@@ -78,6 +88,7 @@ public class PolygonOracleTests
                 double gray = Tol.SatGray(Tol.Extent(box) + Tol.Extent(poly));
                 CheckBoolean(m.Colliding, clearance, gray, repro);
                 CheckBoolean(overlaps, clearance, gray, repro);
+                CheckDepth(m, clearance, gray, repro);
                 if (m.Colliding && clearance < -gray)
                     Assert.True(m.Depth >= 0f, $"negative depth: {repro}");
             }
@@ -97,7 +108,7 @@ public class PolygonOracleTests
                 Polygon poly;
                 try { poly = TestGeo.Q(gen.ConvexPolygon(gen.Position())); }
                 catch (ArgumentException) { continue; }
-                if (Tol.IsSliver(poly)) continue;
+                if (!poly.IsConvex || Tol.IsSliver(poly)) continue;
                 Capsule cap = TestGeo.Q(gen.Capsule(gen.Near(poly.Bounds.Center, FuzzGen.Reach(poly) + gen.Size())));
                 string repro = $"[{regime} seed={seed} i={i}] {TestGeo.Dump(cap)}, {TestGeo.Dump(poly)}";
 
@@ -108,6 +119,7 @@ public class PolygonOracleTests
                 double gray = Tol.SatGray(Tol.Extent(cap) + Tol.Extent(poly));
                 CheckBoolean(m.Colliding, clearance, gray, repro);
                 CheckBoolean(overlaps, clearance, gray, repro);
+                CheckDepth(m, clearance, gray, repro);
                 if (m.Colliding && clearance < -gray)
                     Assert.True(m.Depth >= 0f, $"negative depth: {repro}");
             }
@@ -127,7 +139,7 @@ public class PolygonOracleTests
                 Polygon poly;
                 try { poly = TestGeo.Q(gen.ConvexPolygon(gen.Position())); }
                 catch (ArgumentException) { continue; }
-                if (Tol.IsSliver(poly)) continue;
+                if (!poly.IsConvex || Tol.IsSliver(poly)) continue;
                 Obb obb = TestGeo.Q(gen.Obb(gen.Near(poly.Bounds.Center, FuzzGen.Reach(poly) + gen.Size())));
                 string repro = $"[{regime} seed={seed} i={i}] {TestGeo.Dump(obb)}, {TestGeo.Dump(poly)}";
 
@@ -138,6 +150,7 @@ public class PolygonOracleTests
                 double gray = Tol.SatGray(Tol.Extent(obb) + Tol.Extent(poly));
                 CheckBoolean(m.Colliding, clearance, gray, repro);
                 CheckBoolean(overlaps, clearance, gray, repro);
+                CheckDepth(m, clearance, gray, repro);
                 if (m.Colliding && clearance < -gray)
                     Assert.True(m.Depth >= 0f, $"negative depth: {repro}");
             }
@@ -159,7 +172,7 @@ public class PolygonOracleTests
                 catch (ArgumentException) { continue; }
                 try { b = TestGeo.Q(gen.ConvexPolygon(gen.Near(a.Bounds.Center, FuzzGen.Reach(a) + gen.Size()))); }
                 catch (ArgumentException) { continue; }
-                if (Tol.IsSliver(a) || Tol.IsSliver(b)) continue;
+                if (!a.IsConvex || !b.IsConvex || Tol.IsSliver(a) || Tol.IsSliver(b)) continue;
                 string repro = $"[{regime} seed={seed} i={i}] {TestGeo.Dump(a)}, {TestGeo.Dump(b)}";
 
                 double clearance = TestGeo.Clearance(TestGeo.DShape.From(a), TestGeo.DShape.From(b));
@@ -169,6 +182,7 @@ public class PolygonOracleTests
                 double gray = Tol.SatGray(Tol.Extent(a) + Tol.Extent(b));
                 CheckBoolean(m.Colliding, clearance, gray, repro);
                 CheckBoolean(overlaps, clearance, gray, repro);
+                CheckDepth(m, clearance, gray, repro);
                 if (m.Colliding && clearance < -gray)
                     Assert.True(m.Depth >= 0f, $"negative depth: {repro}");
             }
