@@ -139,6 +139,64 @@ bool test_vertex_edge_axes(
     return true;
 }
 
+// Boolean-only SAT equivalents of the manifold helpers above. These deliberately
+// stop at the first separating axis and never select an MTV, compute a depth, or
+// construct a contact point. Keep this path operation-for-operation aligned with
+// Collide.SatOverlaps in the managed reference.
+bool axis_overlaps(Vec raw, const Proxy& a, const Proxy& b, bool& has_axis) {
+    const Axis axis = Axis::from_vector(raw, {});
+    if (axis.is_zero()) return true;
+    has_axis = true;
+    int64_t min_a, max_a, min_b, max_b;
+    project(a, axis, min_a, max_a);
+    project(b, axis, min_b, max_b);
+    return max_a >= min_b && max_b >= min_a;
+}
+
+bool edge_axes_overlap(
+    const Proxy& source, const Proxy& a, const Proxy& b, bool& has_axis) {
+    for (int edge = 0; edge < source.edge_count(); ++edge) {
+        const auto points = source.edge(edge);
+        const Vec delta = points.second - points.first;
+        if (!axis_overlaps({-delta.y, delta.x}, a, b, has_axis))
+            return false;
+    }
+    return true;
+}
+
+bool vertex_edge_axes_overlap(
+    const Proxy& vertices, const Proxy& edges,
+    const Proxy& a, const Proxy& b, bool& has_axis) {
+    for (Vec point : vertices.vertices) {
+        for (int edge = 0; edge < edges.edge_count(); ++edge) {
+            const auto segment = edges.edge(edge);
+            const Vec closest = closest_segment(
+                point, segment.first, segment.second);
+            if (!axis_overlaps(closest - point, a, b, has_axis))
+                return false;
+        }
+    }
+    return true;
+}
+
+bool sat_overlaps(const Proxy& a, const Proxy& b) {
+    bool has_axis = false;
+    if (!edge_axes_overlap(a, a, b, has_axis)
+        || !edge_axes_overlap(b, a, b, has_axis))
+        return false;
+    if (a.radius != 0 || b.radius != 0) {
+        if (!vertex_edge_axes_overlap(a, b, a, b, has_axis)
+            || !vertex_edge_axes_overlap(b, a, a, b, has_axis))
+            return false;
+    }
+    if (!has_axis) {
+        Vec fallback = b.center - a.center;
+        if (fallback.length_sq() == 0) fallback = {FxOne, 0};
+        return axis_overlaps(fallback, a, b, has_axis);
+    }
+    return true;
+}
+
 // Circle/circle: exact. Touch (distance == radius) counts as colliding, depth 0.
 // Contact is the overlap midpoint along the centre line; the many other pairs
 // reduce to this (closest points expanded by their radii).
@@ -478,6 +536,122 @@ FxManifold capsule_capsule(arc_capsule first, arc_capsule second) {
     return {true, normal, configuration.depth, contact};
 }
 
+// -----------------------------------------------------------------------------
+// Boolean-only primitive overlap tests
+
+bool circle_circle_overlap(arc_circle a, arc_circle b) {
+    const FxCircle first = fixed_circle(a);
+    const FxCircle second = fixed_circle(b);
+    const int64_t radius = first.radius + second.radius;
+    return first.center.dist_sq(second.center) <= radius * radius;
+}
+
+bool circle_aabb_overlap(arc_circle circle, arc_aabb box) {
+    const FxCircle source = fixed_circle(circle);
+    const FxAabb target = fixed_aabb(box);
+    const Vec min = target.min();
+    const Vec max = target.max();
+    const Vec closest{
+        std::clamp(source.center.x, min.x, max.x),
+        std::clamp(source.center.y, min.y, max.y)};
+    return source.center.dist_sq(closest) <= source.radius * source.radius;
+}
+
+bool circle_capsule_overlap(arc_circle circle, arc_capsule capsule) {
+    const Vec center = Vec::from(circle.center);
+    const Vec closest = closest_segment(
+        center, Vec::from(capsule.a), Vec::from(capsule.b));
+    const int64_t radius = std::abs(from_float(circle.radius))
+        + std::abs(from_float(capsule.radius));
+    return center.dist_sq(closest) <= radius * radius;
+}
+
+bool capsule_capsule_overlap(arc_capsule a, arc_capsule b) {
+    Vec closest_a;
+    Vec closest_b;
+    const int64_t distance_sq = closest_segments(
+        Vec::from(a.a), Vec::from(a.b), Vec::from(b.a), Vec::from(b.b),
+        closest_a, closest_b);
+    const int64_t radius = std::abs(from_float(a.radius))
+        + std::abs(from_float(b.radius));
+    return distance_sq <= radius * radius;
+}
+
+bool aabb_aabb_overlap(arc_aabb a, arc_aabb b) {
+    const FxAabb first = fixed_aabb(a);
+    const FxAabb second = fixed_aabb(b);
+    const Vec first_min = first.min();
+    const Vec first_max = first.max();
+    const Vec second_min = second.min();
+    const Vec second_max = second.max();
+    return first_max.x >= second_min.x && second_max.x >= first_min.x
+        && first_max.y >= second_min.y && second_max.y >= first_min.y;
+}
+
+bool box_axis_overlaps(Axis axis, const BoxProxy& a, const BoxProxy& b) {
+    int64_t min_a, max_a, min_b, max_b;
+    project_box(a, axis, min_a, max_a);
+    project_box(b, axis, min_b, max_b);
+    return max_a >= min_b && max_b >= min_a;
+}
+
+bool boxes_overlap(const BoxProxy& a, const BoxProxy& b) {
+    return box_axis_overlaps(a.axis_x, a, b)
+        && box_axis_overlaps(a.axis_y, a, b)
+        && box_axis_overlaps(b.axis_x, a, b)
+        && box_axis_overlaps(b.axis_y, a, b);
+}
+
+bool circle_obb_overlap(arc_circle circle, arc_obb box) {
+    const BoxProxy target = make_box(box);
+    const FxCircle source = fixed_circle(circle);
+    const Vec delta = source.center - target.center;
+    const int64_t local_x = round_div(target.axis_x.dot(delta), AxisOne);
+    const int64_t local_y = round_div(target.axis_y.dot(delta), AxisOne);
+    const int64_t closest_x = std::clamp(local_x, -target.half_x, target.half_x);
+    const int64_t closest_y = std::clamp(local_y, -target.half_y, target.half_y);
+    const int64_t dx = local_x - closest_x;
+    const int64_t dy = local_y - closest_y;
+    const int64_t radius = std::abs(source.radius);
+    return dx * dx + dy * dy <= radius * radius;
+}
+
+bool capsule_box_axis_overlaps(
+    Axis axis, Vec a, Vec b, int64_t radius, const BoxProxy& box) {
+    int64_t min_a, max_a, min_b, max_b;
+    project_capsule(a, b, radius, axis, min_a, max_a);
+    project_box(box, axis, min_b, max_b);
+    return max_a >= min_b && max_b >= min_a;
+}
+
+bool capsule_box_overlap(arc_capsule capsule, const BoxProxy& box) {
+    const Vec a = Vec::from(capsule.a);
+    const Vec b = Vec::from(capsule.b);
+    const int64_t radius = std::abs(from_float(capsule.radius));
+    if (!capsule_box_axis_overlaps(box.axis_x, a, b, radius, box)
+        || !capsule_box_axis_overlaps(box.axis_y, a, b, radius, box))
+        return false;
+
+    const Vec spine = b - a;
+    if (spine.length_sq() != 0
+        && !capsule_box_axis_overlaps(
+            Axis::from_vector({-spine.y, spine.x}, Axis::unit_y()),
+            a, b, radius, box))
+        return false;
+
+    for (int corner = 0; corner < 4; ++corner) {
+        const Vec vertex = box_vertex(box, corner);
+        const Vec closest = closest_segment(vertex, a, b);
+        const Vec raw_axis = closest - vertex;
+        if (raw_axis.length_sq() != 0
+            && !capsule_box_axis_overlaps(
+                Axis::from_vector(raw_axis, Axis::unit_x()),
+                a, b, radius, box))
+            return false;
+    }
+    return true;
+}
+
 // For concave shapes, the representative manifold is the deepest overlapping
 // convex sub-piece (ties broken canonically for determinism).
 bool is_better_piece(FxManifold candidate, FxManifold best) {
@@ -637,7 +811,49 @@ FxManifold collide_shapes(const arc_shape& a, const arc_shape& b) {
 }
 
 bool overlap_shapes(const arc_shape& a, const arc_shape& b) {
-    return collide_shapes(a, b).colliding;
+    if (a.kind == ARC_SHAPE_CIRCLE && b.kind == ARC_SHAPE_CIRCLE)
+        return circle_circle_overlap(a.circle, b.circle);
+    if (a.kind == ARC_SHAPE_CIRCLE && b.kind == ARC_SHAPE_AABB)
+        return circle_aabb_overlap(a.circle, b.aabb);
+    if (a.kind == ARC_SHAPE_AABB && b.kind == ARC_SHAPE_CIRCLE)
+        return circle_aabb_overlap(b.circle, a.aabb);
+    if (a.kind == ARC_SHAPE_CIRCLE && b.kind == ARC_SHAPE_CAPSULE)
+        return circle_capsule_overlap(a.circle, b.capsule);
+    if (a.kind == ARC_SHAPE_CAPSULE && b.kind == ARC_SHAPE_CIRCLE)
+        return circle_capsule_overlap(b.circle, a.capsule);
+    if (a.kind == ARC_SHAPE_CIRCLE && b.kind == ARC_SHAPE_OBB)
+        return circle_obb_overlap(a.circle, b.obb);
+    if (a.kind == ARC_SHAPE_OBB && b.kind == ARC_SHAPE_CIRCLE)
+        return circle_obb_overlap(b.circle, a.obb);
+    if (a.kind == ARC_SHAPE_AABB && b.kind == ARC_SHAPE_AABB)
+        return aabb_aabb_overlap(a.aabb, b.aabb);
+    if (a.kind == ARC_SHAPE_AABB && b.kind == ARC_SHAPE_CAPSULE)
+        return capsule_box_overlap(b.capsule, make_box(a.aabb));
+    if (a.kind == ARC_SHAPE_CAPSULE && b.kind == ARC_SHAPE_AABB)
+        return capsule_box_overlap(a.capsule, make_box(b.aabb));
+    if (a.kind == ARC_SHAPE_AABB && b.kind == ARC_SHAPE_OBB)
+        return boxes_overlap(make_box(a.aabb), make_box(b.obb));
+    if (a.kind == ARC_SHAPE_OBB && b.kind == ARC_SHAPE_AABB)
+        return boxes_overlap(make_box(a.obb), make_box(b.aabb));
+    if (a.kind == ARC_SHAPE_CAPSULE && b.kind == ARC_SHAPE_OBB)
+        return capsule_box_overlap(a.capsule, make_box(b.obb));
+    if (a.kind == ARC_SHAPE_OBB && b.kind == ARC_SHAPE_CAPSULE)
+        return capsule_box_overlap(b.capsule, make_box(a.obb));
+    if (a.kind == ARC_SHAPE_OBB && b.kind == ARC_SHAPE_OBB)
+        return boxes_overlap(make_box(a.obb), make_box(b.obb));
+    if (a.kind == ARC_SHAPE_CAPSULE && b.kind == ARC_SHAPE_CAPSULE)
+        return capsule_capsule_overlap(a.capsule, b.capsule);
+
+    // As in the managed dispatch, only polygon-containing pairs reach generic
+    // SAT. Concave polygons return true as soon as any convex-piece pair overlaps.
+    const int pieces_a = piece_count(a);
+    const int pieces_b = piece_count(b);
+    for (int i = 0; i < pieces_a; ++i) {
+        const Proxy proxy_a = make_proxy(a, i);
+        for (int j = 0; j < pieces_b; ++j)
+            if (sat_overlaps(proxy_a, make_proxy(b, j))) return true;
+    }
+    return false;
 }
 
 } // namespace arc
