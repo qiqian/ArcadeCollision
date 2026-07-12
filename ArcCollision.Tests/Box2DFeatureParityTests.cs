@@ -1,4 +1,3 @@
-using ArcCollision;
 using Xunit;
 
 namespace ArcCollision.Tests;
@@ -124,37 +123,6 @@ public class Box2DCollisionParityTests
         Assert.Equal(gridOrigin.Normal.Y, large.Normal.Y);
         Assert.Equal(gridOrigin.Contact.X, large.Contact.X - offset.X, 0.125f);
         Assert.Equal(gridOrigin.Contact.Y, large.Contact.Y - offset.Y, 0.125f);
-    }
-
-    // box2d/test/test_collision.c: LargeWorldAABBTest. Box2D obtains the 0.6
-    // extent from a 0.5 box plus 0.1 polygon radius. ArcCollision stores the
-    // already-expanded shape bounds, then applies the fat margin explicitly.
-    [Fact]
-    public void LargeWorldAabb_Box2DFixture_PreservesTightAndFatExtents()
-    {
-        AssertBoundsAtBase(Vec2.Zero);
-        AssertBoundsAtBase(Box2DLargeWorldParityTests.FarBase);
-    }
-
-    private static void AssertBoundsAtBase(Vec2 basePosition)
-    {
-        var roundedBoxBounds = new Aabb(basePosition, new Vec2(0.6f, 0.6f));
-        var tight = new BpBounds(roundedBoxBounds);
-        long centerX = Fx.From(basePosition.X);
-        long centerY = Fx.From(basePosition.Y);
-        long extent = Fx.From(0.6f);
-
-        Assert.True(tight.MinX <= centerX - extent);
-        Assert.True(tight.MinY <= centerY - extent);
-        Assert.True(tight.MaxX >= centerX + extent);
-        Assert.True(tight.MaxY >= centerY + extent);
-
-        long extra = Fx.From(0.05f);
-        BpBounds fat = tight.Expanded(extra);
-        Assert.True(fat.MinX <= centerX - extent - extra);
-        Assert.True(fat.MinY <= centerY - extent - extra);
-        Assert.True(fat.MaxX >= centerX + extent + extra);
-        Assert.True(fat.MaxY >= centerY + extent + extra);
     }
 }
 

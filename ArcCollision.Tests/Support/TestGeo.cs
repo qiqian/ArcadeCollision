@@ -36,6 +36,24 @@ internal static class TestGeo
         return new Polygon(verts);
     }
 
+    public static bool IsConvex(Polygon polygon)
+    {
+        int sign = 0;
+        for (int i = 0; i < polygon.Count; i++)
+        {
+            Vec2 a = polygon[i];
+            Vec2 b = polygon[(i + 1) % polygon.Count];
+            Vec2 c = polygon[(i + 2) % polygon.Count];
+            double cross = (double)(b.X - a.X) * (c.Y - a.Y)
+                - (double)(b.Y - a.Y) * (c.X - a.X);
+            if (cross == 0) continue;
+            int current = cross > 0 ? 1 : -1;
+            if (sign != 0 && sign != current) return false;
+            sign = current;
+        }
+        return sign != 0;
+    }
+
     // ------------------------------------------------------------ repro dump
 
     public static string Dump(Circle c) => $"new Circle(new Vec2({R(c.Center.X)}, {R(c.Center.Y)}), {R(c.Radius)})";

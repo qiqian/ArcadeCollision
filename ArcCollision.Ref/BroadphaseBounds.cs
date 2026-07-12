@@ -2,7 +2,12 @@ using System;
 
 namespace ArcCollision;
 
-internal readonly struct BpBounds
+/// <summary>
+/// Broadphase axis-aligned bounds in the 24.8 fixed-point grid (integer min/max),
+/// the currency of <see cref="DynamicAabbTree"/> and <see cref="StaticBvh"/>. Kept
+/// as exact integers so tree structure and pair enumeration are deterministic.
+/// </summary>
+public readonly struct BpBounds
 {
     public readonly long MinX, MinY, MaxX, MaxY;
 

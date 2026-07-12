@@ -3,7 +3,14 @@ using System.Collections.Generic;
 
 namespace ArcCollision;
 
-internal sealed class StaticBvh
+/// <summary>
+/// Static broadphase: a SAH-binned AABB tree built in one shot from a set of
+/// leaves, supporting box queries. This is the reference managed implementation;
+/// <see cref="ArcCollision.Wrapper"/> exposes a drop-in native equivalent with the
+/// same public surface. <see cref="IDisposable"/> is implemented for parity with
+/// the native wrapper (managed instances are simply GC-collected).
+/// </summary>
+public sealed class StaticBvh : IDisposable
 {
     private const int BinCount = 12;
 
@@ -72,6 +79,17 @@ internal sealed class StaticBvh
     }
 
     public void Clear()
+    {
+        _root = -1;
+        _nodeCount = 0;
+    }
+
+    /// <summary>
+    /// Releases the BVH. The managed implementation has nothing unmanaged to free
+    /// (it just resets); the method exists so the public surface matches the native
+    /// wrapper, which frees its native handle here.
+    /// </summary>
+    public void Dispose()
     {
         _root = -1;
         _nodeCount = 0;

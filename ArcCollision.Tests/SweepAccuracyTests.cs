@@ -1,4 +1,3 @@
-using System;
 using ArcCollision.Tests.Support;
 using Xunit;
 
@@ -44,15 +43,16 @@ public class SweepAccuracyTests
         return max + s.R;
     }
 
-    private static TestGeo.DShape DoubleShape(in Shape shape) => shape.Kind switch
+    private static TestGeo.DShape DoubleShape(in Shape shape)
     {
-        ShapeKind.Circle => TestGeo.DShape.From(shape.Circle),
-        ShapeKind.Aabb => TestGeo.DShape.From(shape.Aabb),
-        ShapeKind.Capsule => TestGeo.DShape.From(shape.Capsule),
-        ShapeKind.Obb => TestGeo.DShape.From(shape.Obb),
-        ShapeKind.Polygon => TestGeo.DShape.From(shape.Polygon),
-        _ => throw new ArgumentOutOfRangeException(nameof(shape)),
-    };
+        if (shape.TryGetCircle(out Circle circle)) return TestGeo.DShape.From(circle);
+        if (shape.TryGetAabb(out Aabb aabb)) return TestGeo.DShape.From(aabb);
+        if (shape.TryGetCapsule(out Capsule capsule)) return TestGeo.DShape.From(capsule);
+        if (shape.TryGetObb(out Obb obb)) return TestGeo.DShape.From(obb);
+        if (shape.TryGetPolygon(out Polygon? polygon, out _, out _))
+            return TestGeo.DShape.From(polygon!);
+        throw new ArgumentOutOfRangeException(nameof(shape));
+    }
 
     private sealed record OracleSweep(bool DefiniteHit, bool DefiniteMiss, double TouchTime, bool StartsInside);
 
@@ -358,7 +358,7 @@ public class SweepAccuracyTests
                 Polygon polygon;
                 try { polygon = TestGeo.Q(gen.ConvexPolygon(at)); }
                 catch (ArgumentException) { continue; }
-                if (!polygon.IsConvex || Tol.IsSliver(polygon)) continue;
+                if (!TestGeo.IsConvex(polygon) || Tol.IsSliver(polygon)) continue;
                 target = polygon;
                 mover = i % 4 == 2
                     ? new Shape(TestGeo.Q(gen.Circle(gen.Near(

@@ -1,0 +1,99 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 20, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "desktop-base",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ARC_BUILD_SHARED_LIBRARY": "ON"
+      }
+    },
+    {
+      "name": "windows-x64",
+      "inherits": "desktop-base",
+      "binaryDir": "${sourceDir}/build/windows-x64",
+      "architecture": "x64"
+    },
+    {
+      "name": "windows-x64-static",
+      "inherits": "windows-x64",
+      "binaryDir": "${sourceDir}/build/windows-x64-static",
+      "cacheVariables": {
+        "ARC_BUILD_SHARED_LIBRARY": "OFF"
+      }
+    },
+    {
+      "name": "windows-x86",
+      "inherits": "desktop-base",
+      "binaryDir": "${sourceDir}/build/windows-x86",
+      "architecture": "Win32"
+    },
+    {
+      "name": "windows-arm64",
+      "inherits": "desktop-base",
+      "binaryDir": "${sourceDir}/build/windows-arm64",
+      "architecture": "ARM64"
+    },
+    {
+      "name": "linux-x64",
+      "inherits": "desktop-base",
+      "binaryDir": "${sourceDir}/build/linux-x64",
+      "generator": "Ninja"
+    },
+    {
+      "name": "macos-universal",
+      "inherits": "desktop-base",
+      "binaryDir": "${sourceDir}/build/macos-universal",
+      "generator": "Ninja",
+      "cacheVariables": { "CMAKE_OSX_ARCHITECTURES": "arm64;x86_64" }
+    },
+    {
+      "name": "android-arm64",
+      "inherits": "desktop-base",
+      "binaryDir": "${sourceDir}/build/android-arm64",
+      "generator": "Ninja",
+      "toolchainFile": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
+      "cacheVariables": {
+        "ANDROID_ABI": "arm64-v8a",
+        "ANDROID_PLATFORM": "android-24"
+      }
+    },
+    {
+      "name": "ios-arm64",
+      "binaryDir": "${sourceDir}/build/ios-arm64",
+      "generator": "Xcode",
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0",
+        "ARC_BUILD_SHARED_LIBRARY": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "windows-x64", "configurePreset": "windows-x64", "configuration": "Release" },
+    { "name": "windows-x64-static", "configurePreset": "windows-x64-static", "configuration": "Release" },
+    { "name": "windows-x86", "configurePreset": "windows-x86", "configuration": "Release" },
+    { "name": "windows-arm64", "configurePreset": "windows-arm64", "configuration": "Release" },
+    { "name": "linux-x64", "configurePreset": "linux-x64" },
+    { "name": "macos-universal", "configurePreset": "macos-universal" },
+    { "name": "android-arm64", "configurePreset": "android-arm64" },
+    { "name": "ios-arm64", "configurePreset": "ios-arm64", "configuration": "Release" }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-x64",
+      "configurePreset": "windows-x64",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "windows-x64-static",
+      "configurePreset": "windows-x64-static",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

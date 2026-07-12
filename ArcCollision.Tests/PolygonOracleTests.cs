@@ -1,4 +1,3 @@
-using System;
 using ArcCollision.Tests.Support;
 using Xunit;
 
@@ -46,7 +45,7 @@ public class PolygonOracleTests
                 Polygon poly;
                 try { poly = TestGeo.Q(gen.ConvexPolygon(gen.Position())); }
                 catch (ArgumentException) { continue; }
-                if (!poly.IsConvex || Tol.IsSliver(poly)) continue;
+                if (!TestGeo.IsConvex(poly) || Tol.IsSliver(poly)) continue;
                 Circle c = TestGeo.Q(gen.Circle(gen.Near(poly.Bounds.Center, FuzzGen.Reach(poly) + gen.Size())));
                 string repro = $"[{regime} seed={seed} i={i}] {TestGeo.Dump(c)}, {TestGeo.Dump(poly)}";
 
@@ -77,7 +76,7 @@ public class PolygonOracleTests
                 Polygon poly;
                 try { poly = TestGeo.Q(gen.ConvexPolygon(gen.Position())); }
                 catch (ArgumentException) { continue; }
-                if (!poly.IsConvex || Tol.IsSliver(poly)) continue;
+                if (!TestGeo.IsConvex(poly) || Tol.IsSliver(poly)) continue;
                 Aabb box = TestGeo.Q(gen.Aabb(gen.Near(poly.Bounds.Center, FuzzGen.Reach(poly) + gen.Size())));
                 string repro = $"[{regime} seed={seed} i={i}] {TestGeo.Dump(box)}, {TestGeo.Dump(poly)}";
 
@@ -108,7 +107,7 @@ public class PolygonOracleTests
                 Polygon poly;
                 try { poly = TestGeo.Q(gen.ConvexPolygon(gen.Position())); }
                 catch (ArgumentException) { continue; }
-                if (!poly.IsConvex || Tol.IsSliver(poly)) continue;
+                if (!TestGeo.IsConvex(poly) || Tol.IsSliver(poly)) continue;
                 Capsule cap = TestGeo.Q(gen.Capsule(gen.Near(poly.Bounds.Center, FuzzGen.Reach(poly) + gen.Size())));
                 string repro = $"[{regime} seed={seed} i={i}] {TestGeo.Dump(cap)}, {TestGeo.Dump(poly)}";
 
@@ -139,7 +138,7 @@ public class PolygonOracleTests
                 Polygon poly;
                 try { poly = TestGeo.Q(gen.ConvexPolygon(gen.Position())); }
                 catch (ArgumentException) { continue; }
-                if (!poly.IsConvex || Tol.IsSliver(poly)) continue;
+                if (!TestGeo.IsConvex(poly) || Tol.IsSliver(poly)) continue;
                 Obb obb = TestGeo.Q(gen.Obb(gen.Near(poly.Bounds.Center, FuzzGen.Reach(poly) + gen.Size())));
                 string repro = $"[{regime} seed={seed} i={i}] {TestGeo.Dump(obb)}, {TestGeo.Dump(poly)}";
 
@@ -172,7 +171,8 @@ public class PolygonOracleTests
                 catch (ArgumentException) { continue; }
                 try { b = TestGeo.Q(gen.ConvexPolygon(gen.Near(a.Bounds.Center, FuzzGen.Reach(a) + gen.Size()))); }
                 catch (ArgumentException) { continue; }
-                if (!a.IsConvex || !b.IsConvex || Tol.IsSliver(a) || Tol.IsSliver(b)) continue;
+                if (!TestGeo.IsConvex(a) || !TestGeo.IsConvex(b)
+                    || Tol.IsSliver(a) || Tol.IsSliver(b)) continue;
                 string repro = $"[{regime} seed={seed} i={i}] {TestGeo.Dump(a)}, {TestGeo.Dump(b)}";
 
                 double clearance = TestGeo.Clearance(TestGeo.DShape.From(a), TestGeo.DShape.From(b));

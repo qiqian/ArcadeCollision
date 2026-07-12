@@ -1,4 +1,3 @@
-using ArcCollision;
 using Xunit;
 
 namespace ArcCollision.Tests;

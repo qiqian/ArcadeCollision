@@ -3,7 +3,14 @@ using System.Collections.Generic;
 
 namespace ArcCollision;
 
-internal sealed class DynamicAabbTree
+/// <summary>
+/// Incremental broadphase: a self-balancing AABB tree of fat proxies supporting
+/// add/move/remove and box queries. This is the reference managed implementation;
+/// <see cref="ArcCollision.Wrapper"/> exposes a drop-in native equivalent with the
+/// same public surface. <see cref="IDisposable"/> is implemented for parity with
+/// the native wrapper (managed instances are simply GC-collected).
+/// </summary>
+public sealed class DynamicAabbTree : IDisposable
 {
     private struct Node
     {
@@ -45,6 +52,18 @@ internal sealed class DynamicAabbTree
         _nodeCount = 0;
         _leafCount = 0;
         InitializeFreeList(0);
+    }
+
+    /// <summary>
+    /// Releases the tree. The managed implementation has nothing unmanaged to free
+    /// (it just resets); the method exists so the public surface matches the native
+    /// wrapper, which frees its native handle here.
+    /// </summary>
+    public void Dispose()
+    {
+        _root = -1;
+        _nodeCount = 0;
+        _leafCount = 0;
     }
 
     /// <summary>Creates a leaf and returns its direct proxy index.</summary>
@@ -105,8 +124,16 @@ internal sealed class DynamicAabbTree
         }
     }
 
-    internal void ComputeSelfPairs(List<(int A, int B)> results)
+    /// <summary>
+    /// Enumerates every pair of proxies whose fat bounds overlap, each pair
+    /// ordered so the smaller id comes first. This is the standalone-broadphase
+    /// capability the internal node accessors exist to serve; the raw per-node
+    /// accessors themselves stay internal (walking them across the native
+    /// boundary would cost one call per node).
+    /// </summary>
+    public void ComputeSelfPairs(List<(int A, int B)> results)
     {
+        ArgumentNullException.ThrowIfNull(results);
         if (_root == -1 || _leafCount < 2)
             return;
 

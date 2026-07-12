@@ -1,12 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <RootNamespace>ArcCollision.Tests</RootNamespace>
-    <DefineConstants>$(DefineConstants);REFERENCE_BACKEND</DefineConstants>
+    <DefineConstants>$(DefineConstants);WRAPPER_BACKEND</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,8 +15,15 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ArcCollision.Ref\ArcCollision.Ref.csproj" />
     <ProjectReference Include="..\ArcCollision.Wrapper\ArcCollision.Wrapper.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\ArcCollision.Tests\*.cs"
+             Exclude="..\ArcCollision.Tests\WrapperParityTests.cs;..\ArcCollision.Tests\RefBackendUsings.cs"
+             Link="Shared\%(Filename)%(Extension)" />
+    <Compile Include="..\ArcCollision.Tests\Support\*.cs"
+             Link="Shared\Support\%(Filename)%(Extension)" />
   </ItemGroup>
 
   <Target Name="CopyNativeArcCollisionForTests" AfterTargets="Build">
@@ -34,5 +40,4 @@
     <Copy SourceFiles="@(NativeArcCollision)" DestinationFolder="$(TargetDir)"
           SkipUnchangedFiles="true" Condition="'@(NativeArcCollision)' != ''" />
   </Target>
-
 </Project>

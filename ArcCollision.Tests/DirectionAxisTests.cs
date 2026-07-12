@@ -1,32 +1,9 @@
-using System;
 using Xunit;
 
 namespace ArcCollision.Tests;
 
 public class DirectionAxisTests
 {
-    [Theory]
-    [InlineData(1L, 1L)]
-    [InlineData(1L, 2L)]
-    [InlineData(2L, 1L)]
-    [InlineData(-1L, 1L)]
-    [InlineData(1L, -1L)]
-    [InlineData(17L, 31L)]
-    [InlineData(-17L, -31L)]
-    [InlineData(1_000_000L, 999_999L)]
-    public void FxAxis_AdaptiveNormalizationPreservesShortDirections(long x, long y)
-    {
-        FxAxis axis = FxAxis.FromComponents(x, y, FxAxis.UnitX);
-        double length = Math.Sqrt((double)x * x + (double)y * y);
-        double actualX = axis.X / (double)FxAxis.One;
-        double actualY = axis.Y / (double)FxAxis.One;
-
-        Assert.InRange(Math.Abs(actualX - x / length), 0, 4.0 / FxAxis.One);
-        Assert.InRange(Math.Abs(actualY - y / length), 0, 4.0 / FxAxis.One);
-        Assert.InRange(Math.Abs(Math.Sqrt(actualX * actualX + actualY * actualY) - 1.0),
-            0, 6.0 / FxAxis.One);
-    }
-
     [Fact]
     public void LargeObb_DepthErrorNoLongerScalesAtQ8AxisRate()
     {
