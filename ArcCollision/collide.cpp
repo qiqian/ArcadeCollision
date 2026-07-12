@@ -549,6 +549,13 @@ FxManifold concave_collision(
 
 } // namespace
 
+// Fixed-point primitive collisions exposed for the sweep's "already overlapping
+// at t=0" branches, so they resolve the initial contact from the fixed values
+// directly -- no arc_shape/float round-trip, bit-identical to the C# reference.
+FxManifold collide_circle_circle(FxCircle a, FxCircle b) { return circle_circle(a, b); }
+FxManifold collide_circle_aabb(FxCircle circle, FxAabb box) { return circle_aabb(circle, box); }
+FxManifold collide_aabb_aabb(FxAabb a, FxAabb b) { return aabb_aabb(a, b); }
+
 // Generic convex-vs-convex SAT: test both hulls' edge normals, add vertex/edge
 // axes when either shape is rounded (a radius), and fall back to the centre delta
 // for the fully-contained case. Result is the minimum-penetration axis + clamped

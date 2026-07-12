@@ -61,12 +61,7 @@ FxSweep moving_circle_aabb(FxCircle mover, Vec motion, FxAabb box) {
         add_earlier(ray_circle(mover.center, motion, {corner, radius}), best);
     if (!best.hit) return {};
     if (best.time == 0) {
-        arc_shape first{}, second{};
-        first.kind = ARC_SHAPE_CIRCLE;
-        first.circle = {mover.center.to_public(), to_float(mover.radius)};
-        second.kind = ARC_SHAPE_AABB;
-        second.aabb = {box.center.to_public(), box.half.to_public()};
-        const FxManifold initial = collide_shapes(first, second);
+        const FxManifold initial = collide_circle_aabb(mover, box);
         if (initial.colliding)
             return {true, 0, -initial.normal, initial.contact};
     }
@@ -79,11 +74,7 @@ FxSweep moving_circle_circle(FxCircle mover, Vec motion, FxCircle target) {
         mover.center, motion, {target.center, target.radius + mover.radius});
     if (!hit.hit) return {};
     if (hit.time == 0) {
-        arc_shape first{}, second{};
-        first.kind = second.kind = ARC_SHAPE_CIRCLE;
-        first.circle = {mover.center.to_public(), to_float(mover.radius)};
-        second.circle = {target.center.to_public(), to_float(target.radius)};
-        const FxManifold initial = collide_shapes(first, second);
+        const FxManifold initial = collide_circle_circle(mover, target);
         if (initial.colliding)
             return {true, 0, -initial.normal, initial.contact};
     }
@@ -130,11 +121,7 @@ FxSweep moving_aabb_aabb(FxAabb mover, Vec motion, FxAabb target) {
     const FxSweep hit = ray_aabb(mover.center, motion, expanded);
     if (!hit.hit) return {};
     if (hit.time == 0) {
-        arc_shape first{}, second{};
-        first.kind = second.kind = ARC_SHAPE_AABB;
-        first.aabb = {mover.center.to_public(), mover.half.to_public()};
-        second.aabb = {target.center.to_public(), target.half.to_public()};
-        const FxManifold initial = collide_shapes(first, second);
+        const FxManifold initial = collide_aabb_aabb(mover, target);
         if (initial.colliding)
             return {true, 0, -initial.normal, initial.contact};
     }
