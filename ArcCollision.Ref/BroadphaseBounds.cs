@@ -56,7 +56,7 @@ internal readonly struct BpBounds
         long y = Fx.From(box.Center.Y);
         long halfX = Math.Abs(Fx.From(box.HalfExtents.X));
         long halfY = Math.Abs(Fx.From(box.HalfExtents.Y));
-        FxAxis axisX = FxAxis.FromRotation(box.Rotation);
+        FxAxis axisX = FxAxis.FromAngle(box.Angle);
         FxAxis axisY = axisX.Perpendicular;
         long extentX = Fx.CeilDivPositive(
             Math.Abs(axisX.X) * halfX + Math.Abs(axisY.X) * halfY, FxAxis.One);

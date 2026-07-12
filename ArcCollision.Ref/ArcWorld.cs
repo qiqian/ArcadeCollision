@@ -36,7 +36,8 @@ public readonly struct ArcHandle : IEquatable<ArcHandle>
         Index == other.Index && Generation == other.Generation && WorldId == other.WorldId;
 
     public override bool Equals(object? obj) => obj is ArcHandle other && Equals(other);
-    public override int GetHashCode() => HashCode.Combine(Index, Generation, WorldId);
+    public override int GetHashCode() =>
+        DeterministicHash.Combine(Index, Generation, WorldId);
     public static bool operator ==(ArcHandle left, ArcHandle right) => left.Equals(right);
     public static bool operator !=(ArcHandle left, ArcHandle right) => !left.Equals(right);
 }
@@ -85,6 +86,33 @@ public sealed class ArcWorld : IDisposable
     private static readonly WeakReference<ArcWorld>?[] s_worldOwners =
         new WeakReference<ArcWorld>?[MaxWorldCount + 1];
     private static readonly int[] s_nextHandleGenerations = new int[MaxWorldCount + 1];
+
+    private sealed class HandleComparer : IComparer<ArcHandle>
+    {
+        public static readonly HandleComparer Instance = new();
+
+        public int Compare(ArcHandle x, ArcHandle y)
+        {
+            int comparison = x.EntityId.CompareTo(y.EntityId);
+            if (comparison != 0) return comparison;
+            comparison = x.Index.CompareTo(y.Index);
+            if (comparison != 0) return comparison;
+            return x.Generation.CompareTo(y.Generation);
+        }
+    }
+
+    private sealed class CandidateComparer : IComparer<CandidatePair>
+    {
+        public static readonly CandidateComparer Instance = new();
+
+        public int Compare(CandidatePair x, CandidatePair y)
+        {
+            int comparison = HandleComparer.Instance.Compare(x.A, y.A);
+            return comparison != 0
+                ? comparison
+                : HandleComparer.Instance.Compare(x.B, y.B);
+        }
+    }
 
     private struct Slot
     {
@@ -223,6 +251,7 @@ public sealed class ArcWorld : IDisposable
                 && _slots[a].Bounds.Overlaps(_slots[b].Bounds))
                 results.Add(CreatePair(a, b));
         }
+        results.Sort(CandidateComparer.Instance);
     }
 
     /// <summary>Returns broadphase handles overlapping a transient query shape.</summary>
@@ -239,6 +268,7 @@ public sealed class ArcWorld : IDisposable
         _candidates.Clear();
         _broadphase.QueryStatic(bounds, _candidates);
         AppendQueryResults(bounds, results);
+        results.Sort(HandleComparer.Instance);
     }
 
     /// <summary>
@@ -345,8 +375,14 @@ public sealed class ArcWorld : IDisposable
         }
     }
 
-    private CandidatePair CreatePair(int a, int b) =>
-        new(CreateHandle(a), CreateHandle(b), _revision);
+    private CandidatePair CreatePair(int a, int b)
+    {
+        ArcHandle first = CreateHandle(a);
+        ArcHandle second = CreateHandle(b);
+        return HandleComparer.Instance.Compare(first, second) <= 0
+            ? new CandidatePair(first, second, _revision)
+            : new CandidatePair(second, first, _revision);
+    }
 
     private ArcHandle CreateHandle(int index)
     {

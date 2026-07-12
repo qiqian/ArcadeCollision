@@ -236,7 +236,7 @@ public static partial class Sweep
 
     public static SweepHit MovingCircleVsObb(Circle mover, Vec2 motion, Obb target)
     {
-        FxAxis axisX = FxAxis.FromRotation(target.Rotation);
+        FxAxis axisX = FxAxis.FromAngle(target.Angle);
         FxAxis axisY = axisX.Perpendicular;
         FxVec2 targetCenter = FxVec2.From(target.Center);
         FxCircle moverFx = FxCircle.From(mover);

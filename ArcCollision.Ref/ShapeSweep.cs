@@ -434,7 +434,7 @@ public static partial class Sweep
             case ShapeKind.Obb:
             {
                 Obb box = shape.Obb;
-                FxAxis axisX = FxAxis.FromRotation(box.Rotation);
+                FxAxis axisX = FxAxis.FromAngle(box.Angle);
                 FxAxis axisY = axisX.Perpendicular;
                 FxVec2 center = FxVec2.From(box.Center);
                 FxVec2 x = axisX.Scale(Math.Abs(Fx.From(box.HalfExtents.X)));

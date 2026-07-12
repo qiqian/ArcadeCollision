@@ -28,7 +28,7 @@ internal static class TestGeo
     public static Capsule Q(Capsule c) => new(Q(c.A), Q(c.B), Q(c.Radius));
     // OBB rotation is converted directly to a Q1.30 basis by the library, so the
     // angle itself does not use the 24.8 position grid.
-    public static Obb Q(Obb o) => new(Q(o.Center), Q(o.HalfExtents), o.Rotation);
+    public static Obb Q(Obb o) => new(Q(o.Center), Q(o.HalfExtents), o.Angle);
     public static Polygon Q(Polygon p)
     {
         var verts = new Vec2[p.Count];
@@ -41,7 +41,7 @@ internal static class TestGeo
     public static string Dump(Circle c) => $"new Circle(new Vec2({R(c.Center.X)}, {R(c.Center.Y)}), {R(c.Radius)})";
     public static string Dump(Aabb b) => $"new Aabb(new Vec2({R(b.Center.X)}, {R(b.Center.Y)}), new Vec2({R(b.HalfExtents.X)}, {R(b.HalfExtents.Y)}))";
     public static string Dump(Capsule c) => $"new Capsule(new Vec2({R(c.A.X)}, {R(c.A.Y)}), new Vec2({R(c.B.X)}, {R(c.B.Y)}), {R(c.Radius)})";
-    public static string Dump(Obb o) => $"new Obb(new Vec2({R(o.Center.X)}, {R(o.Center.Y)}), new Vec2({R(o.HalfExtents.X)}, {R(o.HalfExtents.Y)}), {R(o.Rotation)})";
+    public static string Dump(Obb o) => $"new Obb(new Vec2({R(o.Center.X)}, {R(o.Center.Y)}), new Vec2({R(o.HalfExtents.X)}, {R(o.HalfExtents.Y)}), new Angle32(0x{o.Angle.Raw:X8}u))";
     public static string Dump(Vec2 v) => $"new Vec2({R(v.X)}, {R(v.Y)})";
     public static string Dump(Polygon p)
     {

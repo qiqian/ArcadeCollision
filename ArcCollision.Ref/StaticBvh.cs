@@ -39,13 +39,19 @@ internal sealed class StaticBvh
     private sealed class XComparer : IComparer<Leaf>
     {
         public static readonly XComparer Instance = new();
-        public int Compare(Leaf a, Leaf b) => a.Bounds.CenterX.CompareTo(b.Bounds.CenterX);
+        public int Compare(Leaf a, Leaf b) => CompareLeaves(a, b, axis: 0);
     }
 
     private sealed class YComparer : IComparer<Leaf>
     {
         public static readonly YComparer Instance = new();
-        public int Compare(Leaf a, Leaf b) => a.Bounds.CenterY.CompareTo(b.Bounds.CenterY);
+        public int Compare(Leaf a, Leaf b) => CompareLeaves(a, b, axis: 1);
+    }
+
+    private sealed class IdComparer : IComparer<Leaf>
+    {
+        public static readonly IdComparer Instance = new();
+        public int Compare(Leaf a, Leaf b) => a.Id.CompareTo(b.Id);
     }
 
     private Leaf[] _leaves = Array.Empty<Leaf>();
@@ -76,6 +82,7 @@ internal sealed class StaticBvh
         int leafIndex = 0;
         foreach (KeyValuePair<int, BpBounds> item in source)
             _leaves[leafIndex++] = new Leaf { Id = item.Key, Bounds = item.Value };
+        Array.Sort(_leaves, 0, count, IdComparer.Instance);
 
         int requiredNodes = count * 2 - 1;
         if (_nodes.Length < requiredNodes)
@@ -268,6 +275,26 @@ internal sealed class StaticBvh
             return 0;
         int bin = (int)(((center - min) * BinCount) / (range + 1));
         return Math.Min(bin, BinCount - 1);
+    }
+
+    private static int CompareLeaves(Leaf a, Leaf b, int axis)
+    {
+        int comparison = axis == 0
+            ? a.Bounds.CenterX.CompareTo(b.Bounds.CenterX)
+            : a.Bounds.CenterY.CompareTo(b.Bounds.CenterY);
+        if (comparison != 0) return comparison;
+        comparison = axis == 0
+            ? a.Bounds.CenterY.CompareTo(b.Bounds.CenterY)
+            : a.Bounds.CenterX.CompareTo(b.Bounds.CenterX);
+        if (comparison != 0) return comparison;
+        comparison = a.Bounds.MinX.CompareTo(b.Bounds.MinX);
+        if (comparison != 0) return comparison;
+        comparison = a.Bounds.MinY.CompareTo(b.Bounds.MinY);
+        if (comparison != 0) return comparison;
+        comparison = a.Bounds.MaxX.CompareTo(b.Bounds.MaxX);
+        if (comparison != 0) return comparison;
+        comparison = a.Bounds.MaxY.CompareTo(b.Bounds.MaxY);
+        return comparison != 0 ? comparison : a.Id.CompareTo(b.Id);
     }
 
     private void Push(ref int count, int value)

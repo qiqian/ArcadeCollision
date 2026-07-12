@@ -262,17 +262,57 @@ internal readonly struct FxAxis
     public static readonly FxAxis UnitX = new(One, 0);
     public static readonly FxAxis UnitY = new(0, One);
 
+    private static readonly int[] CordicAngles =
+    {
+        0x20000000, 0x12E4051E, 0x09FB385B, 0x051111D4,
+        0x028B0D43, 0x0145D7E1, 0x00A2F61E, 0x00517C55,
+        0x0028BE53, 0x00145F2F, 0x000A2F98, 0x000517CC,
+        0x00028BE6, 0x000145F3, 0x0000A2FA, 0x0000517D,
+        0x000028BE, 0x0000145F, 0x00000A30, 0x00000518,
+        0x0000028C, 0x00000146, 0x000000A3, 0x00000051,
+        0x00000029, 0x00000014, 0x0000000A, 0x00000005,
+        0x00000003, 0x00000001, 0x00000001,
+    };
+    private const long CordicGainInverse = 652032874;
+
     public bool IsZero => X == 0 && Y == 0;
     public FxAxis Perpendicular => new(-Y, X);
 
     public static FxAxis FromVector(FxVec2 vector, FxAxis fallback) =>
         FromComponents(vector.X, vector.Y, fallback);
 
-    public static FxAxis FromRotation(float radians)
+    public static FxAxis FromAngle(Angle32 angle)
     {
-        long x = (long)Math.Round(Math.Cos(radians) * One);
-        long y = (long)Math.Round(Math.Sin(radians) * One);
-        return FromComponents(x, y, UnitX);
+        if (angle.Raw == 0) return UnitX;
+        if (angle.Raw == 0x40000000u) return UnitY;
+        if (angle.Raw == 0x80000000u) return -UnitX;
+        if (angle.Raw == 0xC0000000u) return -UnitY;
+
+        uint quadrant = angle.Raw >> 30;
+        long phase = angle.Raw & 0x3FFFFFFFu;
+        bool swapInQuadrant = phase > 0x20000000L;
+        long z = swapInQuadrant ? 0x40000000L - phase : phase;
+
+        long x = CordicGainInverse;
+        long y = 0;
+        for (int i = 0; i < CordicAngles.Length; i++)
+        {
+            long direction = z >= 0 ? 1 : -1;
+            long nextX = x - direction * (y >> i);
+            long nextY = y + direction * (x >> i);
+            z -= direction * CordicAngles[i];
+            x = nextX;
+            y = nextY;
+        }
+        long cosine = swapInQuadrant ? y : x;
+        long sine = swapInQuadrant ? x : y;
+        return quadrant switch
+        {
+            0 => FromComponents(cosine, sine, UnitX),
+            1 => FromComponents(-sine, cosine, UnitY),
+            2 => FromComponents(-cosine, -sine, -UnitX),
+            _ => FromComponents(sine, -cosine, -UnitY),
+        };
     }
 
     public static FxAxis FromComponents(long x, long y, FxAxis fallback)

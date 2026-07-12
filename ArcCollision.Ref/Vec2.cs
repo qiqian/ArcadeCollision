@@ -75,6 +75,8 @@ public readonly struct Vec2 : IEquatable<Vec2>
 
     public bool Equals(Vec2 other) => X.Equals(other.X) && Y.Equals(other.Y);
     public override bool Equals(object? obj) => obj is Vec2 v && Equals(v);
-    public override int GetHashCode() => HashCode.Combine(X, Y);
+    public override int GetHashCode() =>
+        DeterministicHash.Combine(
+            DeterministicHash.Float(X), DeterministicHash.Float(Y));
     public override string ToString() => $"({X:0.###}, {Y:0.###})";
 }

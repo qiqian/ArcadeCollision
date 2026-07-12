@@ -59,7 +59,7 @@ public class InvarianceTests
             ShapeKind.Circle => new TShape(new Circle(C.Center + d, C.Radius)),
             ShapeKind.Aabb => new TShape(new Aabb(B.Center + d, B.HalfExtents)),
             ShapeKind.Capsule => new TShape(new Capsule(K.A + d, K.B + d, K.Radius)),
-            _ => new TShape(new Obb(O.Center + d, O.HalfExtents, O.Rotation)),
+            _ => new TShape(new Obb(O.Center + d, O.HalfExtents, O.Angle)),
         };
 
         public TShape MirrorX() => Kind switch
@@ -70,7 +70,7 @@ public class InvarianceTests
                 new Vec2(-K.A.X, K.A.Y), new Vec2(-K.B.X, K.B.Y), K.Radius)),
             // cos(-θ) == cos(θ) and sin(-θ) == -sin(θ) exactly in IEEE floats,
             // so negating the rotation mirrors the quantized axis exactly.
-            _ => new TShape(new Obb(new Vec2(-O.Center.X, O.Center.Y), O.HalfExtents, -O.Rotation)),
+            _ => new TShape(new Obb(new Vec2(-O.Center.X, O.Center.Y), O.HalfExtents, -O.Angle)),
         };
 
         /// <summary>(x, y) → (-y, x); valid for grid-rotatable kinds only.</summary>

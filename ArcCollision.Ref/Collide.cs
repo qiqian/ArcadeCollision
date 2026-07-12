@@ -446,7 +446,7 @@ public static partial class Collide
 
     private static BoxProxy CreateBox(Obb box)
     {
-        FxAxis axisX = FxAxis.FromRotation(box.Rotation);
+        FxAxis axisX = FxAxis.FromAngle(box.Angle);
         FxAxis axisY = axisX.Perpendicular;
         return new BoxProxy(FxVec2.From(box.Center), axisX, axisY,
             Math.Abs(Fx.From(box.HalfExtents.X)), Math.Abs(Fx.From(box.HalfExtents.Y)));

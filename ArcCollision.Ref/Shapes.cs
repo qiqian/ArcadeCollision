@@ -65,22 +65,26 @@ public readonly struct Aabb
     }
 }
 
-/// <summary>An oriented box defined by center, half-extents and radians.</summary>
+/// <summary>An oriented box defined by center, half-extents and a binary angle.</summary>
 public readonly struct Obb
 {
     public readonly Vec2 Center;
     public readonly Vec2 HalfExtents;
-    public readonly float Rotation;
+    public readonly Angle32 Angle;
+    public float Rotation => Angle.Radians;
 
     public Obb(Vec2 center, Vec2 halfExtents, float rotation = 0f)
+        : this(center, halfExtents, Angle32.FromRadians(rotation))
+    {
+    }
+
+    public Obb(Vec2 center, Vec2 halfExtents, Angle32 angle)
     {
         if (!(halfExtents.X >= 0f) || !(halfExtents.Y >= 0f))
             throw new ArgumentOutOfRangeException(nameof(halfExtents), halfExtents, "Half-extents must be non-negative (NaN rejected).");
-        if (!float.IsFinite(rotation))
-            throw new ArgumentOutOfRangeException(nameof(rotation), rotation, "Rotation must be finite.");
         Center = center;
         HalfExtents = halfExtents;
-        Rotation = rotation;
+        Angle = angle;
     }
 
     public Aabb Bounds
@@ -89,7 +93,7 @@ public readonly struct Obb
         {
             long halfX = Math.Abs(Fx.From(HalfExtents.X));
             long halfY = Math.Abs(Fx.From(HalfExtents.Y));
-            FxAxis axisX = FxAxis.FromRotation(Rotation);
+            FxAxis axisX = FxAxis.FromAngle(Angle);
             FxAxis axisY = axisX.Perpendicular;
             long extentX = Fx.CeilDivPositive(
                 Math.Abs(axisX.X) * halfX + Math.Abs(axisY.X) * halfY, FxAxis.One);
@@ -99,7 +103,7 @@ public readonly struct Obb
         }
     }
 
-    public Obb Moved(Vec2 delta) => new(Center + delta, HalfExtents, Rotation);
+    public Obb Moved(Vec2 delta) => new(Center + delta, HalfExtents, Angle);
 }
 
 /// <summary>
