@@ -27,6 +27,15 @@ public class OracleDifferentialTests
     private const double CapsuleZone = 4.0 / 256.0;
     private const double BoxZone = 6.0 / 256.0;
 
+    // SAT paths carry a quantized rotation axis (unit to ~0.4%), so their
+    // clearance/depth error scales with the projected extent. The gray zone and
+    // depth tolerance therefore grow with total shape extent rather than staying
+    // a fixed number of grid cells.
+    private static double Extent(Circle c) => Math.Abs(c.Radius);
+    private static double Extent(Obb o) => Math.Abs(o.HalfExtents.X) + Math.Abs(o.HalfExtents.Y);
+    private static double Extent(Capsule c) => (c.B - c.A).Length * 0.5 + Math.Abs(c.Radius);
+    private static double SatGray(double extent) => 6.0 / 256.0 + extent * 0.007;
+
     private static void CheckBoolean(
         bool actual, double clearance, double grayZone, string repro)
     {
@@ -146,9 +155,11 @@ public class OracleDifferentialTests
 
                 CheckBoolean(m.Colliding, clearance, CapsuleZone, repro);
                 // Depth mirrors the closest-point reduction only while the spines
-                // do not cross; crossing spines make the reduction saturate.
+                // do not cross; crossing spines make the reduction saturate. The
+                // depth tolerance grows with radius (isqrt of a larger distance).
                 if (clearance < 0 && -clearance < a.Radius + b.Radius)
-                    CheckDepth(m, clearance, CapsuleZone, 6.0 / 256.0, repro);
+                    CheckDepth(m, clearance, CapsuleZone,
+                        6.0 / 256.0 + (a.Radius + b.Radius) * 0.0004, repro);
             }
         }
     }
@@ -197,10 +208,11 @@ public class OracleDifferentialTests
                 Manifold m = Collide.ShapeVsShape(new Shape(c), new Shape(box));
                 bool overlap = Collide.Overlaps(new Shape(c), new Shape(box));
 
-                CheckBoolean(m.Colliding, clearance, BoxZone, repro);
-                CheckBoolean(overlap, clearance, BoxZone, repro);
+                double gray = SatGray(Extent(c) + Extent(box));
+                CheckBoolean(m.Colliding, clearance, gray, repro);
+                CheckBoolean(overlap, clearance, gray, repro);
                 Assert.True(m.Colliding == overlap
-                    || Math.Abs(clearance) <= BoxZone,
+                    || Math.Abs(clearance) <= gray,
                     $"manifold/overlap disagree away from touch: {repro}");
             }
         }
@@ -225,8 +237,9 @@ public class OracleDifferentialTests
 
                 // SAT boolean on quantized axes; corner-corner distance is not a
                 // SAT axis, so allow the gray zone in both directions.
-                CheckBoolean(m.Colliding, clearance, BoxZone, repro);
-                CheckDepth(m, clearance, BoxZone, 10.0 / 256.0, repro);
+                double gray = SatGray(Extent(a) + Extent(b));
+                CheckBoolean(m.Colliding, clearance, gray, repro);
+                CheckDepth(m, clearance, gray, gray, repro);
             }
         }
     }

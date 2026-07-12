@@ -102,9 +102,6 @@ internal static class Fx
     /// <summary>(unit * fx) &gt;&gt; 8 with rounding — scale a fixed value by a 24.8 unit component.</summary>
     public static long MulUnit(long unit, long fx) => RoundShift(unit * fx, Shift);
 
-    public static long NormalizeComponent(long component, long length) =>
-        RoundDiv(component * One, length);
-
     private static long RoundShift(long v, int shift)
     {
         long half = 1L << (shift - 1);
@@ -195,14 +192,26 @@ internal readonly struct FxVec2
     /// <summary>
     /// Unit direction in 24.8 (components in [-256, 256]). Falls back when the
     /// vector is exactly zero, mirroring <see cref="Vec2.Normalized"/>.
+    ///
+    /// The length is taken at adaptive extra precision: the squared length is
+    /// shifted up by the largest even amount that stays inside Int64 before the
+    /// square root, so short (sub-pixel) vectors still yield a near-unit normal
+    /// (length error &lt; ~0.15%) instead of the ~1.5% a plain 24.8 isqrt of a
+    /// small value would give. Large vectors already have ample length precision,
+    /// so their shift is small and the result is unchanged.
     /// </summary>
     public FxVec2 NormalizedFx(FxVec2 fallback)
     {
         long lenSq = LengthSq;
         if (lenSq == 0) return fallback;
-        long len = Fx.Sqrt(lenSq);
-        if (len == 0) return fallback;
-        return new FxVec2(Fx.NormalizeComponent(X, len), Fx.NormalizeComponent(Y, len));
+
+        int shift = 16;
+        while (shift > 0 && (lenSq >> (62 - shift)) != 0) shift -= 2;
+        long hiLen = Fx.Sqrt(lenSq << shift);          // = worldLen * 2^(8 + shift/2)
+        if (hiLen == 0) return fallback;
+
+        int numShift = Fx.Shift + (shift >> 1);        // component numerator shift
+        return new FxVec2(Fx.RoundDiv(X << numShift, hiLen), Fx.RoundDiv(Y << numShift, hiLen));
     }
 
 }

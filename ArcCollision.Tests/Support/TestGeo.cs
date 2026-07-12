@@ -29,6 +29,12 @@ internal static class TestGeo
     // Obb rotation is consumed through MathF.Cos/Sin then re-quantized inside the
     // library, so the rotation angle itself needs no snapping.
     public static Obb Q(Obb o) => new(Q(o.Center), Q(o.HalfExtents), o.Rotation);
+    public static Polygon Q(Polygon p)
+    {
+        var verts = new Vec2[p.Count];
+        for (int i = 0; i < p.Count; i++) verts[i] = Q(p[i]);
+        return new Polygon(verts);
+    }
 
     // ------------------------------------------------------------ repro dump
 
@@ -37,7 +43,12 @@ internal static class TestGeo
     public static string Dump(Capsule c) => $"new Capsule(new Vec2({R(c.A.X)}, {R(c.A.Y)}), new Vec2({R(c.B.X)}, {R(c.B.Y)}), {R(c.Radius)})";
     public static string Dump(Obb o) => $"new Obb(new Vec2({R(o.Center.X)}, {R(o.Center.Y)}), new Vec2({R(o.HalfExtents.X)}, {R(o.HalfExtents.Y)}), {R(o.Rotation)})";
     public static string Dump(Vec2 v) => $"new Vec2({R(v.X)}, {R(v.Y)})";
-
+    public static string Dump(Polygon p)
+    {
+        var parts = new string[p.Count];
+        for (int i = 0; i < p.Count; i++) parts[i] = Dump(p[i]);
+        return $"new Polygon({string.Join(", ", parts)})";
+    }
     private static string R(float v) => v.ToString("R", CultureInfo.InvariantCulture) + "f";
 
     // ---------------------------------------------------- double convex proxy
@@ -335,6 +346,70 @@ internal static class TestGeo
         double c2x = p2x + d2x * t, c2y = p2y + d2y * t;
         double dx = c1x - c2x, dy = c1y - c2y;
         return Math.Sqrt(dx * dx + dy * dy);
+    }
+
+    // --------------------------------------------------------- contact oracle
+
+    /// <summary>
+    /// Double-precision contact point for Circle vs Circle.
+    /// Contact sits on the line between centres at (radiusA - depth/2) from A.
+    /// </summary>
+    public static (double X, double Y) ContactCircleCircle(Circle a, Circle b)
+    {
+        double ax = Q(a.Center.X), ay = Q(a.Center.Y);
+        double bx = Q(b.Center.X), by = Q(b.Center.Y);
+        double ra = Math.Abs(Q(a.Radius)), rb = Math.Abs(Q(b.Radius));
+        double dx = bx - ax, dy = by - ay;
+        double dist = Math.Sqrt(dx * dx + dy * dy);
+        double nx, ny;
+        if (dist > 1e-12) { nx = dx / dist; ny = dy / dist; }
+        else { nx = 1; ny = 0; }
+        double depth = ra + rb - dist;
+        double offset = ra - depth / 2.0;
+        return (ax + nx * offset, ay + ny * offset);
+    }
+
+    /// <summary>
+    /// Double-precision contact point for Circle vs AABB (centre outside box).
+    /// Contact is the closest point on the AABB surface.
+    /// </summary>
+    public static (double X, double Y) ContactCircleAabb(Circle c, Aabb box)
+    {
+        double cx = Q(c.Center.X), cy = Q(c.Center.Y);
+        double bcx = Q(box.Center.X), bcy = Q(box.Center.Y);
+        double hx = Math.Abs(Q(box.HalfExtents.X)), hy = Math.Abs(Q(box.HalfExtents.Y));
+        double closestX = Math.Clamp(cx, bcx - hx, bcx + hx);
+        double closestY = Math.Clamp(cy, bcy - hy, bcy + hy);
+        return (closestX, closestY);
+    }
+
+    /// <summary>
+    /// Double-precision contact point for Circle vs Capsule.
+    /// Closest point on the capsule spine to the circle centre, then
+    /// midpoint of the two closest surface points (like CircleVsCircle).
+    /// </summary>
+    public static (double X, double Y) ContactCircleCapsule(Circle c, Capsule cap)
+    {
+        double cx = Q(c.Center.X), cy = Q(c.Center.Y);
+        double ax = Q(cap.A.X), ay = Q(cap.A.Y);
+        double bx = Q(cap.B.X), by = Q(cap.B.Y);
+        double rc = Math.Abs(Q(c.Radius)), rk = Math.Abs(Q(cap.Radius));
+        // Project centre onto spine
+        double dx = bx - ax, dy = by - ay;
+        double lenSq = dx * dx + dy * dy;
+        double t = 0;
+        if (lenSq > 1e-14)
+            t = Math.Clamp(((cx - ax) * dx + (cy - ay) * dy) / lenSq, 0, 1);
+        double spineX = ax + dx * t, spineY = ay + dy * t;
+        // Now it's circle-vs-circle between (cx,cy,rc) and (spineX,spineY,rk)
+        double ddx = spineX - cx, ddy = spineY - cy;
+        double dist = Math.Sqrt(ddx * ddx + ddy * ddy);
+        double nx, ny;
+        if (dist > 1e-12) { nx = ddx / dist; ny = ddy / dist; }
+        else { nx = 1; ny = 0; }
+        double depth = rc + rk - dist;
+        double offset = rc - depth / 2.0;
+        return (cx + nx * offset, cy + ny * offset);
     }
 
     // --------------------------------------------------- BpBounds replicas

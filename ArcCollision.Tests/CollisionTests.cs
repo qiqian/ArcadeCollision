@@ -381,6 +381,25 @@ public class BroadphaseTests
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             Collide.PointInCircle(new Vec2(2_000_000f, 0), unit));
     }
+
+    [Fact]
+    public void Constructors_RejectNegativeAndNonFiniteSizes_ButAllowZero()
+    {
+        // Negative sizes previously produced divergent results between the raw
+        // narrowphase and the Math.Abs broadphase; they are now rejected at the
+        // boundary so every path sees the same non-negative geometry.
+        Assert.Throws<ArgumentOutOfRangeException>(() => new Circle(Vec2.Zero, -1f));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new Circle(Vec2.Zero, float.NaN));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new Aabb(Vec2.Zero, new Vec2(-1f, 1f)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new Obb(Vec2.Zero, new Vec2(1f, -1f), 0.3f));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new Obb(Vec2.Zero, new Vec2(1f, 1f), float.NaN));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new Capsule(Vec2.Zero, Vec2.UnitX, -0.5f));
+
+        // Zero is a valid degenerate size (point circle, zero-thickness box).
+        _ = new Circle(Vec2.Zero, 0f);
+        _ = new Aabb(Vec2.Zero, Vec2.Zero);
+        _ = new Capsule(Vec2.Zero, Vec2.UnitX, 0f);
+    }
 }
 
 public class GenericShapeTests

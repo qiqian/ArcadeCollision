@@ -76,11 +76,13 @@ public class ExhaustiveGridTests
                 if (actual != expected)
                     Assert.Fail($"aabb overlap mismatch at dx={dx} dy={dy}: expected {expected}");
 
-                // The manifold variant requires strictly positive overlap on both axes.
-                bool expectManifold = dx < hx + bx && dy < hy + by;
-                bool actualManifold = Collide.AabbVsAabb(a, b).Colliding;
-                if (actualManifold != expectManifold)
-                    Assert.Fail($"AabbVsAabb mismatch at dx={dx} dy={dy}: expected {expectManifold}");
+                // The manifold now uses the SAME inclusive touch as Overlaps:
+                // an exact edge contact reports Colliding with Depth 0.
+                var manifold = Collide.AabbVsAabb(a, b);
+                if (manifold.Colliding != expected)
+                    Assert.Fail($"AabbVsAabb mismatch at dx={dx} dy={dy}: expected {expected}");
+                if (manifold.Colliding && (dx == hx + bx || dy == hy + by))
+                    Assert.Equal(0L, (long)MathF.Round(manifold.Depth * 256f));
             }
         }
     }

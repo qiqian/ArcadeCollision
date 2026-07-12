@@ -4,8 +4,26 @@ namespace ArcCollision;
 /// Result of a discrete (static) overlap test.
 ///
 /// When <see cref="Colliding"/> is true, <see cref="Normal"/> points from shape
-/// A towards shape B and <see cref="Depth"/> is the penetration distance. Moving
-/// A by <c>-Normal * Depth</c> (or B by <c>+Normal * Depth</c>) separates them.
+/// A towards shape B and <see cref="Depth"/> is the penetration distance along
+/// that normal. An exact touch reports <c>Colliding</c> with <c>Depth == 0</c>.
+///
+/// <para><b>Separation contract.</b> <see cref="SeparationForA"/> /
+/// <see cref="SeparationForB"/> resolve the contact <i>feature this manifold
+/// reports</i>. For convex primitive pairs in shallow contact that fully
+/// separates the shapes in one step. It is NOT guaranteed to eliminate all
+/// overlap in a single step when the reduction is not a true minimum-translation
+/// vector, namely: capsules whose spines deeply cross, and concave polygons
+/// (whose manifold is the deepest convex sub-piece's MTV — pushing out of it can
+/// push into another piece). For those, apply the separation iteratively until
+/// <see cref="Colliding"/> is false; the iteration converges.</para>
+///
+/// <para><b>Contact accuracy.</b> <see cref="Contact"/> is exact (on the contact
+/// surface) for the circle-reduction paths (circle/circle, circle/aabb,
+/// circle/capsule, capsule/capsule). For the SAT paths (any OBB or polygon) it
+/// is an approximate point: the midpoint of the two support points, clamped into
+/// the operands' overlapping bounds. It is suitable as a contact hint but is not
+/// guaranteed to lie inside a rotated shape's exact interior — compute a clipped
+/// contact manifold externally if you need that.</para>
 /// </summary>
 public readonly struct Manifold
 {

@@ -29,7 +29,22 @@ public class SweepAccuracyTests
         return new TestGeo.DShape { Xs = xs, Ys = ys, R = s.R };
     }
 
-    private sealed record OracleSweep(bool DefiniteHit, bool DefiniteMiss, double TouchTime);
+    /// <summary>Surface reach: hull radius from the centroid plus the round radius.</summary>
+    private static double Reach(TestGeo.DShape s)
+    {
+        double cx = 0, cy = 0;
+        for (int i = 0; i < s.Count; i++) { cx += s.Xs[i]; cy += s.Ys[i]; }
+        cx /= s.Count; cy /= s.Count;
+        double max = 0;
+        for (int i = 0; i < s.Count; i++)
+        {
+            double dx = s.Xs[i] - cx, dy = s.Ys[i] - cy;
+            max = Math.Max(max, Math.Sqrt(dx * dx + dy * dy));
+        }
+        return max + s.R;
+    }
+
+    private sealed record OracleSweep(bool DefiniteHit, bool DefiniteMiss, double TouchTime, bool StartsInside);
 
     /// <summary>Sampled + bisected first-touch analysis of clearance(t).</summary>
     private static OracleSweep Analyze(
@@ -37,6 +52,12 @@ public class SweepAccuracyTests
     {
         double len = Math.Sqrt((double)motion.X * motion.X + (double)motion.Y * motion.Y);
         int samples = Math.Clamp((int)(len / Math.Max(grayZone, 1.0 / 256.0)) + 8, 64, 4096);
+
+        // Already overlapping at t=0: a correct swept test returns t≈0, and the
+        // "penetration" there is just the initial overlap, not a missed contact.
+        double startClear = TestGeo.Clearance(mover, target);
+        if (startClear < -grayZone)
+            return new OracleSweep(true, false, 0.0, StartsInside: true);
 
         double firstBelow = -1;
         double prevT = 0;
@@ -65,31 +86,62 @@ public class SweepAccuracyTests
                 double c = TestGeo.Clearance(Translate(mover, motion.X * mid, motion.Y * mid), target);
                 if (c > 0) lo = mid; else hi = mid;
             }
-            return new OracleSweep(true, false, (lo + hi) * 0.5);
+            return new OracleSweep(true, false, (lo + hi) * 0.5, StartsInside: false);
         }
 
         // Definite miss requires margin covering the sampling gap:
         // |clearance(t±Δt/2)| can dip at most len·Δt/2 below the sample.
         double sampleGapSlack = len / samples * 0.5;
         bool definiteMiss = minClear > grayZone + sampleGapSlack;
-        return new OracleSweep(false, definiteMiss, 1.0);
+        return new OracleSweep(false, definiteMiss, 1.0, StartsInside: false);
     }
 
+    /// <summary>
+    /// Validates a swept result the correct way: at the reported time-of-impact
+    /// the shapes must actually be at their contact surface. This is robust to
+    /// the fact that TOI is ill-conditioned near tangency — a grazing approach
+    /// has an almost-flat clearance(t), so |impl.Time − oracle.Time| can be large
+    /// while both are exactly at the surface. We therefore judge clearance at the
+    /// reported time, not the time difference, plus a "not later than first
+    /// touch" penetration budget to prove tunnel-freedom.
+    /// </summary>
     private static void CheckSweep(
-        SweepHit hit, OracleSweep oracle, Vec2 motion, double grayZone, string repro)
+        SweepHit hit, OracleSweep oracle, TestGeo.DShape mover, TestGeo.DShape target,
+        Vec2 motion, double grayZone, string repro)
     {
-        double len = Math.Sqrt((double)motion.X * motion.X + (double)motion.Y * motion.Y);
         if (oracle.DefiniteHit)
         {
-            Assert.True(hit.Hit, $"sweep missed a definite hit (touch t={oracle.TouchTime:F6}): {repro}");
-            // Convert time error to distance along the motion.
-            double posError = Math.Abs(hit.Time - oracle.TouchTime) * len;
-            Assert.True(posError <= grayZone + 14.0 / 256.0,
-                $"TOI off by {posError:F6} units (impl t={hit.Time:R}, oracle t={oracle.TouchTime:F6}): {repro}");
+            Assert.True(hit.Hit, $"sweep MISSED a definite hit (touch t={oracle.TouchTime:F6}): {repro}");
+
+            if (oracle.StartsInside)
+            {
+                // Already overlapping at t=0 → the only correct time is 0.
+                Assert.True(hit.Time <= 2.0 / 65536.0,
+                    $"initial overlap not reported at t=0 (impl t={hit.Time:R}): {repro}");
+                return;
+            }
+
+            double clearanceAtHit = TestGeo.Clearance(
+                Translate(mover, motion.X * hit.Time, motion.Y * hit.Time), target);
+
+            // Budget for |clearance at the reported time|, from two quantified
+            // error sources:
+            //   • time granularity: the 16.16 time maps to a position band of
+            //     motionLen / 65536 per ULP (a few ULPs of slack).
+            //   • grazing approximation: near tangency the reduction/corner tests
+            //     land within ~0.4% of the shape's reach off the true surface.
+            double motionLen = Math.Sqrt((double)motion.X * motion.X + (double)motion.Y * motion.Y);
+            double reach = Reach(mover) + Reach(target);
+            double budget = grayZone + motionLen * (4.0 / 65536.0) + reach * 0.004;
+
+            Assert.True(clearanceAtHit <= budget,
+                $"contact reported {clearanceAtHit:F6} above surface, budget {budget:F6} (impl t={hit.Time:R}): {repro}");
+            Assert.True(clearanceAtHit >= -budget,
+                $"contact reported {-clearanceAtHit:F6} inside surface, budget {budget:F6} (impl t={hit.Time:R}, first touch {oracle.TouchTime:F6}): {repro}");
         }
         else if (oracle.DefiniteMiss)
         {
-            Assert.True(!hit.Hit, $"phantom sweep hit at t={hit.Time:R}: {repro}");
+            Assert.True(!hit.Hit, $"PHANTOM sweep hit at t={hit.Time:R}: {repro}");
         }
         // Otherwise: grazing band — either answer is acceptable.
     }
@@ -110,10 +162,11 @@ public class SweepAccuracyTests
                 gen.NextFloat(-gen.SizeMax * 4, gen.SizeMax * 4)));
             string repro = $"[{regime} seed={seed} i={i}] {TestGeo.Dump(mover)} motion {TestGeo.Dump(motion)} vs {TestGeo.Dump(target)}";
 
+            var dm = TestGeo.DShape.From(mover);
+            var dt = TestGeo.DShape.From(target);
             SweepHit hit = Sweep.MovingCircleVsCircle(mover, motion, target);
-            OracleSweep oracle = Analyze(
-                TestGeo.DShape.From(mover), TestGeo.DShape.From(target), motion, 3.0 / 256.0);
-            CheckSweep(hit, oracle, motion, 3.0 / 256.0, repro);
+            OracleSweep oracle = Analyze(dm, dt, motion, 3.0 / 256.0);
+            CheckSweep(hit, oracle, dm, dt, motion, 3.0 / 256.0, repro);
         }
     }
 
@@ -133,10 +186,11 @@ public class SweepAccuracyTests
                 gen.NextFloat(-gen.SizeMax * 4, gen.SizeMax * 4)));
             string repro = $"[{regime} seed={seed} i={i}] {TestGeo.Dump(mover)} motion {TestGeo.Dump(motion)} vs {TestGeo.Dump(target)}";
 
+            var dm = TestGeo.DShape.From(mover);
+            var dt = TestGeo.DShape.From(target);
             SweepHit hit = Sweep.MovingCircleVsAabb(mover, motion, target);
-            OracleSweep oracle = Analyze(
-                TestGeo.DShape.From(mover), TestGeo.DShape.From(target), motion, 4.0 / 256.0);
-            CheckSweep(hit, oracle, motion, 4.0 / 256.0, repro);
+            OracleSweep oracle = Analyze(dm, dt, motion, 4.0 / 256.0);
+            CheckSweep(hit, oracle, dm, dt, motion, 4.0 / 256.0, repro);
         }
     }
 
@@ -155,10 +209,11 @@ public class SweepAccuracyTests
                 gen.NextFloat(-gen.SizeMax * 4, gen.SizeMax * 4)));
             string repro = $"[{regime} seed={seed} i={i}] {TestGeo.Dump(mover)} motion {TestGeo.Dump(motion)} vs {TestGeo.Dump(target)}";
 
+            var dm = TestGeo.DShape.From(mover);
+            var dt = TestGeo.DShape.From(target);
             SweepHit hit = Sweep.MovingCircleVsCapsule(mover, motion, target);
-            OracleSweep oracle = Analyze(
-                TestGeo.DShape.From(mover), TestGeo.DShape.From(target), motion, 4.0 / 256.0);
-            CheckSweep(hit, oracle, motion, 4.0 / 256.0, repro);
+            OracleSweep oracle = Analyze(dm, dt, motion, 4.0 / 256.0);
+            CheckSweep(hit, oracle, dm, dt, motion, 4.0 / 256.0, repro);
         }
     }
 
@@ -177,10 +232,15 @@ public class SweepAccuracyTests
                 gen.NextFloat(-gen.SizeMax * 4, gen.SizeMax * 4)));
             string repro = $"[{regime} seed={seed} i={i}] {TestGeo.Dump(mover)} motion {TestGeo.Dump(motion)} vs {TestGeo.Dump(target)}";
 
+            var dm = TestGeo.DShape.From(mover);
+            var dt = TestGeo.DShape.From(target);
+            // The OBB's effective shape differs from the ideal by up to ~0.4% of
+            // its extent (quantized rotation axis), so the classification gray
+            // zone around touch must be size-relative for box pairs.
+            double gray = 6.0 / 256.0 + (Reach(dm) + Reach(dt)) * 0.005;
             SweepHit hit = Sweep.MovingShapeVsShape(new Shape(mover), motion, new Shape(target));
-            OracleSweep oracle = Analyze(
-                TestGeo.DShape.From(mover), TestGeo.DShape.From(target), motion, 6.0 / 256.0);
-            CheckSweep(hit, oracle, motion, 6.0 / 256.0, repro);
+            OracleSweep oracle = Analyze(dm, dt, motion, gray);
+            CheckSweep(hit, oracle, dm, dt, motion, gray, repro);
         }
     }
 

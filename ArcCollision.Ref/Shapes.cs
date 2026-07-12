@@ -10,6 +10,8 @@ public readonly struct Circle
 
     public Circle(Vec2 center, float radius)
     {
+        if (!(radius >= 0f))
+            throw new ArgumentOutOfRangeException(nameof(radius), radius, "Radius must be non-negative (NaN rejected).");
         Center = center;
         Radius = radius;
     }
@@ -29,6 +31,8 @@ public readonly struct Aabb
 
     public Aabb(Vec2 center, Vec2 halfExtents)
     {
+        if (!(halfExtents.X >= 0f) || !(halfExtents.Y >= 0f))
+            throw new ArgumentOutOfRangeException(nameof(halfExtents), halfExtents, "Half-extents must be non-negative (NaN rejected).");
         Center = center;
         HalfExtents = halfExtents;
     }
@@ -70,6 +74,10 @@ public readonly struct Obb
 
     public Obb(Vec2 center, Vec2 halfExtents, float rotation = 0f)
     {
+        if (!(halfExtents.X >= 0f) || !(halfExtents.Y >= 0f))
+            throw new ArgumentOutOfRangeException(nameof(halfExtents), halfExtents, "Half-extents must be non-negative (NaN rejected).");
+        if (!float.IsFinite(rotation))
+            throw new ArgumentOutOfRangeException(nameof(rotation), rotation, "Rotation must be finite.");
         Center = center;
         HalfExtents = halfExtents;
         Rotation = rotation;
@@ -278,6 +286,8 @@ public readonly struct Capsule
 
     public Capsule(Vec2 a, Vec2 b, float radius)
     {
+        if (!(radius >= 0f))
+            throw new ArgumentOutOfRangeException(nameof(radius), radius, "Radius must be non-negative (NaN rejected).");
         A = a;
         B = b;
         Radius = radius;
