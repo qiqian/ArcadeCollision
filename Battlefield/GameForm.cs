@@ -889,6 +889,7 @@ public sealed class GameForm : Form
                 _hudEnemyBase, _hudEnemyUnder, _hudEnemyProgress, _hudEnemyHeart,
                 _profileChad, _profileSarge, _profileTaxman })
                 image?.Dispose();
+            _game.Dispose();
         }
         base.Dispose(disposing);
     }

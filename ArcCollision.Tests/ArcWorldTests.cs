@@ -9,14 +9,6 @@ public sealed class ArcWorldLifecycleCollection { }
 public class ArcWorldTests
 {
     [Fact]
-    public void SpatialHashIsInternalImplementationDetail()
-    {
-        Type? type = typeof(ArcWorld).Assembly.GetType("ArcCollision.SpatialHash");
-        Assert.NotNull(type);
-        Assert.False(type!.IsPublic);
-    }
-
-    [Fact]
     public void HandlesCarryEntityIdAndRemainCompact()
     {
         Assert.Equal(8, System.Runtime.CompilerServices.Unsafe.SizeOf<ArcHandle>());

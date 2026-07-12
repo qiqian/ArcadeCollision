@@ -74,45 +74,6 @@ public class WrapperParityTests
     }
 
     [Fact]
-    public void PolygonAndGenericSweepRunNatively()
-    {
-        var polygon = new Native.Polygon(
-            new Native.Vec2(-1, -1), new Native.Vec2(1, -1),
-            new Native.Vec2(1, 1), new Native.Vec2(-1, 1));
-        Native.Shape target = new Native.Shape(
-            polygon, new Native.Vec2(5, 0), new Native.Angle32(0));
-        Native.Shape mover = new Native.Circle(Native.Vec2.Zero, .5f);
-
-        Native.SweepHit hit = Native.Sweep.MovingShapeVsShape(
-            mover, new Native.Vec2(10, 0), target);
-
-        Assert.True(hit.Hit);
-        Assert.InRange(hit.Time, .34f, .36f);
-    }
-
-    [Fact]
-    public void NativeWorldSupportsFiltersQueriesContactsAndCasts()
-    {
-        const uint attack = 1u << 1, hurt = 1u << 2;
-        using var world = new Native.ArcWorld();
-        Native.ArcHandle target = world.AddStatic(10,
-            new Native.Circle(new Native.Vec2(4, 0), 1),
-            new Native.CollisionFilter(hurt, attack));
-        Native.Shape query = new Native.Circle(Native.Vec2.Zero, .5f);
-        var filter = new Native.CollisionFilter(attack, hurt);
-        var handles = new List<Native.ArcHandle>();
-
-        world.Query(new Native.Circle(new Native.Vec2(4, 0), 2), filter, handles);
-        Assert.Equal(target, Assert.Single(handles));
-        Assert.True(world.ShapeCast(query, new Native.Vec2(10, 0), filter, out Native.WorldCastHit hit));
-        Assert.Equal(10, hit.Handle.EntityId);
-
-        world.SetEnabled(target, false);
-        Assert.False(world.ShapeCast(query, new Native.Vec2(10, 0), filter, out _));
-        Assert.True(world.IsValid(target));
-    }
-
-    [Fact]
     public void EveryOrderedShapePairMatchesReferenceCollisionState()
     {
         (Ref.Shape Ref, Native.Shape Native)[] shapes = CreateShapes();

@@ -11,7 +11,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\ArcCollision.Ref\ArcCollision.Ref.csproj" />
+    <ProjectReference Include="..\ArcCollision.Wrapper\ArcCollision.Wrapper.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -23,5 +23,25 @@
   <ItemGroup>
     <PackageReference Include="Vortice.Direct2D1" Version="3.8.3" />
   </ItemGroup>
+
+  <!-- The wrapper P/Invokes arccollision.dll; copy the native library next to the
+       game. Prefer the matching configuration, fall back to Release so a Debug
+       game build still runs against the Release native library. -->
+  <Target Name="CopyNativeArcCollisionForGame" AfterTargets="Build">
+    <ItemGroup>
+      <NativeArcCollision Include="..\ArcCollision\build\windows-x64\$(Configuration)\arccollision.dll"
+                          Condition="Exists('..\ArcCollision\build\windows-x64\$(Configuration)\arccollision.dll')" />
+      <NativeArcCollision Include="..\.native-build\$(Configuration)\arccollision.dll"
+                          Condition="!Exists('..\ArcCollision\build\windows-x64\$(Configuration)\arccollision.dll') And Exists('..\.native-build\$(Configuration)\arccollision.dll')" />
+      <NativeArcCollision Include="..\.native-build\Release\arccollision.dll"
+                          Condition="'@(NativeArcCollision)' == '' And Exists('..\.native-build\Release\arccollision.dll')" />
+      <NativeArcCollision Include="..\.native-build\$(Configuration)\libarccollision.so"
+                          Condition="Exists('..\.native-build\$(Configuration)\libarccollision.so')" />
+      <NativeArcCollision Include="..\.native-build\$(Configuration)\libarccollision.dylib"
+                          Condition="Exists('..\.native-build\$(Configuration)\libarccollision.dylib')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(NativeArcCollision)" DestinationFolder="$(TargetDir)"
+          SkipUnchangedFiles="true" Condition="'@(NativeArcCollision)' != ''" />
+  </Target>
 
 </Project>

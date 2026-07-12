@@ -14,7 +14,7 @@ internal readonly record struct CollisionManifoldDebug(
 /// viewport crop. Source-timed Tax Man VFX are rendered directly by GameForm
 /// from attack/state time.
 /// </summary>
-internal sealed class Game
+internal sealed class Game : IDisposable
 {
     public const float ArenaW = 1280f;
     public const float WorldScale = 2f / 3f;
@@ -82,6 +82,15 @@ internal sealed class Game
     private float _attackBuffer, _jumpBuffer;
 
     public Game() => Reset();
+
+    /// <summary>Releases the collision worlds. With the native backend these own
+    /// unmanaged handles, so disposing them frees the native worlds deterministically
+    /// instead of waiting for the finalizer.</summary>
+    public void Dispose()
+    {
+        _bodyWorld.Dispose();
+        _hurtWorld.Dispose();
+    }
 
     private static Vec2 P(float x, float y) => new(x * WorldScale, y * WorldScale);
 

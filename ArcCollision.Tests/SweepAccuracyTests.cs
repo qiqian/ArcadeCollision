@@ -20,6 +20,24 @@ public class SweepAccuracyTests
 {
     private const int Iterations = 1200;
 
+
+    [Fact]
+    public void PolygonAndGenericSweepRunNatively()
+    {
+        var polygon = new Polygon(
+            new Vec2(-1, -1), new Vec2(1, -1),
+            new Vec2(1, 1), new Vec2(-1, 1));
+        Shape target = new Shape(
+            polygon, new Vec2(5, 0), new Angle32(0));
+        Shape mover = new Circle(Vec2.Zero, .5f);
+
+        SweepHit hit = Sweep.MovingShapeVsShape(
+            mover, new Vec2(10, 0), target);
+
+        Assert.True(hit.Hit);
+        Assert.InRange(hit.Time, .34f, .36f);
+    }
+
     private static TestGeo.DShape Translate(TestGeo.DShape s, double dx, double dy)
     {
         var xs = new double[s.Count];
