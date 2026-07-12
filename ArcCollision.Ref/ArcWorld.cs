@@ -5,35 +5,43 @@ using System.Threading;
 namespace ArcCollision;
 
 /// <summary>
-/// Lightweight collider token. Index and generation identify the ArcWorld slot.
+/// Lightweight collider token. Its first 32 bits pack a 20-bit slot index and
+/// 12-bit generation. Generation cycles through 1..4095 and then wraps to 1,
+/// so callers must not retain handles across 4095 reuses of the same slot.
+/// Index values are limited to [0, <see cref="MaxIndex"/>].
 /// EntityId is caller-owned metadata in [0, <see cref="MaxEntityId"/>]; its low
 /// 28 bits share storage with the handle's internal 4-bit world id.
 /// </summary>
 public readonly struct ArcHandle : IEquatable<ArcHandle>
 {
+    public const int IndexBits = 20;
+    public const int GenerationBits = 12;
+    public const int MaxIndex = (1 << IndexBits) - 1;
+    public const int MaxGeneration = (1 << GenerationBits) - 1;
     internal const int EntityIdBits = 28;
     public const int MaxEntityId = (1 << EntityIdBits) - 1;
     private const int EntityIdMask = MaxEntityId;
 
-    internal readonly int Index;
-    internal readonly uint Generation;
+    private readonly int _packedIndex;
     private readonly int _packedEntityId;
 
+    internal int Index => _packedIndex & MaxIndex;
+    internal uint Generation => (uint)_packedIndex >> IndexBits;
     public int EntityId => _packedEntityId & EntityIdMask;
     internal uint WorldId => (uint)_packedEntityId >> EntityIdBits;
 
     internal ArcHandle(int index, uint generation, uint worldId, int entityId)
     {
-        Index = index;
-        Generation = generation;
-        if (worldId is 0 or > ArcWorld.MaxWorldCount
+        if ((uint)index > MaxIndex || generation is 0 or > MaxGeneration
+            || worldId is 0 or > ArcWorld.MaxWorldCount
             || (uint)entityId > MaxEntityId)
             throw new ArgumentOutOfRangeException();
+        _packedIndex = (int)(generation << IndexBits) | index;
         _packedEntityId = unchecked((int)(worldId << EntityIdBits)) | entityId;
     }
 
     public bool Equals(ArcHandle other) =>
-        Index == other.Index && Generation == other.Generation && WorldId == other.WorldId;
+        _packedIndex == other._packedIndex && WorldId == other.WorldId;
 
     public override bool Equals(object? obj) => obj is ArcHandle other && Equals(other);
     public override int GetHashCode() =>
@@ -78,14 +86,17 @@ public readonly struct ContactPair
 /// then selectively asks the world to compute final manifolds.
 /// At most <see cref="MaxWorldCount"/> worlds may be alive concurrently. Dispose
 /// worlds when finished so their 4-bit id can be reused immediately.
+/// Each world supports at most <see cref="MaxColliderCount"/> slot indices.
 /// </summary>
 public sealed class ArcWorld : IDisposable
 {
     public const int MaxWorldCount = 15;
+    public const int MaxColliderCount = ArcHandle.MaxIndex + 1;
     private static readonly object s_worldIdGate = new();
     private static readonly WeakReference<ArcWorld>?[] s_worldOwners =
         new WeakReference<ArcWorld>?[MaxWorldCount + 1];
-    private static readonly int[] s_nextHandleGenerations = new int[MaxWorldCount + 1];
+    private static readonly ushort[][] s_handleGenerations =
+        new ushort[MaxWorldCount + 1][];
 
     private sealed class HandleComparer : IComparer<ArcHandle>
     {
@@ -121,7 +132,7 @@ public sealed class ArcWorld : IDisposable
         public int EntityId;
         public int TreeProxy;
         public int NextFree;
-        public uint Generation;
+        public ushort Generation;
         public bool Active;
         public bool Static;
     }
@@ -137,11 +148,13 @@ public sealed class ArcWorld : IDisposable
     private int _dynamicCount;
     private int _disposed;
     private uint _revision = 1;
+    private ushort[] _generationTable;
 
     public ArcWorld(float fatMargin = 16f)
     {
         _broadphase = new SpatialHash(fatMargin);
         _worldId = AllocateWorldId(this);
+        _generationTable = s_handleGenerations[_worldId] ?? Array.Empty<ushort>();
     }
 
     public int Count { get { ThrowIfDisposed(); return _activeCount; } }
@@ -325,7 +338,7 @@ public sealed class ArcWorld : IDisposable
         slot.TreeProxy = -1;
         slot.Active = true;
         slot.Static = isStatic;
-        slot.Generation = AllocateHandleGeneration(_worldId);
+        slot.Generation = AllocateHandleGeneration(index);
 
         if (isStatic)
         {
@@ -352,8 +365,11 @@ public sealed class ArcWorld : IDisposable
             return index;
         }
 
-        if (_slotCount == _slots.Length)
-            Array.Resize(ref _slots, _slots.Length * 2);
+        if (_slotCount >= MaxColliderCount)
+            throw new InvalidOperationException(
+                $"ArcWorld supports at most {MaxColliderCount} collider slots.");
+
+        EnsureSlotCapacity(_slotCount);
         return _slotCount++;
     }
 
@@ -434,15 +450,36 @@ public sealed class ArcWorld : IDisposable
         }
     }
 
-    private static uint AllocateHandleGeneration(uint worldId)
+    private ushort AllocateHandleGeneration(int index)
     {
-        uint generation;
-        do
-        {
-            generation = unchecked((uint)Interlocked.Increment(
-                ref s_nextHandleGenerations[worldId]));
-        } while (generation == 0);
+        EnsureGenerationCapacity(index);
+        ushort generation = _generationTable[index];
+        generation++;
+        if (generation > ArcHandle.MaxGeneration) generation = 1;
+        _generationTable[index] = generation;
         return generation;
+    }
+
+    private void EnsureGenerationCapacity(int index)
+    {
+        if (index < _generationTable.Length) return;
+        int newLength = Math.Max(16, _generationTable.Length);
+        while (newLength <= index)
+        {
+            newLength = Math.Min(MaxColliderCount, newLength * 2);
+            if (newLength <= index && newLength == MaxColliderCount) break;
+        }
+        Array.Resize(ref _generationTable, newLength);
+        s_handleGenerations[_worldId] = _generationTable;
+    }
+
+    private void EnsureSlotCapacity(int index)
+    {
+        if (index < _slots.Length) return;
+        int newLength = _slots.Length;
+        while (newLength <= index)
+            newLength = Math.Min(MaxColliderCount, newLength * 2);
+        Array.Resize(ref _slots, newLength);
     }
 
     private void ThrowIfDisposed()

@@ -20,7 +20,12 @@ public class ArcWorldTests
     [Fact]
     public void HandlesCarryEntityIdAndRemainCompact()
     {
-        Assert.Equal(12, System.Runtime.CompilerServices.Unsafe.SizeOf<ArcHandle>());
+        Assert.Equal(8, System.Runtime.CompilerServices.Unsafe.SizeOf<ArcHandle>());
+        Assert.Equal(20, ArcHandle.IndexBits);
+        Assert.Equal(12, ArcHandle.GenerationBits);
+        Assert.Equal(0x000F_FFFF, ArcHandle.MaxIndex);
+        Assert.Equal(0x0000_0FFF, ArcHandle.MaxGeneration);
+        Assert.Equal(1_048_576, ArcWorld.MaxColliderCount);
         Assert.Equal(0x0FFF_FFFF, ArcHandle.MaxEntityId);
         Assert.Equal(15, ArcWorld.MaxWorldCount);
     }
@@ -181,6 +186,55 @@ public class ArcWorldTests
             if (cycle != 0) Assert.False(world.IsValid(previous));
             previous = current;
         }
+    }
+
+    [Fact]
+    public void TwelveBitGenerationWrapsWithoutRetiringTheSlot()
+    {
+        CollectDeadWorlds();
+        int reusedIndex;
+        ArcHandle oldest;
+        using (var world = new ArcWorld())
+        {
+            ArcHandle current = world.Add(1, new Circle(Vec2.Zero, 1));
+            oldest = current;
+            reusedIndex = current.Index;
+            uint oldestGeneration = oldest.Generation;
+
+            while (current.Generation < ArcHandle.MaxGeneration)
+            {
+                world.Remove(current);
+                current = world.Add(1, new Circle(Vec2.Zero, 1));
+                Assert.Equal(reusedIndex, current.Index);
+            }
+
+            world.Remove(current);
+            ArcHandle replacement = world.Add(2, new Circle(Vec2.Zero, 1));
+            Assert.Equal(reusedIndex, replacement.Index);
+            Assert.Equal(1u, replacement.Generation);
+
+            while (replacement.Generation < oldestGeneration)
+            {
+                world.Remove(replacement);
+                replacement = world.Add(2, new Circle(Vec2.Zero, 1));
+                Assert.Equal(reusedIndex, replacement.Index);
+            }
+
+            Assert.Equal(oldestGeneration, replacement.Generation);
+            Assert.True(world.IsValid(oldest));
+        }
+    }
+
+    [Fact]
+    public void PackedIndexRejectsOutOfRangeIndexAndGeneration()
+    {
+        _ = new ArcHandle(ArcHandle.MaxIndex, ArcHandle.MaxGeneration, 1, 0);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new ArcHandle(ArcHandle.MaxIndex + 1, 1, 1, 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new ArcHandle(0, 0, 1, 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new ArcHandle(0, ArcHandle.MaxGeneration + 1u, 1, 0));
     }
 
     private static void CollectDeadWorlds()
