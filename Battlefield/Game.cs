@@ -66,8 +66,12 @@ internal sealed class Game : IDisposable
     public float CamMaxY => CameraBottom;
     public Fighter TaxMan => _taxMan;
 
-    private readonly ArcWorld _bodyWorld = new(80f);
-    private readonly ArcWorld _hurtWorld = new(160f);
+    // One collision world holds both body colliders and hurtboxes; the
+    // per-collider filters (FighterBody vs Hurtbox/Attack, all mutual-acceptance)
+    // keep the two concerns from ever pairing: ComputePairs yields only body-body
+    // pairs, and an attack Query only ever returns opposing hurtboxes. The fat
+    // margin only tunes broadphase re-insertion frequency, not results.
+    private readonly ArcWorld _world = new(128f);
     private readonly List<CandidatePair> _bodyPairs = new();
     private readonly List<ArcHandle> _hitCandidates = new();
     private Fighter?[] _entitiesById = new Fighter?[32];
@@ -88,8 +92,7 @@ internal sealed class Game : IDisposable
     /// instead of waiting for the finalizer.</summary>
     public void Dispose()
     {
-        _bodyWorld.Dispose();
-        _hurtWorld.Dispose();
+        _world.Dispose();
     }
 
     private static Vec2 P(float x, float y) => new(x * WorldScale, y * WorldScale);
@@ -97,8 +100,7 @@ internal sealed class Game : IDisposable
     public void Reset()
     {
         Fighters.Clear();
-        _bodyWorld.Clear();
-        _hurtWorld.Clear();
+        _world.Clear();
         _bodyPairs.Clear();
         _hitCandidates.Clear();
         DebugManifolds.Clear();
@@ -1101,24 +1103,24 @@ internal sealed class Game : IDisposable
             if (!fighter.Dead && fighter.CombatActive && !fighter.SpawnWalking)
             {
                 Shape body = fighter.Body;
-                if (_bodyWorld.IsValid(fighter.BodyHandle))
+                if (_world.IsValid(fighter.BodyHandle))
                 {
-                    _bodyWorld.Update(fighter.BodyHandle, body);
-                    _bodyWorld.SetEnabled(fighter.BodyHandle, true);
+                    _world.Update(fighter.BodyHandle, body);
+                    _world.SetEnabled(fighter.BodyHandle, true);
                 }
                 else
-                    fighter.BodyHandle = _bodyWorld.Add(
+                    fighter.BodyHandle = _world.Add(
                         fighter.EntityId,
                         body,
                         BattlefieldCollisionFilters.FighterBody);
             }
-            else if (_bodyWorld.IsValid(fighter.BodyHandle))
+            else if (_world.IsValid(fighter.BodyHandle))
             {
-                _bodyWorld.SetEnabled(fighter.BodyHandle, false);
+                _world.SetEnabled(fighter.BodyHandle, false);
             }
         }
 
-        _bodyWorld.ComputePairs(_bodyPairs);
+        _world.ComputePairs(_bodyPairs);
         Array.Clear(_bodyCorrections, 0, _nextEntityId);
         for (int pairIndex = 0; pairIndex < _bodyPairs.Count; pairIndex++)
         {
@@ -1126,7 +1128,7 @@ internal sealed class Game : IDisposable
             Fighter a = FighterFor(pair.A);
             Fighter b = FighterFor(pair.B);
             if (a.Dead || b.Dead || !a.CombatActive || !b.CombatActive) continue;
-            if (!_bodyWorld.TryComputeContact(pair, out ContactPair contact)) continue;
+            if (!_world.TryComputeContact(pair, out ContactPair contact)) continue;
             DebugManifolds.Add(new CollisionManifoldDebug(
                 contact.Manifold, CollisionManifoldKind.Body));
             Vec2 separation = contact.Manifold.Normal * (contact.Manifold.Depth * .5f);
@@ -1185,7 +1187,7 @@ internal sealed class Game : IDisposable
     {
         for (int i = 0; i < Fighters.Count; i++)
             SyncHurtCollider(Fighters[i]);
-        if (_hurtWorld.EnabledCount == 0) return;
+        if (_world.EnabledCount == 0) return;
 
         for (int attackerIndex = 0; attackerIndex < Fighters.Count; attackerIndex++)
         {
@@ -1196,11 +1198,16 @@ internal sealed class Game : IDisposable
             Shape attackShape = CreateHitShape(attacker, hit, hitCenter);
             CollisionFilter attackFilter =
                 BattlefieldCollisionFilters.Attack(attacker.Faction);
-            _hurtWorld.Query(attackShape, attackFilter, _hitCandidates);
+            _world.Query(attackShape, attackFilter, _hitCandidates);
 
             for (int candidateIndex = 0; candidateIndex < _hitCandidates.Count; candidateIndex++)
             {
                 ArcHandle targetHandle = _hitCandidates[candidateIndex];
+                if (!_world.TryComputeContact(
+                        attackShape, attackFilter, targetHandle, out Manifold manifold))
+                    continue;
+                DebugManifolds.Add(new CollisionManifoldDebug(
+                    manifold, CollisionManifoldKind.Attack));
                 Fighter target = FighterFor(targetHandle);
                 if (target == attacker || target.Faction == attacker.Faction)
                     continue;
@@ -1210,11 +1217,6 @@ internal sealed class Game : IDisposable
                     continue;
                 if (MathF.Abs(attacker.Pos.Y - target.Pos.Y) > HitLane)
                     continue;
-                if (!_hurtWorld.TryComputeContact(
-                        attackShape, attackFilter, targetHandle, out Manifold manifold))
-                    continue;
-                DebugManifolds.Add(new CollisionManifoldDebug(
-                    manifold, CollisionManifoldKind.Attack));
                 if (attacker.WasHitBy(target, hit.HitId))
                     continue;
                 ApplyHit(attacker, target, hit);
@@ -1227,23 +1229,23 @@ internal sealed class Game : IDisposable
     {
         if (target.Dead || !target.CombatActive || target.IsInvulnerable)
         {
-            if (_hurtWorld.IsValid(target.HurtHandle))
-                _hurtWorld.SetEnabled(target.HurtHandle, false);
+            if (_world.IsValid(target.HurtHandle))
+                _world.SetEnabled(target.HurtHandle, false);
             return;
         }
 
         BoxShape hurt = target.CurrentHurtShape();
         Shape shape = new Obb(hurt.Center, hurt.HalfSize, hurt.Rotation);
-        if (_hurtWorld.IsValid(target.HurtHandle))
+        if (_world.IsValid(target.HurtHandle))
         {
-            _hurtWorld.Update(target.HurtHandle, shape);
-            _hurtWorld.SetFilter(
+            _world.Update(target.HurtHandle, shape);
+            _world.SetFilter(
                 target.HurtHandle,
                 BattlefieldCollisionFilters.Hurtbox(target.Faction));
-            _hurtWorld.SetEnabled(target.HurtHandle, true);
+            _world.SetEnabled(target.HurtHandle, true);
         }
         else
-            target.HurtHandle = _hurtWorld.Add(
+            target.HurtHandle = _world.Add(
                 target.EntityId,
                 shape,
                 BattlefieldCollisionFilters.Hurtbox(target.Faction));
@@ -1253,12 +1255,12 @@ internal sealed class Game : IDisposable
         attacker.Pos + new Vec2(attacker.Facing * hit.Box.Center.X, hit.Box.Center.Y - attacker.SkinY);
 
     internal bool HasBodyCollider(Fighter fighter) =>
-        _bodyWorld.IsValid(fighter.BodyHandle)
-        && _bodyWorld.IsEnabled(fighter.BodyHandle);
+        _world.IsValid(fighter.BodyHandle)
+        && _world.IsEnabled(fighter.BodyHandle);
 
     internal bool HasHurtCollider(Fighter fighter) =>
-        _hurtWorld.IsValid(fighter.HurtHandle)
-        && _hurtWorld.IsEnabled(fighter.HurtHandle);
+        _world.IsValid(fighter.HurtHandle)
+        && _world.IsEnabled(fighter.HurtHandle);
 
     internal static bool TryGetActiveAttackGeometry(
         Fighter attacker, out HitWindow hit, out Vec2 center)
@@ -1506,10 +1508,10 @@ internal sealed class Game : IDisposable
     private void UnregisterFighterAt(int index)
     {
         Fighter fighter = Fighters[index];
-        if (_bodyWorld.IsValid(fighter.BodyHandle))
-            _bodyWorld.Remove(fighter.BodyHandle);
-        if (_hurtWorld.IsValid(fighter.HurtHandle))
-            _hurtWorld.Remove(fighter.HurtHandle);
+        if (_world.IsValid(fighter.BodyHandle))
+            _world.Remove(fighter.BodyHandle);
+        if (_world.IsValid(fighter.HurtHandle))
+            _world.Remove(fighter.HurtHandle);
         _entitiesById[fighter.EntityId] = null;
         fighter.EntityId = -1;
         fighter.BodyHandle = default;
