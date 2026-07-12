@@ -1,3 +1,7 @@
+// Incremental AABB tree (Box2D-style). Leaves carry a fat AABB so small moves
+// don't re-insert; insertion descends by a surface-area cost heuristic and the
+// tree is kept balanced by single rotations on the way up. Mirrors the managed
+// DynamicAabbTree.cs.
 #include "broadphase.h"
 
 #include <stdexcept>
@@ -35,6 +39,9 @@ int DynamicAabbTree::create_proxy(int id, const Bounds& bounds) {
     return leaf;
 }
 
+// Re-fit a moved proxy. If the tight bounds still sit inside the stored fat
+// bounds, nothing changed structurally -- skip the reinsert (the whole point of
+// the fat margin). Otherwise pull the leaf and reinsert with fresh fat bounds.
 bool DynamicAabbTree::move_proxy(
     int proxy, const Bounds& bounds, const Bounds& fat_bounds) {
     if (nodes_[static_cast<size_t>(proxy)].bounds.contains(bounds)) return false;
@@ -68,6 +75,9 @@ void DynamicAabbTree::query(
     }
 }
 
+// Enumerate every pair of leaves whose fat bounds overlap, each ordered small-id
+// first. Iterative dual-node descent over the tree: (node,node) self-pairs expand
+// into their child cross-products, and disjoint node pairs are pruned wholesale.
 void DynamicAabbTree::compute_self_pairs(
     std::vector<std::pair<int, int>>& results) const {
     if (root_ == -1 || leaf_count_ < 2) return;
@@ -104,6 +114,10 @@ void DynamicAabbTree::compute_self_pairs(
     }
 }
 
+// Descend from the root choosing the child whose subtree grows least (a
+// surface-area/perimeter cost), stopping where making the leaf a direct sibling
+// is cheaper than descending further; then splice in a new internal parent and
+// refit/balance up to the root.
 void DynamicAabbTree::insert_leaf(int leaf) {
     if (root_ == -1) {
         root_ = leaf;
@@ -192,6 +206,9 @@ void DynamicAabbTree::fix_upward(int index) {
     }
 }
 
+// One rotation step toward balance: if a's children differ in height by >1, pivot
+// the taller grandchild subtree up. Returns the new subtree root. Called for every
+// node on the refit path so the tree stays within height ~log n.
 int DynamicAabbTree::balance(int a) {
     Node& node_a = nodes_[static_cast<size_t>(a)];
     if (node_a.is_leaf() || node_a.height < 2) return a;

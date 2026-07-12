@@ -1,3 +1,9 @@
+// Continuous (swept) collision: earliest time-of-impact of a moving shape against
+// a static target, to stop fast movers tunnelling through thin geometry. Rays use
+// closed forms (slab method for boxes, a quadratic for circles); general shapes
+// use a conservative-advancement SAT. Times are 16.16 fractions of the motion.
+// Near tangency the TOI is ill-conditioned, so accuracy is judged by clearance at
+// the reported time rather than the time itself. Mirrors ArcCollision.Ref/Sweep.
 #include "internal.h"
 
 #include <cmath>
@@ -5,11 +11,15 @@
 namespace arc {
 namespace {
 
+// Keep the earliest-hit candidate.
 void add_earlier(FxSweep candidate, FxSweep& best) {
     if (candidate.hit && (!best.hit || candidate.time < best.time))
         best = candidate;
 }
 
+// One axis of the slab method: intersect the motion with the [slabMin, slabMax]
+// span on this axis, tightening the running [tMin, tMax] entry/exit interval and
+// tracking which face produced the latest entry (the hit normal).
 bool slab(
     int64_t origin, int64_t direction, int64_t min, int64_t max,
     Axis min_normal, Axis max_normal,
@@ -195,6 +205,10 @@ bool sweep_axes(
     return true;
 }
 
+// Swept SAT: for each separating axis, turn the projected gap and the motion's
+// projection into an entry/exit time interval; intersect all of them. The largest
+// entry time (if it precedes the smallest exit) is the TOI, and the axis that set
+// it is the contact normal. Handles any convex mover vs convex target.
 FxSweep swept_sat(const Proxy& mover, Vec motion, const Proxy& target) {
     int64_t enter = 0;
     int64_t exit = TOne;
@@ -210,6 +224,8 @@ FxSweep swept_sat(const Proxy& mover, Vec motion, const Proxy& target) {
     return {true, enter, normal, midpoint(point_a, point_b)};
 }
 
+// Ray vs a radius-r disc (a capsule endpoint / rounded corner). Degenerate hit at
+// the exact centre falls back to the reversed motion direction for the normal.
 FxSweep rounded_point(Vec origin, Vec motion, Vec center, int64_t radius) {
     FxSweep hit = ray_circle(origin, motion, {center, radius});
     if (!hit.hit || (hit.point - center).length_sq() != 0) return hit;
@@ -266,6 +282,9 @@ FxSweep reverse_relative(FxSweep hit, Vec original_motion) {
     return hit;
 }
 
+// Fast paths: shape pairs with an exact swept closed form (anything with a moving
+// circle, or aabb/aabb). Circle-second cases are solved in the target's frame with
+// negated motion, then mapped back. Returns false to defer to the SAT sweep.
 bool fast_sweep(
     const arc_shape& mover, Vec motion, const arc_shape& target, FxSweep& hit) {
     if (mover.kind == ARC_SHAPE_CIRCLE && target.kind == ARC_SHAPE_CIRCLE) {
@@ -311,6 +330,9 @@ bool fast_sweep(
 
 } // namespace
 
+// Ray vs circle: smallest t in [0,1] solving |origin + t*motion - center|^2 = r^2.
+// The quadratic's coefficients are pre-scaled (product_shift) so the discriminant
+// stays in int64; an origin already inside reports t=0.
 FxSweep ray_circle(Vec origin, Vec motion, FxCircle circle) {
     const Vec relative = origin - circle.center;
     const int64_t a = motion.length_sq();
@@ -403,6 +425,9 @@ FxSweep ray_capsule(
     return best;
 }
 
+// Top-level swept dispatch: try the exact fast paths first; if the shapes already
+// overlap at t=0 report an immediate hit; otherwise sweep every convex-piece pair
+// (concave shapes decompose) and keep the earliest impact.
 FxSweep sweep_shapes(
     const arc_shape& mover, Vec motion, const arc_shape& target) {
     FxSweep fast;

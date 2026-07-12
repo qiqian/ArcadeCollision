@@ -1,3 +1,8 @@
+// Hybrid broadphase driver: keeps a dynamic tree (movers) and a static BVH, and
+// merges their candidate pairs. compute_pairs = dynamic self-pairs + a dual
+// descent between the dynamic tree and the static BVH; static-static pairs are
+// never reported (static geometry does not collide with itself). Mirrors the
+// managed SpatialHash.cs.
 #include "broadphase.h"
 
 #include <stdexcept>

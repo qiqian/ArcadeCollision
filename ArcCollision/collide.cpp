@@ -1,3 +1,8 @@
+// Discrete (static) overlap tests. Primitive pairs (circle/aabb) have dedicated
+// closed forms; everything involving rotation or a polygon goes through SAT on the
+// unit-axis (Q1.30) proxy representation. Concave polygons are split into convex
+// pieces and resolved per-piece. Returns a manifold whose normal points from the
+// first shape toward the second. Mirrors ArcCollision.Ref/Collide.cs.
 #include "internal.h"
 
 #include <cmath>
@@ -6,6 +11,8 @@
 namespace arc {
 namespace {
 
+// Fold an axis to a canonical half-plane so equal-depth ties break deterministically
+// (and identically to the managed backend), independent of which shape was first.
 Axis canonical_axis(Axis axis) {
     return axis.x < 0 || (axis.x == 0 && axis.y < 0) ? -axis : axis;
 }
@@ -17,6 +24,8 @@ bool canonical_before(Axis candidate, Axis current) {
         || (candidate.x == current.x && candidate.y < current.y);
 }
 
+// Point the separating axis from A toward B: choose the sign that gives the
+// smaller ejection, falling back to the centre delta when they tie.
 Axis orient_axis(
     Axis axis, int64_t toward_positive, int64_t toward_negative, Vec center_delta) {
     if (toward_positive < toward_negative) return axis;
@@ -24,6 +33,9 @@ Axis orient_axis(
     return axis.dot(center_delta) < 0 ? -axis : axis;
 }
 
+// Project a proxy's hull onto a unit axis, then widen by the rounding radius.
+// axis.dot(vertex) mixes Q1.30 x 24.8 = scale-2^38; radius*AxisOne matches that
+// scale, so [min,max] is the interval swept by the rounded shape along the axis.
 void project(const Proxy& proxy, Axis axis, int64_t& min, int64_t& max) {
     min = max = axis.dot(proxy.vertices[0]);
     for (size_t i = 1; i < proxy.vertices.size(); ++i) {
@@ -36,6 +48,7 @@ void project(const Proxy& proxy, Axis axis, int64_t& min, int64_t& max) {
     max += radius;
 }
 
+// Farthest point of the proxy in `direction` (hull support + radius offset).
 Vec support(const Proxy& proxy, Axis direction) {
     Vec best = proxy.vertices[0];
     int64_t best_projection = direction.dot(best);
@@ -49,6 +62,8 @@ Vec support(const Proxy& proxy, Axis direction) {
     return best + direction.scale(proxy.radius);
 }
 
+// The SAT contact (midpoint of two support points) can fall outside the shapes;
+// clamp it into the intersection of the operand AABBs so it stays a usable hint.
 Vec clamp_contact(Vec contact, const FxAabb& a, const FxAabb& b) {
     const Vec amin = a.min(), amax = a.max();
     const Vec bmin = b.min(), bmax = b.max();
@@ -61,6 +76,7 @@ Vec clamp_contact(Vec contact, const FxAabb& a, const FxAabb& b) {
             std::clamp(contact.y, min_y, max_y)};
 }
 
+// Running minimum-penetration axis across all tested separating axes.
 struct SatState {
     int64_t depth = std::numeric_limits<int64_t>::max();
     int64_t overlap = std::numeric_limits<int64_t>::max();
@@ -68,6 +84,12 @@ struct SatState {
     bool has_axis = false;
 };
 
+// Test one candidate axis. Crucially the raw axis is normalized to a Q1.30 unit
+// vector *first*: a near-degenerate edge yields a tiny raw axis whose integer
+// length would truncate and under-scale the radius projection, producing a false
+// separating axis (a missed collision) -- the bug the reference fixed. With a unit
+// axis, overlap is a true distance and depth = overlap / AxisOne back to 24.8.
+// Returns false as soon as a gap is found (shapes are separated).
 bool test_axis(Vec raw, const Proxy& a, const Proxy& b, SatState& state) {
     const Axis axis = Axis::from_vector(raw, {});
     if (axis.is_zero()) return true;
@@ -90,6 +112,7 @@ bool test_axis(Vec raw, const Proxy& a, const Proxy& b, SatState& state) {
     return true;
 }
 
+// Edge-normal axes of one proxy (the standard SAT axis set for polygons/boxes).
 bool test_edge_axes(
     const Proxy& source, const Proxy& a, const Proxy& b, SatState& state) {
     for (int edge = 0; edge < source.edge_count(); ++edge) {
@@ -100,6 +123,8 @@ bool test_edge_axes(
     return true;
 }
 
+// Vertex-vs-edge closest-approach axes: needed for rounded hulls (capsules) and
+// polygon corner/edge cases the edge normals alone miss.
 bool test_vertex_edge_axes(
     const Proxy& vertices, const Proxy& edges,
     const Proxy& a, const Proxy& b, SatState& state) {
@@ -114,6 +139,9 @@ bool test_vertex_edge_axes(
     return true;
 }
 
+// Circle/circle: exact. Touch (distance == radius) counts as colliding, depth 0.
+// Contact is the overlap midpoint along the centre line; the many other pairs
+// reduce to this (closest points expanded by their radii).
 FxManifold circle_circle(FxCircle a, FxCircle b) {
     const Vec delta = b.center - a.center;
     const int64_t radius = a.radius + b.radius;
@@ -127,6 +155,8 @@ FxManifold circle_circle(FxCircle a, FxCircle b) {
             a.center + normal.scale(a.radius - depth / 2)};
 }
 
+// AABB/AABB: exact. Inclusive touch (overlap == 0 is colliding, depth 0) to match
+// circle_circle and the boolean predicates. Ejects along the shallower axis.
 FxManifold aabb_aabb(FxAabb a, FxAabb b) {
     const Vec delta = b.center - a.center;
     const int64_t overlap_x = a.half.x + b.half.x - std::abs(delta.x);
@@ -147,6 +177,8 @@ FxManifold aabb_aabb(FxAabb a, FxAabb b) {
     return {true, normal, overlap_y, contact};
 }
 
+// Circle/AABB: exact. If the centre is outside, the closest box point gives the
+// normal/depth; if inside (distance 0), eject through the nearest face.
 FxManifold circle_aabb(FxCircle circle, FxAabb box) {
     const Vec min = box.min();
     const Vec max = box.max();
@@ -175,6 +207,9 @@ FxManifold circle_aabb(FxCircle circle, FxAabb box) {
             {circle.center.x, box.center.y + out * box.half.y}};
 }
 
+// A box as centre + two Q1.30 axes + half-extents. AABBs use the cardinal axes;
+// OBBs derive axis_x from the integer Angle32 via CORDIC, so the axis (and hence
+// every OBB result) is bit-identical across backends and independent of position.
 struct BoxProxy {
     Vec center;
     Axis axis_x;
@@ -196,6 +231,8 @@ BoxProxy make_box(arc_obb box) {
             std::abs(from_float(box.half_extents.y))};
 }
 
+// Project a box onto an axis directly (no vertex loop): centre projection +/- the
+// extent, where the extent sums each half-axis times |axis . box-axis|.
 void project_box(
     const BoxProxy& box, Axis axis, int64_t& min, int64_t& max) {
     const int64_t center = axis.dot(box.center);
@@ -244,6 +281,8 @@ bool test_box_axis(
     return true;
 }
 
+// AABB/OBB/OBB SAT: four axes (each box's two edge normals) suffice for boxes.
+// Contact is the clamped midpoint of the two support points along the min axis.
 FxManifold box_box(const BoxProxy& a, const BoxProxy& b) {
     int64_t overlap = std::numeric_limits<int64_t>::max();
     int64_t depth = std::numeric_limits<int64_t>::max();
@@ -259,6 +298,8 @@ FxManifold box_box(const BoxProxy& a, const BoxProxy& b) {
                 box_bounds(a), box_bounds(b))};
 }
 
+// Circle/OBB: rotate the circle into the box's local frame (reducing to
+// circle/AABB), solve there, then rotate the normal/contact back to world space.
 FxManifold circle_obb(arc_circle circle, arc_obb box) {
     const BoxProxy target = make_box(box);
     const FxCircle source = fixed_circle(circle);
@@ -327,6 +368,9 @@ bool test_capsule_box_axis(
     return true;
 }
 
+// Capsule/box SAT: the box's two face normals, the spine-perpendicular, and the
+// four corner-to-spine closest axes (the rounded-hull axes) together separate a
+// capsule from a box.
 FxManifold capsule_box(arc_capsule capsule, const BoxProxy& box) {
     const Vec a = Vec::from(capsule.a);
     const Vec b = Vec::from(capsule.b);
@@ -362,6 +406,8 @@ FxManifold capsule_box(arc_capsule capsule, const BoxProxy& box) {
                 segment_bounds(a, b, radius), box_bounds(box))};
 }
 
+// Circle/capsule: reduce to circle/circle against the closest point on the spine.
+// The degenerate case (circle centred on the spine) picks the spine-perpendicular.
 FxManifold circle_capsule(arc_circle circle, arc_capsule capsule) {
     const FxCircle fixed = fixed_circle(circle);
     const Vec a = Vec::from(capsule.a);
@@ -379,6 +425,8 @@ FxManifold circle_capsule(arc_circle circle, arc_capsule capsule) {
             fixed.center + normal.scale(std::abs(fixed.radius) - depth / 2)};
 }
 
+// Swap the operand order of a manifold: flip the normal and re-derive the
+// signed-zero mask so a reversed result still round-trips bit-exactly.
 FxManifold reverse(FxManifold value) {
     if (value.colliding) {
         const uint8_t old_mask = value.negative_zero_mask;
@@ -392,6 +440,10 @@ FxManifold reverse(FxManifold value) {
     return value;
 }
 
+// Capsule/capsule via the Minkowski difference: the two spines' difference hull
+// (4 points) inflated by the summed radii, tested against the origin. SAT on that
+// gives the true MTV even when the spines cross, where a naive closest-point
+// reduction would saturate. Contact is the clamped support-point midpoint.
 FxManifold capsule_capsule(arc_capsule first, arc_capsule second) {
     const Vec a0 = Vec::from(first.a), a1 = Vec::from(first.b);
     const Vec b0 = Vec::from(second.a), b1 = Vec::from(second.b);
@@ -426,12 +478,15 @@ FxManifold capsule_capsule(arc_capsule first, arc_capsule second) {
     return {true, normal, configuration.depth, contact};
 }
 
+// For concave shapes, the representative manifold is the deepest overlapping
+// convex sub-piece (ties broken canonically for determinism).
 bool is_better_piece(FxManifold candidate, FxManifold best) {
     if (!best.colliding || candidate.depth > best.depth) return true;
     if (candidate.depth < best.depth) return false;
     return canonical_before(candidate.normal, best.normal);
 }
 
+// Deepest colliding (piece_a, piece_b) pair with shape A shifted by `offset`.
 FxManifold deepest_piece(
     const arc_shape& a, const arc_shape& b, int pieces_a, int pieces_b, Vec offset) {
     FxManifold best;
@@ -446,6 +501,8 @@ FxManifold deepest_piece(
     return best;
 }
 
+// Fallback push that definitely separates two shapes: the shortest of the four
+// axis-aligned moves that clear one bounding box past the other (+2 slack).
 Vec guaranteed_separation(const Bounds& a, const Bounds& b) {
     const int64_t left = b.min_x - a.max_x - 2;
     const int64_t right = b.max_x - a.min_x + 2;
@@ -465,6 +522,10 @@ Vec guaranteed_separation(const Bounds& a, const Bounds& b) {
     return best;
 }
 
+// Concave overlap resolution: one piece's MTV can push A into another piece, so
+// iterate -- accumulate the per-step separation until no piece overlaps, then the
+// total offset is the true separation. Falls back to guaranteed_separation if the
+// iteration doesn't converge within the (piece-count-scaled) budget.
 FxManifold concave_collision(
     const arc_shape& a, const arc_shape& b, int pieces_a, int pieces_b) {
     Vec offset;
@@ -488,6 +549,10 @@ FxManifold concave_collision(
 
 } // namespace
 
+// Generic convex-vs-convex SAT: test both hulls' edge normals, add vertex/edge
+// axes when either shape is rounded (a radius), and fall back to the centre delta
+// for the fully-contained case. Result is the minimum-penetration axis + clamped
+// support-midpoint contact.
 FxManifold collide_proxy(const Proxy& a, const Proxy& b) {
     if (a.vertices.empty() || b.vertices.empty()) return {};
     SatState state;
@@ -510,6 +575,9 @@ FxManifold collide_proxy(const Proxy& a, const Proxy& b) {
     return {true, state.axis, state.depth, contact};
 }
 
+// Top-level narrowphase dispatch: route each shape-kind pair to its dedicated
+// closed form where one exists, otherwise fall through to the proxy/SAT and
+// concave paths. The normal always points from `a` toward `b`.
 FxManifold collide_shapes(const arc_shape& a, const arc_shape& b) {
     if (a.kind == ARC_SHAPE_CIRCLE && b.kind == ARC_SHAPE_CIRCLE)
         return circle_circle(fixed_circle(a.circle), fixed_circle(b.circle));

@@ -1,3 +1,8 @@
+// Fixed-point core: float<->fixed conversion, rounding-controlled integer
+// division, the restoring integer square root, adaptive product scaling for
+// degree-four discriminants, and the Q1.30 axis math (bit-serial division plus a
+// CORDIC angle->unit-vector). Everything here is exact integer arithmetic so the
+// managed reference and this native backend agree; see ArcCollision.Ref/Fixed.cs.
 #include "internal.h"
 
 #include <cmath>
@@ -6,11 +11,14 @@
 namespace arc {
 namespace {
 
+// Arithmetic right shift with round-to-nearest, symmetric around zero.
 int64_t round_shift(int64_t value, int shift) {
     const int64_t half = int64_t{1} << (shift - 1);
     return value >= 0 ? (value + half) >> shift : -((-value + half) >> shift);
 }
 
+// How far to pre-shift operands so their squared products stay within int64:
+// leave ~30 significant bits, so a product of two scaled operands fits in ~60.
 int product_shift_from_max(uint64_t value) {
     int bits = 0;
     while (value != 0) {
@@ -20,6 +28,9 @@ int product_shift_from_max(uint64_t value) {
     return std::max(0, bits - 30);
 }
 
+// numerator/denominator as a Q1.30 fraction (denominator > 0, |num| < den), by
+// bit-serial long division: 30 iterations each emit one fractional bit. Used to
+// normalise an axis component to unit length without a floating divide.
 int64_t ratio_q30(int64_t numerator, int64_t denominator) {
     if (denominator <= 0)
         throw std::out_of_range("Axis denominator must be positive.");
@@ -41,6 +52,9 @@ int64_t ratio_q30(int64_t numerator, int64_t denominator) {
     return negative ? -result : result;
 }
 
+// CORDIC rotation-mode table: arctan(2^-i) expressed as a 32-bit turn (2^32 =
+// full circle). CordicGainInverse pre-divides by the CORDIC gain so the vectoring
+// loop yields cosine/sine directly. Drives Axis::from_angle.
 constexpr std::array<int32_t, 31> CordicAngles{{
     0x20000000, 0x12E4051E, 0x09FB385B, 0x051111D4,
     0x028B0D43, 0x0145D7E1, 0x00A2F61E, 0x00517C55,
@@ -68,6 +82,8 @@ bool valid_vec(arc_vec2 value) {
     return valid_scalar(value.x) && valid_scalar(value.y);
 }
 
+// Quantize a world-space float to 24.8 with round-half-to-even (banker's
+// rounding), matching C# MathF.Round so both backends land on the same grid.
 int64_t from_float(float value) {
     if (!valid_scalar(value))
         throw std::out_of_range("Fixed-point input must be finite and within range.");
@@ -88,6 +104,7 @@ float to_sq(int64_t value) {
     return value / static_cast<float>(FxOne * FxOne);
 }
 
+// |value| as unsigned, without overflowing on INT64_MIN.
 uint64_t magnitude(int64_t value) {
     return value < 0
         ? static_cast<uint64_t>(-(value + 1)) + 1
@@ -147,6 +164,8 @@ int64_t clamped_param(int64_t numerator, int64_t denominator) {
     return result;
 }
 
+// numerator/denominator as a signed 16.16 value (whole part + 16 bit-serial
+// fractional bits). Used for sweep times and slab entry/exit parameters.
 int64_t ratio_t(int64_t numerator, int64_t denominator) {
     if (denominator == 0)
         throw std::domain_error("Division by zero.");
@@ -187,6 +206,8 @@ int64_t scale_product_operand(int64_t value, int shift) {
     return shift == 0 ? value : value >> shift;
 }
 
+// Floor integer square root by the restoring (digit-by-digit) method: exact,
+// branch-simple, and identical across platforms. Returns floor(sqrt(value)).
 int64_t sqrt_i64(int64_t value) {
     if (value <= 0) return 0;
     uint64_t x = static_cast<uint64_t>(value);
@@ -209,6 +230,13 @@ Axis Axis::from_vector(Vec value, Axis fallback) {
     return from_components(value.x, value.y, fallback);
 }
 
+// Normalize a raw (px,py) to a Q1.30 unit axis with adaptive precision. A short
+// vector's length_sq is tiny, so a plain integer sqrt would lose most of its
+// significant bits and the "unit" axis would be well off 1.0 (this is exactly the
+// short-vector bug the reference fixed). Fix: left-shift length_sq as far as
+// int64 allows before the sqrt, giving high_length = |v| * 2^(extra_shift/2);
+// pre-scale the numerators by the matching 2^(extra_shift/2) so ratio_q30 sees
+// full precision even for near-degenerate edges.
 Axis Axis::from_components(int64_t px, int64_t py, Axis fallback) {
     const int64_t length_sq = px * px + py * py;
     if (length_sq == 0) return fallback;
@@ -224,6 +252,12 @@ Axis Axis::from_components(int64_t px, int64_t py, Axis fallback) {
             ratio_q30(py * scale, high_length)};
 }
 
+// Turn a 32-bit angle (2^32 = full turn) into a Q1.30 unit axis via integer
+// CORDIC. The four cardinal turns are returned exactly; otherwise the angle is
+// folded into the first octant (quadrant + swap), the vectoring loop produces
+// cosine/sine, and the result is rotated back into the correct quadrant. Using
+// the same integer angle in both backends makes OBB axes bit-identical (and
+// translation-invariant, since the axis never depends on position).
 Axis Axis::from_angle(uint32_t angle) {
     if (angle == 0) return unit_x();
     if (angle == 0x40000000u) return unit_y();
@@ -231,7 +265,7 @@ Axis Axis::from_angle(uint32_t angle) {
     if (angle == 0xC0000000u) return -unit_y();
     const uint32_t quadrant = angle >> 30;
     const int64_t phase = angle & 0x3FFFFFFFu;
-    const bool swap = phase > 0x20000000LL;
+    const bool swap = phase > 0x20000000LL;   // fold the upper half of the quadrant
     int64_t z = swap ? 0x40000000LL - phase : phase;
     int64_t x_value = CordicGainInverse;
     int64_t y_value = 0;
@@ -255,6 +289,8 @@ Axis Axis::from_angle(uint32_t angle) {
     }
 }
 
+// Rotate a local-frame axis back into world space by the (basis_x, basis_y)
+// frame, renormalizing so the result stays a Q1.30 unit axis.
 Axis Axis::transform(Axis basis_x, Axis basis_y, Axis local) {
     const int64_t px = round_shift(
         basis_x.x * local.x + basis_y.x * local.y, AxisShift);
@@ -263,10 +299,12 @@ Axis Axis::transform(Axis basis_x, Axis basis_y, Axis local) {
     return from_components(px, py, unit_x());
 }
 
+// Cosine of the angle between two unit axes: (Q1.30 . Q1.30) >> 30 back to Q1.30.
 int64_t Axis::dot(Axis other) const {
     return round_shift(x * other.x + y * other.y, AxisShift);
 }
 
+// A 24.8 offset of `distance` along this unit axis: (axis * distance) >> 30.
 Vec Axis::scale(int64_t distance) const {
     return {round_shift(x * distance, AxisShift),
             round_shift(y * distance, AxisShift)};
@@ -278,6 +316,8 @@ arc_aabb Bounds::to_public() const {
              to_float((max_y - min_y) / 2)}};
 }
 
+// Convert to the public float manifold, restoring signed-zero normal components
+// (a mirrored contact wants -0.0, not +0.0) so mirror symmetry is bit-exact.
 arc_manifold FxManifold::to_public() const {
     if (!colliding) return {};
     arc_vec2 public_normal = normal.to_public();

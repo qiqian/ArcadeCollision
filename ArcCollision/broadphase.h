@@ -5,6 +5,10 @@
 
 namespace arc {
 
+// Incremental broadphase: a self-balancing tree of fat AABB proxies. Supports
+// add/move/remove in ~log n and box queries / self-pair enumeration. Nodes live
+// in a pooled array with a free list; leaves store the caller's id. Mirrors the
+// managed DynamicAabbTree and is exposed through the arc_dynamic_tree C API.
 class DynamicAabbTree {
 public:
     DynamicAabbTree();
@@ -57,6 +61,9 @@ private:
     void push_pair(int& count, int a, int b) const;
 };
 
+// Static broadphase: a SAH-binned AABB tree built in one shot from a set of
+// leaves (dirty until build()). Cheaper to query and more compact than the
+// dynamic tree, for colliders that don't move. Exposed via arc_static_bvh.
 class StaticBvh {
 public:
     void add_or_update(int id, const Bounds& bounds);
@@ -104,6 +111,10 @@ private:
     void push_query(int& count, int value) const;
 };
 
+// The world's hybrid broadphase: moving colliders live in the dynamic tree,
+// static colliders in the static BVH. compute_pairs reports dynamic-dynamic and
+// dynamic-static candidate pairs (never static-static). The name is historical;
+// it is a tree pair, not a hash grid.
 class SpatialHash {
 public:
     explicit SpatialHash(float fat_margin);

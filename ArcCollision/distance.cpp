@@ -1,9 +1,15 @@
+// Distance primitives: closest point on a segment and closest points between two
+// segments. These underlie capsule collisions and are exposed through the public
+// arc_closest_* C API. All integer; the segment-segment solve scales its operands
+// down (product_shift) so the 2x2 system stays inside int64 without 128-bit math.
 #include "internal.h"
 
 #include <cmath>
 
 namespace arc {
 
+// Closest point on segment [a,b] to `point`. out_time receives the 16.16
+// parameter along the segment (0 at a, TOne at b), clamped to the endpoints.
 Vec closest_segment(Vec point, Vec a, Vec b, int64_t* out_time) {
     const Vec ab = b - a;
     const int64_t length_sq = ab.length_sq();
@@ -16,26 +22,31 @@ Vec closest_segment(Vec point, Vec a, Vec b, int64_t* out_time) {
     return a + ab.times_t(time);
 }
 
+// Closest points c1 on [p1,q1] and c2 on [p2,q2], returning the squared distance
+// between them (scale 2^16). Follows the standard Ericson clamped-parameter
+// solution: solve for s on segment 1, project onto segment 2, re-clamp. Degenerate
+// (zero-length) segments fall back to the point/segment cases.
 int64_t closest_segments(
     Vec p1, Vec q1, Vec p2, Vec q2, Vec& c1, Vec& c2) {
     const Vec d1 = q1 - p1;
     const Vec d2 = q2 - p2;
     const Vec r = p1 - p2;
-    const int64_t a = d1.length_sq();
-    const int64_t e = d2.length_sq();
+    const int64_t a = d1.length_sq();      // |d1|^2
+    const int64_t e = d2.length_sq();      // |d2|^2
     const int64_t f = d2.dot(r);
     int64_t s = 0;
     int64_t t = 0;
     if (a == 0 && e == 0) {
-        s = t = 0;
+        s = t = 0;                         // both segments are points
     } else if (a == 0) {
-        t = clamped_param(f, e);
+        t = clamped_param(f, e);           // segment 1 is a point
     } else {
         const int64_t c = d1.dot(r);
         if (e == 0) {
-            s = clamped_param(-c, a);
+            s = clamped_param(-c, a);      // segment 2 is a point
         } else {
             const int64_t b = d1.dot(d2);
+            // Pre-scale the 2x2 coefficients so a*e - b*b fits in int64.
             const int shift = product_shift(a, b, c, e, f);
             const int64_t scaled_a = scale_product_operand(a, shift);
             const int64_t scaled_b = scale_product_operand(b, shift);

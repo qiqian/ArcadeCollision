@@ -1,3 +1,8 @@
+// Shape handling: polygon construction (validation, winding, ear-clip
+// triangulation, convexity test), reduction of any shape to SAT proxies (a
+// concave polygon yields one proxy per triangle), bounds computation, and the
+// polygon retain/release refcounting behind the C API. Mirrors the managed shape
+// types and Polygon.cs.
 #include "internal.h"
 
 #include <cmath>
@@ -7,6 +12,7 @@
 namespace arc {
 namespace {
 
+// Signed area x2 of triangle (a,b,c): >0 CCW, <0 CW, 0 collinear.
 int64_t cross(Vec a, Vec b, Vec c) {
     const Vec ab = b - a;
     const Vec ac = c - a;
@@ -39,6 +45,9 @@ bool point_in_triangle(Vec point, Vec a, Vec b, Vec c, int winding) {
         : ab <= 0 && bc <= 0 && ca <= 0;
 }
 
+// Validate and precompute a polygon: quantize vertices to 24.8, normalize winding,
+// reject self-intersecting/degenerate input, ear-clip into a triangle fan, flag
+// convexity (convex polygons skip per-triangle collision), and cache bounds.
 bool build_polygon(arc_polygon& polygon, const arc_vec2* vertices, int32_t count) {
     if (!vertices || count < 3) {
         set_error("A polygon requires at least three vertices.");
@@ -200,12 +209,16 @@ bool validate_shape(const arc_shape& shape) {
     }
 }
 
+// Number of convex SAT pieces: 1 for everything except a concave polygon, which
+// is its triangle count. collide/sweep iterate over each piece.
 int piece_count(const arc_shape& shape) {
     return shape.kind == ARC_SHAPE_POLYGON && shape.polygon
         && !shape.polygon->convex
         ? static_cast<int>(shape.polygon->triangles.size() / 3) : 1;
 }
 
+// Reduce a shape (or one triangle of a concave polygon) to a SAT proxy: hull
+// vertices plus a rounding radius (circle = centre + r, capsule = 2 points + r).
 Proxy make_proxy(const arc_shape& shape, int piece) {
     Proxy proxy;
     bool center_is_set = false;
@@ -302,6 +315,10 @@ FxAabb proxy_bounds(const Proxy& proxy) {
             {(max_x - min_x) / 2, (max_y - min_y) / 2}};
 }
 
+// Broadphase bounds for a shape. The OBB/rotated-polygon cases derive the extent
+// from the Q1.30 axes (ceil-divided so the box never under-covers), which is why
+// the same integer axis must be used everywhere -- a coarser axis would produce a
+// slightly different fat AABB and desync the broadphase from the reference.
 Bounds shape_bounds(const arc_shape& shape) {
     switch (shape.kind) {
     case ARC_SHAPE_CIRCLE: {
@@ -383,6 +400,8 @@ arc_shape moved_shape(arc_shape shape, arc_vec2 motion) {
     return shape;
 }
 
+// Polygon shapes hold a shared refcounted arc_polygon; retain/release keep it
+// alive while any shape (or the world) references it. Primitives own no resources.
 void retain_shape(const arc_shape& shape) {
     if (shape.kind == ARC_SHAPE_POLYGON && shape.polygon)
         shape.polygon->refs.fetch_add(1, std::memory_order_relaxed);

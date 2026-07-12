@@ -1,3 +1,7 @@
+// One-shot BVH for static colliders. build() recurses over the leaf set, at each
+// node binning centroids along the wider axis and picking the split that minimizes
+// a surface-area heuristic (perimeter * count on each side), falling back to a
+// median split when binning can't separate them. Mirrors managed StaticBvh.cs.
 #include "broadphase.h"
 
 #include <array>
@@ -85,6 +89,10 @@ void StaticBvh::query(
     }
 }
 
+// Recursively build the subtree over leaves [start, start+count). Compute the
+// node bounds and centroid spread, pick a split (SAH-binned), partition in place,
+// and recurse. A degenerate split (all on one side) falls back to a median sort so
+// the recursion always makes progress.
 int StaticBvh::build_range(int start, int count) {
     const int node_index = node_count_++;
     if (count == 1) {
@@ -120,6 +128,9 @@ int StaticBvh::build_range(int start, int count) {
     return node_index;
 }
 
+// Surface-area-heuristic split search: bin the centroids into BinCount buckets on
+// each axis, sweep prefix/suffix bounds+counts, and choose the (axis, boundary)
+// minimizing left.perimeter*left.count + right.perimeter*right.count.
 void StaticBvh::find_split(
     int start, int count, int64_t min_x, int64_t max_x,
     int64_t min_y, int64_t max_y, int& best_axis, int& best_split) {

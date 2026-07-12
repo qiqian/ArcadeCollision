@@ -1,3 +1,9 @@
+// The collision world and the bulk of the C ABI. A world owns a slot array of
+// colliders (each a shape + filter + broadphase proxy, addressed by a generational
+// arc_handle), the hybrid broadphase, and reusable scratch buffers. Handles carry a
+// world id so a stale handle from another world is rejected. This file also hosts
+// the standalone broadphase C API (arc_dynamic_tree / arc_static_bvh) at the end.
+// Array-returning entry points use the two-call output=null/capacity=0 protocol.
 #include "broadphase.h"
 
 #include <mutex>
