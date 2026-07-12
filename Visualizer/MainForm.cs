@@ -524,11 +524,21 @@ internal sealed class CanvasControl : Control
 
     private void AddCapsule(string key, Vec2 a, Vec2 b, float radius)
     {
+        var hc = new Handle
+        {
+            Name = key + ".c",
+            Pos = (a + b) * .5f,
+            IsCenter = true,
+        };
         var ha = new Handle { Name = key + ".a", Pos = a, IsCenter = true };
         var hb = new Handle { Name = key + ".b", Pos = b, IsCenter = true };
         var perp = (b - a).Perp.Normalized(Vec2.UnitY);
         var hr = new Handle { Name = key + ".r", Pos = a + perp * radius };
         ha.Children.Add(hr.Name);
+        hc.Children.Add(ha.Name);
+        hc.Children.Add(hb.Name);
+        hc.Children.Add(hr.Name);
+        _handles[hc.Name] = hc;
         _handles[ha.Name] = ha;
         _handles[hb.Name] = hb;
         _handles[hr.Name] = hr;
@@ -721,6 +731,16 @@ internal sealed class CanvasControl : Control
             foreach (var childName in h.Children)
                 if (_handles.TryGetValue(childName, out var child))
                     child.Pos += delta;
+
+            if (h.Name.EndsWith(".a", StringComparison.Ordinal)
+                || h.Name.EndsWith(".b", StringComparison.Ordinal))
+            {
+                string key = h.Name[..^2];
+                if (_handles.TryGetValue(key + ".c", out Handle? center)
+                    && _handles.TryGetValue(key + ".a", out Handle? a)
+                    && _handles.TryGetValue(key + ".b", out Handle? b))
+                    center.Pos = (a.Pos + b.Pos) * .5f;
+            }
             Invalidate();
         }
         base.OnMouseMove(e);
