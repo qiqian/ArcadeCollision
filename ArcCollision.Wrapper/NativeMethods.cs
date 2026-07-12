@@ -10,17 +10,22 @@ internal enum NativeStatus
     Ok, InvalidArgument, OutOfRange, InvalidHandle, BufferTooSmall, WorldLimit, InternalError
 }
 
-[StructLayout(LayoutKind.Sequential)]
+// Mirrors the native arc_shape tagged union (pack 4, 24 bytes) byte-for-byte:
+// kind@0, then a union@4 where the primitive geometries and the polygon transform
+// (translation@4, rotation@12, pointer@16) share storage -- only the member
+// matching Kind is live. Offsets are locked by static_asserts in the native
+// arccollision_api.cpp; keep the two in lockstep.
+[StructLayout(LayoutKind.Explicit, Pack = 4, Size = 24)]
 internal struct NativeShape
 {
-    public int Kind;
-    public Circle Circle;
-    public Aabb Aabb;
-    public Capsule Capsule;
-    public Obb Obb;
-    public IntPtr Polygon;
-    public Vec2 PolygonTranslation;
-    public uint PolygonRotation;
+    [FieldOffset(0)] public int Kind;
+    [FieldOffset(4)] public Circle Circle;
+    [FieldOffset(4)] public Aabb Aabb;
+    [FieldOffset(4)] public Capsule Capsule;
+    [FieldOffset(4)] public Obb Obb;
+    [FieldOffset(4)] public uint PolygonRotation;
+    [FieldOffset(8)] public Vec2 PolygonTranslation;
+    [FieldOffset(16)] public IntPtr Polygon;
 
     public NativeShape(in Shape shape)
     {

@@ -65,7 +65,7 @@ public sealed unsafe class ArcWorld : IDisposable
     public ArcWorld(in ArcWorldOptions options)
     {
         _ = FixedValidation.From(options.FatMargin);
-        if (NativeMethods.GetAbiVersion() != 1) throw new InvalidOperationException("ArcCollision native ABI version mismatch.");
+        if (NativeMethods.GetAbiVersion() != 2) throw new InvalidOperationException("ArcCollision native ABI version mismatch.");
         NativeOptions native = new(options);
         _handle = NativeMethods.WorldCreate(native);
         if (_handle.IsInvalid)

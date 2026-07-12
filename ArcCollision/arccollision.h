@@ -33,7 +33,7 @@
 extern "C" {
 #endif
 
-#define ARC_ABI_VERSION 1u
+#define ARC_ABI_VERSION 2u   /* bumped: arc_shape is now a 32-byte tagged union */
 #define ARC_MAX_WORLD_COUNT 15
 #define ARC_MAX_COLLIDER_COUNT 1048576
 #define ARC_MAX_ENTITY_ID 268435455
@@ -87,17 +87,50 @@ typedef struct arc_bp_bounds { int64_t min_x, min_y, max_x, max_y; } arc_bp_boun
 typedef struct arc_int_pair { int32_t a, b; } arc_int_pair;
 
 /* Only the member selected by kind is read. Polygon pointers are borrowed for
-   function arguments. arc_world_get_shape returns a retained polygon pointer. */
+   function arguments. arc_world_get_shape returns a retained polygon pointer.
+   The primitive geometries and the polygon transform share storage (a tagged
+   union), shrinking the struct from ~96 bytes to 24. Packed to 4 so the layout
+   is deterministic (no 8-byte pointer padding) and easy to mirror exactly in the
+   managed wrapper; the exact offsets are locked by static_asserts in
+   arccollision_api.cpp. The nameless union/struct is a universal compiler
+   extension; the pragmas below just silence the pedantic note for it. */
+#if defined(_MSC_VER)
+#  pragma warning(push)
+#  pragma warning(disable: 4201)
+#elif defined(__clang__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wgnu-anonymous-struct"
+#  pragma clang diagnostic ignored "-Wnested-anon-types"
+#elif defined(__GNUC__)
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored "-Wpedantic"
+#endif
+#pragma pack(push, 4)
 typedef struct arc_shape {
-    int32_t kind;
-    arc_circle circle;
-    arc_aabb aabb;
-    arc_capsule capsule;
-    arc_obb obb;
-    arc_polygon* polygon;
-    arc_vec2 polygon_translation;
-    uint32_t polygon_rotation;
-} arc_shape;
+    int32_t kind;              /* @0 */
+    union {                    /* @4 */
+        arc_circle circle;
+        arc_aabb aabb;
+        arc_capsule capsule;
+        arc_obb obb;
+        /* Polygon geometry pointer plus its transform. All three are live at
+           once for a polygon, so they are grouped (not overlapped); the group
+           shares the union with the primitives, which polygons don't use. */
+        struct {
+            uint32_t polygon_rotation;     /* @4  */
+            arc_vec2 polygon_translation;  /* @8 */
+            arc_polygon* polygon;          /* @16 */
+        };
+    };
+} arc_shape;                    /* sizeof == 24 */
+#pragma pack(pop)
+#if defined(_MSC_VER)
+#  pragma warning(pop)
+#elif defined(__clang__)
+#  pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#  pragma GCC diagnostic pop
+#endif
 typedef struct arc_collision_filter { uint32_t categories, collides_with; } arc_collision_filter;
 typedef struct arc_handle { uint32_t packed_index, packed_entity_id; } arc_handle;
 typedef struct arc_candidate_pair { arc_handle a, b; } arc_candidate_pair;
