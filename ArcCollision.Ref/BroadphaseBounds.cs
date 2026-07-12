@@ -50,7 +50,23 @@ internal readonly struct BpBounds
         MaxY = Math.Max(ay, by) + r;
     }
 
-    public BpBounds(Obb box) : this(box.Bounds) { }
+    public BpBounds(Obb box)
+    {
+        long x = Fx.From(box.Center.X);
+        long y = Fx.From(box.Center.Y);
+        long halfX = Math.Abs(Fx.From(box.HalfExtents.X));
+        long halfY = Math.Abs(Fx.From(box.HalfExtents.Y));
+        FxAxis axisX = FxAxis.FromRotation(box.Rotation);
+        FxAxis axisY = axisX.Perpendicular;
+        long extentX = Fx.CeilDivPositive(
+            Math.Abs(axisX.X) * halfX + Math.Abs(axisY.X) * halfY, FxAxis.One);
+        long extentY = Fx.CeilDivPositive(
+            Math.Abs(axisX.Y) * halfX + Math.Abs(axisY.Y) * halfY, FxAxis.One);
+        MinX = x - extentX;
+        MinY = y - extentY;
+        MaxX = x + extentX;
+        MaxY = y + extentY;
+    }
 
     public BpBounds(Polygon polygon)
     {

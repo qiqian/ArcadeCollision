@@ -61,6 +61,13 @@ internal static class Fx
         return q;
     }
 
+    public static long CeilDivPositive(long numerator, long denominator)
+    {
+        if (numerator < 0 || denominator <= 0)
+            throw new ArgumentOutOfRangeException();
+        return numerator == 0 ? 0 : 1 + (numerator - 1) / denominator;
+    }
+
     /// <summary>(a * t16) &gt;&gt; 16 with rounding — apply a 16.16 parameter to a fixed value.</summary>
     public static long MulT(long a, long t16) => RoundShift(a * t16, TShift);
 
@@ -96,7 +103,27 @@ internal static class Fx
     public static long RatioT(long num, long den)
     {
         if (den == 0) throw new DivideByZeroException();
-        return (num << TShift) / den;
+        bool negative = (num < 0) != (den < 0);
+        ulong numerator = Magnitude(num);
+        ulong denominator = Magnitude(den);
+        ulong whole = numerator / denominator;
+        ulong remainder = numerator % denominator;
+        ulong fraction = 0;
+        for (int i = 0; i < TShift; i++)
+        {
+            fraction <<= 1;
+            if (remainder >= denominator - remainder)
+            {
+                remainder -= denominator - remainder;
+                fraction |= 1;
+            }
+            else
+            {
+                remainder += remainder;
+            }
+        }
+        long result = checked((long)(whole * (ulong)TOne + fraction));
+        return negative ? -result : result;
     }
 
     /// <summary>(unit * fx) &gt;&gt; 8 with rounding — scale a fixed value by a 24.8 unit component.</summary>
@@ -126,7 +153,7 @@ internal static class Fx
         return Math.Max(0, bits - 30);
     }
 
-    private static ulong Magnitude(long value) =>
+    internal static ulong Magnitude(long value) =>
         value < 0 ? (ulong)(-(value + 1)) + 1 : (ulong)value;
 
     public static long ScaleProductOperand(long value, int shift) =>
@@ -216,6 +243,121 @@ internal readonly struct FxVec2
 
 }
 
+/// <summary>
+/// High-precision unit direction in signed Q1.30. Spatial vectors remain Q24.8;
+/// keeping axes separate prevents angular quantization error from growing with
+/// shape extent during projection.
+/// </summary>
+internal readonly struct FxAxis
+{
+    public const int Shift = 30;
+    public const long One = 1L << Shift;
+
+    public readonly long X;
+    public readonly long Y;
+
+    public FxAxis(long x, long y) { X = x; Y = y; }
+
+    public static readonly FxAxis Zero = new(0, 0);
+    public static readonly FxAxis UnitX = new(One, 0);
+    public static readonly FxAxis UnitY = new(0, One);
+
+    public bool IsZero => X == 0 && Y == 0;
+    public FxAxis Perpendicular => new(-Y, X);
+
+    public static FxAxis FromVector(FxVec2 vector, FxAxis fallback) =>
+        FromComponents(vector.X, vector.Y, fallback);
+
+    public static FxAxis FromRotation(float radians)
+    {
+        long x = (long)Math.Round(Math.Cos(radians) * One);
+        long y = (long)Math.Round(Math.Sin(radians) * One);
+        return FromComponents(x, y, UnitX);
+    }
+
+    public static FxAxis FromComponents(long x, long y, FxAxis fallback)
+    {
+        long lengthSq = x * x + y * y;
+        if (lengthSq == 0) return fallback;
+
+        // Increase sqrt precision before normalization. For a tiny vector such
+        // as (1,1), shifting lengthSq by 60 yields a ~Q30 denominator instead of
+        // isqrt(2)==1. The shift is even so components use the matching scale.
+        int extraShift = 60;
+        while (extraShift > 0 && (lengthSq >> (62 - extraShift)) != 0)
+            extraShift -= 2;
+
+        long highPrecisionLength = Fx.Sqrt(lengthSq << extraShift);
+        if (highPrecisionLength == 0) return fallback;
+        int componentShift = extraShift >> 1;
+        long scaledX = x << componentShift;
+        long scaledY = y << componentShift;
+        return new FxAxis(
+            RatioQ30(scaledX, highPrecisionLength),
+            RatioQ30(scaledY, highPrecisionLength));
+    }
+
+    /// <summary>Q24.8 position dot Q1.30 axis, returning Q?.38.</summary>
+    public long Dot(FxVec2 position) => position.X * X + position.Y * Y;
+
+    /// <summary>Q1.30 dot Q1.30, rounded back to Q1.30.</summary>
+    public long Dot(FxAxis other) =>
+        RoundShift(X * other.X + Y * other.Y, Shift);
+
+    /// <summary>Scale this unit axis by a Q24.8 distance, returning Q24.8.</summary>
+    public FxVec2 Scale(long distance) => new(
+        RoundShift(X * distance, Shift),
+        RoundShift(Y * distance, Shift));
+
+    public FxVec2 ToFxVec2() => new(
+        RoundShift(X, Shift - Fx.Shift),
+        RoundShift(Y, Shift - Fx.Shift));
+
+    public Vec2 ToVec2() => new(X / (float)One, Y / (float)One);
+
+    public static FxAxis operator -(FxAxis axis) => new(-axis.X, -axis.Y);
+
+    public static FxAxis Transform(FxAxis basisX, FxAxis basisY, FxAxis local)
+    {
+        long x = RoundShift(basisX.X * local.X + basisY.X * local.Y, Shift);
+        long y = RoundShift(basisX.Y * local.X + basisY.Y * local.Y, Shift);
+        return FromComponents(x, y, UnitX);
+    }
+
+    private static long RatioQ30(long numerator, long denominator)
+    {
+        if (denominator <= 0) throw new ArgumentOutOfRangeException(nameof(denominator));
+        bool negative = numerator < 0;
+        ulong remainder = Fx.Magnitude(numerator);
+        ulong divisor = (ulong)denominator;
+        if (remainder >= divisor) return negative ? -One : One;
+
+        long result = 0;
+        for (int i = 0; i < Shift; i++)
+        {
+            result <<= 1;
+            if (remainder >= divisor - remainder)
+            {
+                remainder -= divisor - remainder;
+                result |= 1;
+            }
+            else
+            {
+                remainder += remainder;
+            }
+        }
+        return negative ? -result : result;
+    }
+
+    private static long RoundShift(long value, int shift)
+    {
+        long half = 1L << (shift - 1);
+        return value >= 0
+            ? (value + half) >> shift
+            : -((-value + half) >> shift);
+    }
+}
+
 internal readonly struct FxCircle
 {
     public readonly FxVec2 Center;
@@ -235,15 +377,15 @@ internal readonly struct FxAabb
 }
 
 /// <summary>Integer manifold used internally before the boundary conversion.
-/// Normal is a 24.8 unit vector; Depth is 24.8; Contact is 24.8.</summary>
+/// Normal is Q1.30; Depth and Contact are Q24.8.</summary>
 internal readonly struct FxManifold
 {
     public readonly bool Colliding;
-    public readonly FxVec2 Normal;
+    public readonly FxAxis Normal;
     public readonly long Depth;
     public readonly FxVec2 Contact;
 
-    public FxManifold(bool colliding, FxVec2 normal, long depth, FxVec2 contact)
+    public FxManifold(bool colliding, FxAxis normal, long depth, FxVec2 contact)
     {
         Colliding = colliding;
         Normal = normal;
@@ -251,22 +393,29 @@ internal readonly struct FxManifold
         Contact = contact;
     }
 
-    public static readonly FxManifold None = new(false, FxVec2.Zero, 0, FxVec2.Zero);
+    public FxManifold(bool colliding, FxVec2 normal, long depth, FxVec2 contact)
+        : this(colliding,
+            colliding ? FxAxis.FromVector(normal, FxAxis.UnitX) : FxAxis.Zero,
+            depth, contact)
+    {
+    }
+
+    public static readonly FxManifold None = new(false, FxAxis.Zero, 0, FxVec2.Zero);
 
     public Manifold ToManifold() => Colliding
         ? new Manifold(true, Normal.ToVec2(), Fx.To(Depth), Contact.ToVec2())
         : Manifold.None;
 }
 
-/// <summary>Integer sweep result. Time is 16.16; Normal is a 24.8 unit vector.</summary>
+/// <summary>Integer sweep result. Time is 16.16; Normal is Q1.30.</summary>
 internal readonly struct FxSweep
 {
     public readonly bool Hit;
     public readonly long Time16;
-    public readonly FxVec2 Normal;
+    public readonly FxAxis Normal;
     public readonly FxVec2 Point;
 
-    public FxSweep(bool hit, long time16, FxVec2 normal, FxVec2 point)
+    public FxSweep(bool hit, long time16, FxAxis normal, FxVec2 point)
     {
         Hit = hit;
         Time16 = time16;
@@ -274,7 +423,15 @@ internal readonly struct FxSweep
         Point = point;
     }
 
-    public static readonly FxSweep Miss = new(false, Fx.TOne, FxVec2.Zero, FxVec2.Zero);
+    public FxSweep(bool hit, long time16, FxVec2 normal, FxVec2 point)
+        : this(hit,
+            time16,
+            hit ? FxAxis.FromVector(normal, FxAxis.UnitX) : FxAxis.Zero,
+            point)
+    {
+    }
+
+    public static readonly FxSweep Miss = new(false, Fx.TOne, FxAxis.Zero, FxVec2.Zero);
 
     public SweepHit ToSweepHit() => Hit
         ? new SweepHit(true, Fx.ToT(Time16), Normal.ToVec2(), Point.ToVec2())

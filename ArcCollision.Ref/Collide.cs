@@ -69,9 +69,11 @@ public static partial class Collide
 
         long dist = Fx.Sqrt(distSq);
         // Degenerate: concentric circles -> pick an arbitrary but stable axis.
-        FxVec2 normal = dist > 0 ? delta.NormalizedFx(FxVec2.UnitX) : FxVec2.UnitX;
+        FxAxis normal = dist > 0
+            ? FxAxis.FromVector(delta, FxAxis.UnitX)
+            : FxAxis.UnitX;
         long depth = r - dist;
-        FxVec2 contact = a.Center + normal.MulUnit(a.Radius - depth / 2);
+        FxVec2 contact = a.Center + normal.Scale(a.Radius - depth / 2);
         return new FxManifold(true, normal, depth, contact);
     }
 
@@ -96,14 +98,14 @@ public static partial class Collide
         if (overlapX < overlapY)
         {
             long sign = delta.X < 0 ? -1 : 1;
-            var normal = new FxVec2(sign * Fx.One, 0);
+            FxAxis normal = sign < 0 ? -FxAxis.UnitX : FxAxis.UnitX;
             long contactX = a.Center.X + sign * a.Half.X;
             return new FxManifold(true, normal, overlapX, new FxVec2(contactX, b.Center.Y));
         }
         else
         {
             long sign = delta.Y < 0 ? -1 : 1;
-            var normal = new FxVec2(0, sign * Fx.One);
+            FxAxis normal = sign < 0 ? -FxAxis.UnitY : FxAxis.UnitY;
             long contactY = a.Center.Y + sign * a.Half.Y;
             return new FxManifold(true, normal, overlapY, new FxVec2(b.Center.X, contactY));
         }
@@ -127,7 +129,7 @@ public static partial class Collide
         {
             // Center is outside the box: normal points to the nearest face/corner.
             long dist = Fx.Sqrt(distSq);
-            FxVec2 normal = delta.NormalizedFx(FxVec2.UnitX);
+            FxAxis normal = FxAxis.FromVector(delta, FxAxis.UnitX);
             long depth = c.Radius - dist;
             return new FxManifold(true, normal, depth, closest);
         }
@@ -142,7 +144,7 @@ public static partial class Collide
         if (overlapX < overlapY)
         {
             long outSign = d.X < 0 ? -1 : 1;
-            var normal = new FxVec2(-outSign * Fx.One, 0);
+            FxAxis normal = outSign < 0 ? FxAxis.UnitX : -FxAxis.UnitX;
             long depth = overlapX + c.Radius;
             var contact = new FxVec2(box.Center.X + outSign * box.Half.X, c.Center.Y);
             return new FxManifold(true, normal, depth, contact);
@@ -150,7 +152,7 @@ public static partial class Collide
         else
         {
             long outSign = d.Y < 0 ? -1 : 1;
-            var normal = new FxVec2(0, -outSign * Fx.One);
+            FxAxis normal = outSign < 0 ? FxAxis.UnitY : -FxAxis.UnitY;
             long depth = overlapY + c.Radius;
             var contact = new FxVec2(c.Center.X, box.Center.Y + outSign * box.Half.Y);
             return new FxManifold(true, normal, depth, contact);
@@ -267,7 +269,7 @@ public static partial class Collide
                     best = candidate;
             }
         }
-        if (best.Colliding && (ShapeCenter(b) - ShapeCenter(a)).Dot(best.Normal) < 0)
+        if (best.Colliding && best.Normal.Dot(ShapeCenter(b) - ShapeCenter(a)) < 0)
             best = new FxManifold(true, -best.Normal, best.Depth, best.Contact);
         return best.ToManifold();
     }
@@ -316,12 +318,12 @@ public static partial class Collide
     private readonly struct BoxProxy
     {
         public readonly FxVec2 Center;
-        public readonly FxVec2 AxisX;
-        public readonly FxVec2 AxisY;
+        public readonly FxAxis AxisX;
+        public readonly FxAxis AxisY;
         public readonly long HalfX;
         public readonly long HalfY;
 
-        public BoxProxy(FxVec2 center, FxVec2 axisX, FxVec2 axisY, long halfX, long halfY)
+        public BoxProxy(FxVec2 center, FxAxis axisX, FxAxis axisY, long halfX, long halfY)
         {
             Center = center;
             AxisX = axisX;
@@ -332,15 +334,13 @@ public static partial class Collide
     }
 
     private static BoxProxy CreateBox(Aabb box) => new(
-        FxVec2.From(box.Center), new FxVec2(Fx.One, 0), new FxVec2(0, Fx.One),
+        FxVec2.From(box.Center), FxAxis.UnitX, FxAxis.UnitY,
         Math.Abs(Fx.From(box.HalfExtents.X)), Math.Abs(Fx.From(box.HalfExtents.Y)));
 
     private static BoxProxy CreateBox(Obb box)
     {
-        float c = MathF.Cos(box.Rotation);
-        float s = MathF.Sin(box.Rotation);
-        var axisX = new FxVec2(Fx.From(c), Fx.From(s)).NormalizedFx(FxVec2.UnitX);
-        var axisY = new FxVec2(-axisX.Y, axisX.X);
+        FxAxis axisX = FxAxis.FromRotation(box.Rotation);
+        FxAxis axisY = axisX.Perpendicular;
         return new BoxProxy(FxVec2.From(box.Center), axisX, axisY,
             Math.Abs(Fx.From(box.HalfExtents.X)), Math.Abs(Fx.From(box.HalfExtents.Y)));
     }
@@ -351,21 +351,19 @@ public static partial class Collide
         FxCircle source = FxCircle.From(circle);
         FxVec2 delta = source.Center - target.Center;
         var localCenter = new FxVec2(
-            Fx.RoundDiv(delta.Dot(target.AxisX), Fx.One),
-            Fx.RoundDiv(delta.Dot(target.AxisY), Fx.One));
+            Fx.RoundDiv(target.AxisX.Dot(delta), FxAxis.One),
+            Fx.RoundDiv(target.AxisY.Dot(delta), FxAxis.One));
         FxManifold local = CircleVsAabbFx(
             new FxCircle(localCenter, Math.Abs(source.Radius)),
             new FxAabb(FxVec2.Zero, new FxVec2(target.HalfX, target.HalfY)));
         if (!local.Colliding)
             return Manifold.None;
 
-        FxVec2 normal = target.AxisX.MulUnit(local.Normal.X)
-            + target.AxisY.MulUnit(local.Normal.Y);
+        FxAxis normal = FxAxis.Transform(target.AxisX, target.AxisY, local.Normal);
         FxVec2 contact = target.Center
-            + target.AxisX.MulUnit(local.Contact.X)
-            + target.AxisY.MulUnit(local.Contact.Y);
-        return new FxManifold(true, normal.NormalizedFx(FxVec2.UnitX),
-            local.Depth, contact).ToManifold();
+            + target.AxisX.Scale(local.Contact.X)
+            + target.AxisY.Scale(local.Contact.Y);
+        return new FxManifold(true, normal, local.Depth, contact).ToManifold();
     }
 
     private static bool CircleObbOverlap(Circle circle, Obb box)
@@ -373,8 +371,8 @@ public static partial class Collide
         BoxProxy target = CreateBox(box);
         FxCircle source = FxCircle.From(circle);
         FxVec2 delta = source.Center - target.Center;
-        long localX = Fx.RoundDiv(delta.Dot(target.AxisX), Fx.One);
-        long localY = Fx.RoundDiv(delta.Dot(target.AxisY), Fx.One);
+        long localX = Fx.RoundDiv(target.AxisX.Dot(delta), FxAxis.One);
+        long localY = Fx.RoundDiv(target.AxisY.Dot(delta), FxAxis.One);
         long closestX = Math.Clamp(localX, -target.HalfX, target.HalfX);
         long closestY = Math.Clamp(localY, -target.HalfY, target.HalfY);
         long dx = localX - closestX;
@@ -386,18 +384,19 @@ public static partial class Collide
     private static Manifold BoxVsBox(in BoxProxy a, in BoxProxy b)
     {
         long depth = long.MaxValue;
-        FxVec2 axis = FxVec2.UnitX;
+        FxAxis axis = FxAxis.UnitX;
         if (!TestBoxAxis(a.AxisX, a, b, ref depth, ref axis)
             || !TestBoxAxis(a.AxisY, a, b, ref depth, ref axis)
             || !TestBoxAxis(b.AxisX, a, b, ref depth, ref axis)
             || !TestBoxAxis(b.AxisY, a, b, ref depth, ref axis))
             return Manifold.None;
 
-        FxVec2 normal = axis.NormalizedFx(FxVec2.UnitX);
-        if ((b.Center - a.Center).Dot(normal) < 0) normal = -normal;
+        FxAxis normalAxis = axis;
+        if (normalAxis.Dot(b.Center - a.Center) < 0) normalAxis = -normalAxis;
+        FxVec2 normal = normalAxis.ToFxVec2();
         FxVec2 contact = ClampContact(
-            Midpoint(BoxSupport(a, normal), BoxSupport(b, -normal)), BoxBounds(a), BoxBounds(b));
-        return new FxManifold(true, normal, depth, contact).ToManifold();
+            Midpoint(BoxSupport(a, normalAxis), BoxSupport(b, -normalAxis)), BoxBounds(a), BoxBounds(b));
+        return new FxManifold(true, normalAxis, depth, contact).ToManifold();
     }
 
     private static bool BoxesOverlap(in BoxProxy a, in BoxProxy b) =>
@@ -407,14 +406,14 @@ public static partial class Collide
         && BoxAxisOverlaps(b.AxisY, a, b);
 
     private static bool TestBoxAxis(
-        FxVec2 testAxis, in BoxProxy a, in BoxProxy b,
-        ref long bestDepth, ref FxVec2 bestAxis)
+        FxAxis testAxis, in BoxProxy a, in BoxProxy b,
+        ref long bestDepth, ref FxAxis bestAxis)
     {
         ProjectBox(a, testAxis, out long minA, out long maxA);
         ProjectBox(b, testAxis, out long minB, out long maxB);
         long overlap = Math.Min(maxA - minB, maxB - minA);
         if (overlap < 0) return false;
-        long depth = Fx.RoundDiv(overlap, testAxis.Length);
+        long depth = Fx.RoundDiv(overlap, FxAxis.One);
         if (depth < bestDepth)
         {
             bestDepth = depth;
@@ -423,27 +422,27 @@ public static partial class Collide
         return true;
     }
 
-    private static bool BoxAxisOverlaps(FxVec2 axis, in BoxProxy a, in BoxProxy b)
+    private static bool BoxAxisOverlaps(FxAxis axis, in BoxProxy a, in BoxProxy b)
     {
         ProjectBox(a, axis, out long minA, out long maxA);
         ProjectBox(b, axis, out long minB, out long maxB);
         return maxA >= minB && maxB >= minA;
     }
 
-    private static void ProjectBox(in BoxProxy box, FxVec2 axis, out long min, out long max)
+    private static void ProjectBox(in BoxProxy box, FxAxis axis, out long min, out long max)
     {
-        long center = box.Center.Dot(axis);
-        long radius = Fx.MulUnit(Math.Abs(box.AxisX.Dot(axis)), box.HalfX)
-            + Fx.MulUnit(Math.Abs(box.AxisY.Dot(axis)), box.HalfY);
+        long center = axis.Dot(box.Center);
+        long radius = Math.Abs(box.AxisX.Dot(axis)) * box.HalfX
+            + Math.Abs(box.AxisY.Dot(axis)) * box.HalfY;
         min = center - radius;
         max = center + radius;
     }
 
-    private static FxVec2 BoxSupport(in BoxProxy box, FxVec2 direction)
+    private static FxVec2 BoxSupport(in BoxProxy box, FxAxis direction)
     {
         FxVec2 result = box.Center;
-        result += box.AxisX.MulUnit(box.AxisX.Dot(direction) >= 0 ? box.HalfX : -box.HalfX);
-        result += box.AxisY.MulUnit(box.AxisY.Dot(direction) >= 0 ? box.HalfY : -box.HalfY);
+        result += box.AxisX.Scale(box.AxisX.Dot(direction) >= 0 ? box.HalfX : -box.HalfX);
+        result += box.AxisY.Scale(box.AxisY.Dot(direction) >= 0 ? box.HalfY : -box.HalfY);
         return result;
     }
 
@@ -453,14 +452,15 @@ public static partial class Collide
         FxVec2 b = FxVec2.From(capsule.B);
         long radius = Math.Abs(Fx.From(capsule.Radius));
         long depth = long.MaxValue;
-        FxVec2 axis = FxVec2.UnitX;
+        FxAxis axis = FxAxis.UnitX;
 
         if (!TestCapsuleBoxAxis(box.AxisX, a, b, radius, box, ref depth, ref axis)
             || !TestCapsuleBoxAxis(box.AxisY, a, b, radius, box, ref depth, ref axis))
             return Manifold.None;
 
         FxVec2 spine = b - a;
-        if (!TestCapsuleBoxAxis(new FxVec2(-spine.Y, spine.X),
+        if (spine.LengthSq != 0 && !TestCapsuleBoxAxis(
+                FxAxis.FromVector(new FxVec2(-spine.Y, spine.X), FxAxis.UnitY),
                 a, b, radius, box, ref depth, ref axis))
             return Manifold.None;
 
@@ -468,18 +468,21 @@ public static partial class Collide
         {
             FxVec2 vertex = BoxVertex(box, corner);
             FxVec2 closest = Distance.ClosestPointOnSegmentFx(vertex, a, b, out _);
-            if (!TestCapsuleBoxAxis(closest - vertex,
+            FxVec2 rawAxis = closest - vertex;
+            if (rawAxis.LengthSq != 0 && !TestCapsuleBoxAxis(
+                    FxAxis.FromVector(rawAxis, FxAxis.UnitX),
                     a, b, radius, box, ref depth, ref axis))
                 return Manifold.None;
         }
 
-        FxVec2 normal = axis.NormalizedFx(FxVec2.UnitX);
+        FxAxis normalAxis = axis;
         FxVec2 center = Midpoint(a, b);
-        if ((box.Center - center).Dot(normal) < 0) normal = -normal;
+        if (normalAxis.Dot(box.Center - center) < 0) normalAxis = -normalAxis;
+        FxVec2 normal = normalAxis.ToFxVec2();
         FxVec2 contact = ClampContact(
-            Midpoint(CapsuleSupport(a, b, radius, normal), BoxSupport(box, -normal)),
+            Midpoint(CapsuleSupport(a, b, radius, normalAxis), BoxSupport(box, -normalAxis)),
             SegmentBounds(a, b, radius), BoxBounds(box));
-        return new FxManifold(true, normal, depth, contact).ToManifold();
+        return new FxManifold(true, normalAxis, depth, contact).ToManifold();
     }
 
     private static bool CapsuleBoxOverlap(Capsule capsule, in BoxProxy box)
@@ -492,31 +495,32 @@ public static partial class Collide
             return false;
 
         FxVec2 spine = b - a;
-        if (!CapsuleBoxAxisOverlaps(new FxVec2(-spine.Y, spine.X), a, b, radius, box))
+        if (spine.LengthSq != 0 && !CapsuleBoxAxisOverlaps(
+                FxAxis.FromVector(new FxVec2(-spine.Y, spine.X), FxAxis.UnitY),
+                a, b, radius, box))
             return false;
 
         for (int corner = 0; corner < 4; corner++)
         {
             FxVec2 vertex = BoxVertex(box, corner);
             FxVec2 closest = Distance.ClosestPointOnSegmentFx(vertex, a, b, out _);
-            if (!CapsuleBoxAxisOverlaps(closest - vertex, a, b, radius, box))
+            FxVec2 rawAxis = closest - vertex;
+            if (rawAxis.LengthSq != 0 && !CapsuleBoxAxisOverlaps(
+                    FxAxis.FromVector(rawAxis, FxAxis.UnitX), a, b, radius, box))
                 return false;
         }
         return true;
     }
 
     private static bool TestCapsuleBoxAxis(
-        FxVec2 testAxis, FxVec2 a, FxVec2 b, long radius, in BoxProxy box,
-        ref long bestDepth, ref FxVec2 bestAxis)
+        FxAxis testAxis, FxVec2 a, FxVec2 b, long radius, in BoxProxy box,
+        ref long bestDepth, ref FxAxis bestAxis)
     {
-        long lengthSq = testAxis.LengthSq;
-        if (lengthSq == 0) return true;
-        long length = Fx.Sqrt(lengthSq);
-        ProjectCapsule(a, b, radius, testAxis, length, out long minA, out long maxA);
+        ProjectCapsule(a, b, radius, testAxis, out long minA, out long maxA);
         ProjectBox(box, testAxis, out long minB, out long maxB);
         long overlap = Math.Min(maxA - minB, maxB - minA);
         if (overlap < 0) return false;
-        long depth = Fx.RoundDiv(overlap, length);
+        long depth = Fx.RoundDiv(overlap, FxAxis.One);
         if (depth < bestDepth)
         {
             bestDepth = depth;
@@ -526,39 +530,36 @@ public static partial class Collide
     }
 
     private static bool CapsuleBoxAxisOverlaps(
-        FxVec2 axis, FxVec2 a, FxVec2 b, long radius, in BoxProxy box)
+        FxAxis axis, FxVec2 a, FxVec2 b, long radius, in BoxProxy box)
     {
-        long lengthSq = axis.LengthSq;
-        if (lengthSq == 0) return true;
-        long length = Fx.Sqrt(lengthSq);
-        ProjectCapsule(a, b, radius, axis, length, out long minA, out long maxA);
+        ProjectCapsule(a, b, radius, axis, out long minA, out long maxA);
         ProjectBox(box, axis, out long minB, out long maxB);
         return maxA >= minB && maxB >= minA;
     }
 
     private static void ProjectCapsule(
-        FxVec2 a, FxVec2 b, long radius, FxVec2 axis, long axisLength,
+        FxVec2 a, FxVec2 b, long radius, FxAxis axis,
         out long min, out long max)
     {
-        long first = a.Dot(axis);
-        long second = b.Dot(axis);
-        long radiusProjection = radius * axisLength;
+        long first = axis.Dot(a);
+        long second = axis.Dot(b);
+        long radiusProjection = radius * FxAxis.One;
         min = Math.Min(first, second) - radiusProjection;
         max = Math.Max(first, second) + radiusProjection;
     }
 
     private static FxVec2 CapsuleSupport(
-        FxVec2 a, FxVec2 b, long radius, FxVec2 direction)
+        FxVec2 a, FxVec2 b, long radius, FxAxis direction)
     {
-        FxVec2 endpoint = a.Dot(direction) >= b.Dot(direction) ? a : b;
-        return endpoint + direction.MulUnit(radius);
+        FxVec2 endpoint = direction.Dot(a) >= direction.Dot(b) ? a : b;
+        return endpoint + direction.Scale(radius);
     }
 
     private static FxVec2 BoxVertex(in BoxProxy box, int index)
     {
         long x = index is 1 or 2 ? box.HalfX : -box.HalfX;
         long y = index >= 2 ? box.HalfY : -box.HalfY;
-        return box.Center + box.AxisX.MulUnit(x) + box.AxisY.MulUnit(y);
+        return box.Center + box.AxisX.Scale(x) + box.AxisY.Scale(y);
     }
 
     private readonly struct ConvexProxy
@@ -659,7 +660,7 @@ public static partial class Collide
     private struct SatState
     {
         public long Depth;
-        public FxVec2 Axis;
+        public FxAxis Axis;
         public bool HasAxis;
     }
 
@@ -696,16 +697,11 @@ public static partial class Collide
             }
             case ShapeKind.Obb:
             {
-                Obb box = shape.Obb;
-                float c = MathF.Cos(box.Rotation);
-                float s = MathF.Sin(box.Rotation);
-                float hx = MathF.Abs(box.HalfExtents.X);
-                float hy = MathF.Abs(box.HalfExtents.Y);
-                Vec2 x = new(c * hx, s * hx);
-                Vec2 y = new(-s * hy, c * hy);
-                return new ConvexProxy(
-                    FxVec2.From(box.Center - x - y), FxVec2.From(box.Center + x - y),
-                    FxVec2.From(box.Center + x + y), FxVec2.From(box.Center - x + y));
+                BoxProxy box = CreateBox(shape.Obb);
+                FxVec2 x = box.AxisX.Scale(box.HalfX);
+                FxVec2 y = box.AxisY.Scale(box.HalfY);
+                return new ConvexProxy(box.Center - x - y, box.Center + x - y,
+                    box.Center + x + y, box.Center - x + y);
             }
             case ShapeKind.Polygon:
             {
@@ -740,13 +736,14 @@ public static partial class Collide
                 return FxManifold.None;
         }
 
-        FxVec2 normal = state.Axis.NormalizedFx(FxVec2.UnitX);
-        if ((b.Center - a.Center).Dot(normal) < 0)
-            normal = -normal;
-        FxVec2 pointA = Support(a, normal);
-        FxVec2 pointB = Support(b, -normal);
+        FxAxis normalAxis = state.Axis;
+        if (normalAxis.Dot(b.Center - a.Center) < 0)
+            normalAxis = -normalAxis;
+        FxVec2 normal = normalAxis.ToFxVec2();
+        FxVec2 pointA = Support(a, normalAxis);
+        FxVec2 pointB = Support(b, -normalAxis);
         FxVec2 contact = ClampContact(Midpoint(pointA, pointB), ProxyBounds(a), ProxyBounds(b));
-        return new FxManifold(true, normal, state.Depth, contact);
+        return new FxManifold(true, normalAxis, state.Depth, contact);
     }
 
     private static bool SatOverlaps(in ConvexProxy a, in ConvexProxy b)
@@ -806,26 +803,13 @@ public static partial class Collide
     private static bool AxisOverlaps(
         FxVec2 axis, in ConvexProxy a, in ConvexProxy b, ref bool hasAxis)
     {
-        // Round shapes need the radius projected along a correctly-scaled axis,
-        // so normalize to a 24.8 unit axis (exact length) — see TestAxis. Purely
-        // polygonal pairs carry no radius, so the raw axis suffices there.
-        if (a.Radius != 0 || b.Radius != 0)
-        {
-            FxVec2 unit = axis.NormalizedFx(FxVec2.Zero);
-            if (unit.X == 0 && unit.Y == 0)
-                return true;
-            hasAxis = true;
-            Project(a, unit, Fx.One, out long uMinA, out long uMaxA);
-            Project(b, unit, Fx.One, out long uMinB, out long uMaxB);
-            return uMaxA >= uMinB && uMaxB >= uMinA;
-        }
-
-        long lengthSq = axis.LengthSq;
-        if (lengthSq == 0)
-            return true;
+        // Radius projections require a unit axis. FxAxis normalizes to Q1.30
+        // with adaptive input precision, including for very short edges.
+        FxAxis unit = FxAxis.FromVector(axis, FxAxis.Zero);
+        if (unit.IsZero) return true;
         hasAxis = true;
-        Project(a, axis, 0, out long minA, out long maxA);
-        Project(b, axis, 0, out long minB, out long maxB);
+        Project(a, unit, out long minA, out long maxA);
+        Project(b, unit, out long minB, out long maxB);
         return maxA >= minB && maxB >= minA;
     }
 
@@ -863,24 +847,19 @@ public static partial class Collide
     private static bool TestAxis(
         FxVec2 axis, in ConvexProxy a, in ConvexProxy b, ref SatState state)
     {
-        // Normalize to a 24.8 unit axis first. A near-degenerate polygon edge
-        // yields a tiny raw axis whose integer length (isqrt of a very small
-        // value) is far too imprecise to scale the radius projection by — that
-        // under-count manufactures false separating axes and misses collisions.
-        // A unit axis has an exact known length (Fx.One), so the projection and
-        // depth are computed against it with no length-precision loss.
-        FxVec2 unit = axis.NormalizedFx(FxVec2.Zero);
-        if (unit.X == 0 && unit.Y == 0)
-            return true;
-        Project(a, unit, Fx.One, out long minA, out long maxA);
-        Project(b, unit, Fx.One, out long minB, out long maxB);
+        // Normalize to Q1.30 before projecting. Adaptive pre-scaling preserves
+        // precision for near-degenerate polygon edges before the integer sqrt.
+        FxAxis unit = FxAxis.FromVector(axis, FxAxis.Zero);
+        if (unit.IsZero) return true;
+        Project(a, unit, out long minA, out long maxA);
+        Project(b, unit, out long minB, out long maxB);
         long towardPositive = maxA - minB;
         long towardNegative = maxB - minA;
         if (towardPositive < 0 || towardNegative < 0)
             return false;
 
         long overlap = Math.Min(towardPositive, towardNegative);
-        long depth = Fx.RoundDiv(overlap, Fx.One);
+        long depth = Fx.RoundDiv(overlap, FxAxis.One);
         if (!state.HasAxis || depth < state.Depth)
         {
             state.HasAxis = true;
@@ -891,36 +870,36 @@ public static partial class Collide
     }
 
     private static void Project(
-        in ConvexProxy proxy, FxVec2 axis, long axisLength, out long min, out long max)
+        in ConvexProxy proxy, FxAxis axis, out long min, out long max)
     {
-        long projection = proxy.Vertex(0).Dot(axis);
+        long projection = axis.Dot(proxy.Vertex(0));
         min = max = projection;
         for (int i = 1; i < proxy.Count; i++)
         {
-            projection = proxy.Vertex(i).Dot(axis);
+            projection = axis.Dot(proxy.Vertex(i));
             min = Math.Min(min, projection);
             max = Math.Max(max, projection);
         }
-        long radiusProjection = proxy.Radius * axisLength;
+        long radiusProjection = proxy.Radius * FxAxis.One;
         min -= radiusProjection;
         max += radiusProjection;
     }
 
-    private static FxVec2 Support(in ConvexProxy proxy, FxVec2 direction)
+    private static FxVec2 Support(in ConvexProxy proxy, FxAxis direction)
     {
         FxVec2 best = proxy.Vertex(0);
-        long bestProjection = best.Dot(direction);
+        long bestProjection = direction.Dot(best);
         for (int i = 1; i < proxy.Count; i++)
         {
             FxVec2 candidate = proxy.Vertex(i);
-            long projection = candidate.Dot(direction);
+            long projection = direction.Dot(candidate);
             if (projection > bestProjection)
             {
                 best = candidate;
                 bestProjection = projection;
             }
         }
-        return best + direction.MulUnit(proxy.Radius);
+        return best + direction.Scale(proxy.Radius);
     }
 
     private static FxVec2 Midpoint(FxVec2 a, FxVec2 b) =>
@@ -939,8 +918,10 @@ public static partial class Collide
 
     private static FxAabb BoxBounds(in BoxProxy box)
     {
-        long hx = Fx.MulUnit(Math.Abs(box.AxisX.X), box.HalfX) + Fx.MulUnit(Math.Abs(box.AxisY.X), box.HalfY);
-        long hy = Fx.MulUnit(Math.Abs(box.AxisX.Y), box.HalfX) + Fx.MulUnit(Math.Abs(box.AxisY.Y), box.HalfY);
+        FxVec2 xExtent = box.AxisX.Scale(box.HalfX);
+        FxVec2 yExtent = box.AxisY.Scale(box.HalfY);
+        long hx = Math.Abs(xExtent.X) + Math.Abs(yExtent.X);
+        long hy = Math.Abs(xExtent.Y) + Math.Abs(yExtent.Y);
         return new FxAabb(box.Center, new FxVec2(hx, hy));
     }
 

@@ -27,14 +27,12 @@ public class OracleDifferentialTests
     private const double CapsuleZone = 4.0 / 256.0;
     private const double BoxZone = 6.0 / 256.0;
 
-    // SAT paths carry a quantized rotation axis (unit to ~0.4%), so their
-    // clearance/depth error scales with the projected extent. The gray zone and
-    // depth tolerance therefore grow with total shape extent rather than staying
-    // a fixed number of grid cells.
+    // Q1.30 axes make direction error negligible; retain only a tiny relative
+    // term on top of the absolute 24.8 position/vertex quantization envelope.
     private static double Extent(Circle c) => Math.Abs(c.Radius);
     private static double Extent(Obb o) => Math.Abs(o.HalfExtents.X) + Math.Abs(o.HalfExtents.Y);
     private static double Extent(Capsule c) => (c.B - c.A).Length * 0.5 + Math.Abs(c.Radius);
-    private static double SatGray(double extent) => 6.0 / 256.0 + extent * 0.007;
+    private static double SatGray(double extent) => 6.0 / 256.0 + extent * 0.0000001;
 
     private static void CheckBoolean(
         bool actual, double clearance, double grayZone, string repro)
@@ -55,7 +53,7 @@ public class OracleDifferentialTests
         if (Math.Abs(m.Depth - expected) > depthTol)
             Assert.Fail($"depth {m.Depth:F6} vs oracle {expected:F6}: {repro}");
         double lenSq = m.Normal.X * (double)m.Normal.X + m.Normal.Y * (double)m.Normal.Y;
-        Assert.True(Math.Abs(Math.Sqrt(lenSq) - 1.0) < 2.5 / 256.0,
+        Assert.True(Math.Abs(Math.Sqrt(lenSq) - 1.0) < 2e-6,
             $"normal not unit ({Math.Sqrt(lenSq):F6}): {repro}");
     }
 

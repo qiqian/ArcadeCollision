@@ -77,12 +77,6 @@ public class PolygonInvarianceTests
             if (pair == null) continue;
             var (polyShape, other, repro) = pair.Value;
 
-            // An OBB's vertices are center + float-rotated half-extents; that
-            // float sum is non-associative, so at million-unit offsets the
-            // quantized vertices shift by 1 ULP and the SAT depth is not
-            // bit-exact. Every non-OBB polygon pair IS bit-exact.
-            if (other.Kind == ShapeKind.Obb) continue;
-
             Manifold baseline = Collide.ShapeVsShape(polyShape, other);
 
             foreach (Vec2 offset in Offsets)

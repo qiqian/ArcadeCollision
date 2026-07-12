@@ -132,7 +132,7 @@ public class SweepAccuracyTests
             //     land within ~0.4% of the shape's reach off the true surface.
             double motionLen = Math.Sqrt((double)motion.X * motion.X + (double)motion.Y * motion.Y);
             double reach = Reach(mover) + Reach(target);
-            double budget = grayZone + motionLen * (4.0 / 65536.0) + reach * 0.004;
+            double budget = grayZone + motionLen * (4.0 / 65536.0) + reach * 0.00001;
 
             Assert.True(clearanceAtHit <= budget,
                 $"contact reported {clearanceAtHit:F6} above surface, budget {budget:F6} (impl t={hit.Time:R}): {repro}");
@@ -234,10 +234,7 @@ public class SweepAccuracyTests
 
             var dm = TestGeo.DShape.From(mover);
             var dt = TestGeo.DShape.From(target);
-            // The OBB's effective shape differs from the ideal by up to ~0.4% of
-            // its extent (quantized rotation axis), so the classification gray
-            // zone around touch must be size-relative for box pairs.
-            double gray = 6.0 / 256.0 + (Reach(dm) + Reach(dt)) * 0.005;
+            double gray = 6.0 / 256.0 + (Reach(dm) + Reach(dt)) * 0.0000001;
             SweepHit hit = Sweep.MovingShapeVsShape(new Shape(mover), motion, new Shape(target));
             OracleSweep oracle = Analyze(dm, dt, motion, gray);
             CheckSweep(hit, oracle, dm, dt, motion, gray, repro);

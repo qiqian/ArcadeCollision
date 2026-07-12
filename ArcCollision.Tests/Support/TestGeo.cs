@@ -26,8 +26,8 @@ internal static class TestGeo
     public static Circle Q(Circle c) => new(Q(c.Center), Q(c.Radius));
     public static Aabb Q(Aabb b) => new(Q(b.Center), Q(b.HalfExtents));
     public static Capsule Q(Capsule c) => new(Q(c.A), Q(c.B), Q(c.Radius));
-    // Obb rotation is consumed through MathF.Cos/Sin then re-quantized inside the
-    // library, so the rotation angle itself needs no snapping.
+    // OBB rotation is converted directly to a Q1.30 basis by the library, so the
+    // angle itself does not use the 24.8 position grid.
     public static Obb Q(Obb o) => new(Q(o.Center), Q(o.HalfExtents), o.Rotation);
     public static Polygon Q(Polygon p)
     {
@@ -91,9 +91,7 @@ internal static class TestGeo
         }
 
         /// <summary>
-        /// Replicates the library's OBB boundary conversion: the axis is the
-        /// float cos/sin pair quantized to 24.8 and re-normalized, so the oracle
-        /// sees the same rotated box the integer core sees.
+        /// Builds the independent double-precision OBB used by the oracle.
         /// </summary>
         public static DShape From(Obb o)
         {
@@ -129,44 +127,33 @@ internal static class TestGeo
         }
     }
 
-    /// <summary>
-    /// The axis the library derives for an OBB rotation: the float cos/sin pair
-    /// quantized to 24.8 and re-normalized with the integer square root. The
-    /// result is deliberately NOT renormalized here — its length is 1 ± ~0.3%,
-    /// and that tiny scale is part of the geometry the integer core actually
-    /// uses, so the oracle must replicate it verbatim.
-    /// </summary>
+    /// <summary>The ideal double-precision OBB axis used by the oracle.</summary>
     public static (double X, double Y) QuantizedAxis(float rotation)
     {
-        (long ax, long ay) = QuantizedAxisFx(rotation);
-        return (ax / 256.0, ay / 256.0);
+        return (Math.Cos(rotation), Math.Sin(rotation));
     }
 
-    /// <summary>The 24.8 integer axis components (length ≈ 256).</summary>
+    /// <summary>The Q1.30 axis components produced at the rotation boundary.</summary>
     public static (long X, long Y) QuantizedAxisFx(float rotation)
     {
-        long cFx = QFx(MathF.Cos(rotation));
-        long sFx = QFx(MathF.Sin(rotation));
-        long len = ISqrt(cFx * cFx + sFx * sFx);
-        if (len == 0) return (256, 0);
-        return (RoundDivD(cFx * 256, len), RoundDivD(sFx * 256, len));
+        const long one = 1L << 30;
+        return ((long)Math.Round(Math.Cos(rotation) * one),
+            (long)Math.Round(Math.Sin(rotation) * one));
     }
 
     /// <summary>
-    /// Clearance oracle replicating CircleVsObb's local-frame reduction: the
-    /// world delta is rotated with the quantized axis and divided by 256 (not by
-    /// the true axis length), then tested against an axis-aligned box. Matches
-    /// the implementation's effective geometry at every world scale.
+    /// Clearance oracle for CircleVsObb using the Q1.30 local-frame transform.
     /// </summary>
     public static double ClearanceCircleObb(Circle c, Obb o)
     {
         (long axX, long axY) = QuantizedAxisFx(o.Rotation);
         long dx = QFx(c.Center.X) - QFx(o.Center.X);
         long dy = QFx(c.Center.Y) - QFx(o.Center.Y);
-        // Implementation: RoundDiv(delta·axis, 256) in fixed; keep it unrounded
-        // here (the ≤0.5/256 rounding belongs to the caller's gray zone).
-        double lx = (dx * (double)axX + dy * (double)axY) / 256.0 / 256.0;
-        double ly = (dx * (double)-axY + dy * (double)axX) / 256.0 / 256.0;
+        // Keep the local coordinate unrounded here; the caller's gray zone
+        // accounts for the implementation's final 24.8 rounding.
+        const double axisOne = 1L << 30;
+        double lx = (dx * (double)axX + dy * (double)axY) / axisOne / 256.0;
+        double ly = (dx * (double)-axY + dy * (double)axX) / axisOne / 256.0;
         double hx = Math.Abs(Q(o.HalfExtents.X));
         double hy = Math.Abs(Q(o.HalfExtents.Y));
         double ex = Math.Max(0, Math.Abs(lx) - hx);

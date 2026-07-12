@@ -6,11 +6,9 @@ namespace ArcCollision.Tests.Support;
 /// Shared, documented tolerance model for the accuracy suite.
 ///
 /// The integer core is exact for the primitive predicate paths (circle/circle,
-/// circle/aabb, aabb/aabb) but SAT and rotated paths carry a quantized rotation
-/// axis whose unit length is off by up to ~0.4%. Projecting that error over a
-/// shape's extent means the clearance / depth error grows with shape size, so
-/// the gray zone for any OBB- or polygon-involving pair must be size-relative
-/// rather than a fixed number of grid cells.
+/// circle/aabb, aabb/aabb). SAT axes use Q1.30, so direction error is negligible;
+/// the remaining envelope is primarily the 24.8 position/vertex grid plus a
+/// tiny size-relative term for Q30 projection rounding.
 /// </summary>
 internal static class Tol
 {
@@ -29,7 +27,7 @@ internal static class Tol
     }
 
     /// <summary>Size-relative gray zone for a SAT / rotated-shape pair.</summary>
-    public static double SatGray(double extentSum) => 6.0 / 256.0 + extentSum * 0.007;
+    public static double SatGray(double extentSum) => 6.0 / 256.0 + extentSum * 0.0000001;
 
     // -------------------------------------------------------- sliver filter
 

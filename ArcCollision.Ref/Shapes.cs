@@ -87,14 +87,15 @@ public readonly struct Obb
     {
         get
         {
-            float c = MathF.Cos(Rotation);
-            float s = MathF.Sin(Rotation);
-            float hx = MathF.Abs(HalfExtents.X);
-            float hy = MathF.Abs(HalfExtents.Y);
-            var half = new Vec2(
-                MathF.Abs(c) * hx + MathF.Abs(s) * hy,
-                MathF.Abs(s) * hx + MathF.Abs(c) * hy);
-            return new Aabb(Center, half);
+            long halfX = Math.Abs(Fx.From(HalfExtents.X));
+            long halfY = Math.Abs(Fx.From(HalfExtents.Y));
+            FxAxis axisX = FxAxis.FromRotation(Rotation);
+            FxAxis axisY = axisX.Perpendicular;
+            long extentX = Fx.CeilDivPositive(
+                Math.Abs(axisX.X) * halfX + Math.Abs(axisY.X) * halfY, FxAxis.One);
+            long extentY = Fx.CeilDivPositive(
+                Math.Abs(axisX.Y) * halfX + Math.Abs(axisY.Y) * halfY, FxAxis.One);
+            return new Aabb(Center, new Vec2(Fx.To(extentX), Fx.To(extentY)));
         }
     }
 

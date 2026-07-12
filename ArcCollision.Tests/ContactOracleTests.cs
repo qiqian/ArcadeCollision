@@ -63,13 +63,13 @@ public class ContactOracleTests
     }
 
     // Base tolerance: 4 grid cells for sub-pixel rounding.
-    private const double BaseTol = 4.0 / 256.0;
+    private const double BaseTol = 3.0 / 256.0;
 
     private static double ScaledTol(float maxRadius)
     {
         // The integer normal's ±1/256 error multiplied by the offset distance
         // (up to maxRadius) gives a proportional contact error.
-        return BaseTol + Math.Abs(maxRadius) * 4.0 / 256.0;
+        return BaseTol + Math.Abs(maxRadius) * 0.0000002;
     }
 
     private static void CheckContact(

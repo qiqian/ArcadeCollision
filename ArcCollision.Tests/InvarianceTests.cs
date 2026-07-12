@@ -170,14 +170,6 @@ public class InvarianceTests
             var motion = S8(new Vec2(rng.Next(-8000, 8000) / 8f, rng.Next(-8000, 8000) / 8f));
             SweepHit baseline = Sweep.MovingShapeVsShape(a.AsShape(), motion, b.AsShape());
 
-            // The OBB swept path rotates into the box's local frame with float
-            // cos/sin, so OBB-involved sweeps are NOT translation-invariant (the
-            // float dot products lose several grid cells at million-unit offsets).
-            // That path's accuracy is covered by the sampled-oracle sweep tests
-            // instead; here we assert bit-exact invariance only for the fully
-            // integer paths (circle / aabb / capsule).
-            if (a.Kind == ShapeKind.Obb || b.Kind == ShapeKind.Obb) continue;
-
             foreach (Vec2 offset in Offsets)
             {
                 SweepHit moved = Sweep.MovingShapeVsShape(

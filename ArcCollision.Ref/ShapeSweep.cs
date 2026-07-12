@@ -230,8 +230,8 @@ public static partial class Sweep
                 if (!hit.Hit || (best.Hit && hit.Time16 >= best.Time16))
                     continue;
 
-                FxVec2 normal = -hit.Normal;
-                FxVec2 contact = point + normal.MulUnit(target.Radius);
+                FxAxis normal = -hit.Normal;
+                FxVec2 contact = point + normal.Scale(target.Radius);
                 best = new FxSweep(true, hit.Time16, normal, contact);
             }
         }
@@ -241,7 +241,7 @@ public static partial class Sweep
     {
         if (!hit.Hit || (best.Hit && hit.Time16 >= best.Time16))
             return;
-        FxVec2 contact = hit.Point - hit.Normal.MulUnit(moverRadius);
+        FxVec2 contact = hit.Point - hit.Normal.Scale(moverRadius);
         best = new FxSweep(true, hit.Time16, hit.Normal, contact);
     }
 
@@ -250,14 +250,14 @@ public static partial class Sweep
     {
         long enter = 0;
         long exit = Fx.TOne;
-        FxVec2 normal = FxVec2.Zero;
+        FxAxis normal = FxAxis.Zero;
         if (!SweepAxes(mover, mover, motion, target, ref enter, ref exit, ref normal)
             || !SweepAxes(target, mover, motion, target, ref enter, ref exit, ref normal)
             || enter < 0 || enter > Fx.TOne)
             return FxSweep.Miss;
 
-        if (normal.LengthSq == 0)
-            normal = (-motion).NormalizedFx(FxVec2.UnitX);
+        if (normal.IsZero)
+            normal = FxAxis.FromVector(-motion, FxAxis.UnitX);
         FxVec2 pointA = SweepSupport(mover, -normal) + motion.MulT(enter);
         FxVec2 pointB = SweepSupport(target, normal);
         FxVec2 contact = new(
@@ -268,14 +268,14 @@ public static partial class Sweep
 
     private static bool SweepAxes(
         in SweepProxy source, in SweepProxy mover, FxVec2 motion,
-        in SweepProxy target, ref long enter, ref long exit, ref FxVec2 normal)
+        in SweepProxy target, ref long enter, ref long exit, ref FxAxis normal)
     {
         for (int edge = 0; edge < source.EdgeCount; edge++)
         {
             source.Edge(edge, out FxVec2 p0, out FxVec2 p1);
             FxVec2 delta = p1 - p0;
-            FxVec2 axis = new FxVec2(-delta.Y, delta.X)
-                .NormalizedFx(FxVec2.UnitX);
+            FxAxis axis = FxAxis.FromVector(
+                new FxVec2(-delta.Y, delta.X), FxAxis.UnitX);
             if (!SweepAxis(axis, mover, motion, target,
                     ref enter, ref exit, ref normal))
                 return false;
@@ -284,12 +284,12 @@ public static partial class Sweep
     }
 
     private static bool SweepAxis(
-        FxVec2 axis, in SweepProxy mover, FxVec2 motion, in SweepProxy target,
-        ref long enter, ref long exit, ref FxVec2 normal)
+        FxAxis axis, in SweepProxy mover, FxVec2 motion, in SweepProxy target,
+        ref long enter, ref long exit, ref FxAxis normal)
     {
         ProjectSweep(mover, axis, out long minA, out long maxA);
         ProjectSweep(target, axis, out long minB, out long maxB);
-        long velocity = Fx.RoundDiv(motion.Dot(axis), Fx.One);
+        long velocity = axis.Dot(motion);
         if (velocity == 0)
             return maxA >= minB && maxB >= minA;
 
@@ -307,26 +307,26 @@ public static partial class Sweep
     }
 
     private static void ProjectSweep(
-        in SweepProxy proxy, FxVec2 axis, out long min, out long max)
+        in SweepProxy proxy, FxAxis axis, out long min, out long max)
     {
-        long projection = Fx.RoundDiv(proxy.Vertex(0).Dot(axis), Fx.One);
+        long projection = axis.Dot(proxy.Vertex(0));
         min = max = projection;
         for (int i = 1; i < proxy.Count; i++)
         {
-            projection = Fx.RoundDiv(proxy.Vertex(i).Dot(axis), Fx.One);
+            projection = axis.Dot(proxy.Vertex(i));
             min = Math.Min(min, projection);
             max = Math.Max(max, projection);
         }
     }
 
-    private static FxVec2 SweepSupport(in SweepProxy proxy, FxVec2 direction)
+    private static FxVec2 SweepSupport(in SweepProxy proxy, FxAxis direction)
     {
         FxVec2 best = proxy.Vertex(0);
-        long projection = best.Dot(direction);
+        long projection = direction.Dot(best);
         for (int i = 1; i < proxy.Count; i++)
         {
             FxVec2 candidate = proxy.Vertex(i);
-            long candidateProjection = candidate.Dot(direction);
+            long candidateProjection = direction.Dot(candidate);
             if (candidateProjection > projection)
             {
                 best = candidate;
@@ -348,10 +348,10 @@ public static partial class Sweep
         AddEarlier(RayVsRoundedPoint(origin, motion, a, radius), ref best);
         AddEarlier(RayVsRoundedPoint(origin, motion, b, radius), ref best);
 
-        FxVec2 unitNormal = new FxVec2(-segment.Y, segment.X)
-            .NormalizedFx(new FxVec2(0, Fx.One));
-        long position = Fx.RoundDiv((origin - a).Dot(unitNormal), Fx.One);
-        long velocity = Fx.RoundDiv(motion.Dot(unitNormal), Fx.One);
+        FxAxis unitNormal = FxAxis.FromVector(
+            new FxVec2(-segment.Y, segment.X), FxAxis.UnitY);
+        long position = Fx.RoundDiv(unitNormal.Dot(origin - a), FxAxis.One);
+        long velocity = Fx.RoundDiv(unitNormal.Dot(motion), FxAxis.One);
         long entry;
         long exit;
         if (velocity == 0)
@@ -376,8 +376,8 @@ public static partial class Sweep
         if (projection >= 0 && projection <= segment.LengthSq)
         {
             FxVec2 closest = Distance.ClosestPointOnSegmentFx(point, a, b, out _);
-            FxVec2 normal = (point - closest).NormalizedFx(
-                (-motion).NormalizedFx(unitNormal));
+            FxAxis normal = FxAxis.FromVector(point - closest,
+                FxAxis.FromVector(-motion, unitNormal));
             AddEarlier(new FxSweep(true, entry, normal, point), ref best);
         }
         return best;
@@ -389,7 +389,7 @@ public static partial class Sweep
         FxSweep hit = RayVsCircleFx(origin, motion, new FxCircle(center, radius));
         if (!hit.Hit || (hit.Point - center).LengthSq != 0)
             return hit;
-        FxVec2 normal = (-motion).NormalizedFx(FxVec2.UnitX);
+        FxAxis normal = FxAxis.FromVector(-motion, FxAxis.UnitX);
         return new FxSweep(true, hit.Time16, normal, hit.Point);
     }
 
@@ -434,15 +434,14 @@ public static partial class Sweep
             case ShapeKind.Obb:
             {
                 Obb box = shape.Obb;
-                float c = MathF.Cos(box.Rotation);
-                float s = MathF.Sin(box.Rotation);
-                float hx = MathF.Abs(box.HalfExtents.X);
-                float hy = MathF.Abs(box.HalfExtents.Y);
-                Vec2 x = new(c * hx, s * hx);
-                Vec2 y = new(-s * hy, c * hy);
+                FxAxis axisX = FxAxis.FromRotation(box.Rotation);
+                FxAxis axisY = axisX.Perpendicular;
+                FxVec2 center = FxVec2.From(box.Center);
+                FxVec2 x = axisX.Scale(Math.Abs(Fx.From(box.HalfExtents.X)));
+                FxVec2 y = axisY.Scale(Math.Abs(Fx.From(box.HalfExtents.Y)));
                 return new SweepProxy(
-                    FxVec2.From(box.Center - x - y), FxVec2.From(box.Center + x - y),
-                    FxVec2.From(box.Center + x + y), FxVec2.From(box.Center - x + y));
+                    center - x - y, center + x - y,
+                    center + x + y, center - x + y);
             }
             case ShapeKind.Polygon:
             {
