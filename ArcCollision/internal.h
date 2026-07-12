@@ -181,26 +181,46 @@ struct FxSweep {
     int64_t time = TOne;
     Axis normal;
     Vec point;
+    uint8_t negative_zero_mask = 0;
     arc_sweep_hit to_public() const;
     static FxSweep miss() { return {}; }
 };
 
-// A convex shape reduced to SAT form: a hull of vertices plus a rounding radius
-// (circle = 0 vertices+r, capsule = 2 vertices+r, polygon = N vertices). Circles
-// are handled by their reductions elsewhere.
+// Allocation-free convex proxy matching the managed ConvexProxy/SweepProxy.
+// Primitive hulls use four inline vertices. Polygon proxies borrow immutable
+// polygon storage and retain only an optional index window plus transform data.
+// The owning arc_shape/polygon is kept alive for every proxy call site.
 struct Proxy {
-    std::vector<Vec> vertices;
+    std::array<Vec, 4> inline_vertices{};
+    const Vec* borrowed_vertices = nullptr;
+    const int* borrowed_indices = nullptr;
+    int borrowed_index_offset = 0;
+    int count = 0;
+    Vec offset;
+    Axis axis_x;
+    Axis axis_y;
+    bool transformed = false;
     int64_t radius = 0;
     Vec center;
 
+    Vec vertex(int index) const {
+        Vec value;
+        if (borrowed_vertices) {
+            const int source_index = borrowed_indices
+                ? borrowed_indices[borrowed_index_offset + index] : index;
+            value = borrowed_vertices[source_index];
+            if (transformed)
+                value = axis_x.scale(value.x) + axis_y.scale(value.y);
+        } else {
+            value = inline_vertices[static_cast<size_t>(index)];
+        }
+        return value + offset;
+    }
     int edge_count() const {
-        return vertices.size() <= 1 ? 0 : vertices.size() == 2 ? 1
-            : static_cast<int>(vertices.size());
+        return count <= 1 ? 0 : count == 2 ? 1 : count;
     }
     std::pair<Vec, Vec> edge(int index) const {
-        return {vertices[static_cast<size_t>(index)],
-                vertices[vertices.size() == 2 ? 1
-                    : (static_cast<size_t>(index) + 1) % vertices.size()]};
+        return {vertex(index), vertex(count == 2 ? 1 : (index + 1) % count)};
     }
     Proxy translated(Vec offset) const;
 };

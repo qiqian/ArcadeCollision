@@ -138,22 +138,23 @@ bool is_polygonal(int kind) {
 }
 
 void project_sweep(const Proxy& proxy, Axis axis, int64_t& min, int64_t& max) {
-    min = max = axis.dot(proxy.vertices[0]);
-    for (size_t i = 1; i < proxy.vertices.size(); ++i) {
-        const int64_t projection = axis.dot(proxy.vertices[i]);
+    min = max = axis.dot(proxy.vertex(0));
+    for (int i = 1; i < proxy.count; ++i) {
+        const int64_t projection = axis.dot(proxy.vertex(i));
         min = std::min(min, projection);
         max = std::max(max, projection);
     }
 }
 
 Vec sweep_support(const Proxy& proxy, Axis direction) {
-    Vec best = proxy.vertices[0];
+    Vec best = proxy.vertex(0);
     int64_t projection = direction.dot(best);
-    for (size_t i = 1; i < proxy.vertices.size(); ++i) {
-        const int64_t candidate = direction.dot(proxy.vertices[i]);
-        if (candidate > projection) {
-            projection = candidate;
-            best = proxy.vertices[i];
+    for (int i = 1; i < proxy.count; ++i) {
+        const Vec value = proxy.vertex(i);
+        const int64_t candidate_projection = direction.dot(value);
+        if (candidate_projection > projection) {
+            projection = candidate_projection;
+            best = value;
         }
     }
     return best;
@@ -229,18 +230,19 @@ void add_mover_vertex(FxSweep hit, int64_t radius, FxSweep& best) {
 void sweep_convex(
     const Proxy& mover, Vec motion, const Proxy& target, FxSweep& best) {
     if (mover.radius == 0 && target.radius == 0
-        && mover.vertices.size() >= 3 && target.vertices.size() >= 3) {
+        && mover.count >= 3 && target.count >= 3) {
         add_earlier(swept_sat(mover, motion, target), best);
         return;
     }
     const int64_t radius = mover.radius + target.radius;
-    if (mover.vertices.size() == 1 && target.vertices.size() == 1) {
+    if (mover.count == 1 && target.count == 1) {
         add_mover_vertex(rounded_point(
-            mover.vertices[0], motion, target.vertices[0], radius),
+            mover.vertex(0), motion, target.vertex(0), radius),
             mover.radius, best);
         return;
     }
-    for (Vec vertex : mover.vertices) {
+    for (int vertex_index = 0; vertex_index < mover.count; ++vertex_index) {
+        const Vec vertex = mover.vertex(vertex_index);
         for (int edge_index = 0; edge_index < target.edge_count(); ++edge_index) {
             const auto edge = target.edge(edge_index);
             add_mover_vertex(ray_capsule(
@@ -249,7 +251,8 @@ void sweep_convex(
         }
     }
     const Vec reverse_motion = -motion;
-    for (Vec vertex : target.vertices) {
+    for (int vertex_index = 0; vertex_index < target.count; ++vertex_index) {
+        const Vec vertex = target.vertex(vertex_index);
         for (int edge_index = 0; edge_index < mover.edge_count(); ++edge_index) {
             const auto edge = mover.edge(edge_index);
             const FxSweep hit = ray_capsule(
@@ -264,7 +267,13 @@ void sweep_convex(
 
 FxSweep reverse_relative(FxSweep hit, Vec original_motion) {
     if (!hit.hit) return hit;
+    const uint8_t old_mask = hit.negative_zero_mask;
     hit.normal = -hit.normal;
+    hit.negative_zero_mask = 0;
+    if (hit.normal.x == 0 && (old_mask & 1) == 0)
+        hit.negative_zero_mask |= 1;
+    if (hit.normal.y == 0 && (old_mask & 2) == 0)
+        hit.negative_zero_mask |= 2;
     hit.point += original_motion.times_t(hit.time);
     return hit;
 }
@@ -420,8 +429,14 @@ FxSweep sweep_shapes(
     FxSweep fast;
     if (fast_sweep(mover, motion, target, fast)) return fast;
     const FxManifold initial = collide_shapes(mover, target);
-    if (initial.colliding)
-        return {true, 0, -initial.normal, initial.contact};
+    if (initial.colliding) {
+        FxSweep result{true, 0, -initial.normal, initial.contact};
+        if (result.normal.x == 0 && (initial.negative_zero_mask & 1) == 0)
+            result.negative_zero_mask |= 1;
+        if (result.normal.y == 0 && (initial.negative_zero_mask & 2) == 0)
+            result.negative_zero_mask |= 2;
+        return result;
+    }
     FxSweep best;
     for (int i = 0; i < piece_count(mover); ++i)
         for (int j = 0; j < piece_count(target); ++j)

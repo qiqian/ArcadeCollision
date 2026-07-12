@@ -727,10 +727,14 @@ public sealed class ArcWorld : IDisposable
             throw new ArgumentOutOfRangeException(nameof(entityId), entityId,
                 $"Entity id must be between 0 and {ArcHandle.MaxEntityId}.");
 
+        // Validate/quantize the complete shape before consuming a slot. Failed
+        // Add calls therefore leave subsequent handle indices unchanged, matching
+        // the native world's validate-before-allocate contract.
+        BpBounds bounds = new(shape);
         int index = AllocateSlot();
         ref Slot slot = ref _slots[index];
         slot.Shape = shape;
-        slot.Bounds = new BpBounds(shape);
+        slot.Bounds = bounds;
         slot.Filter = filter;
         slot.EntityId = entityId;
         slot.TreeProxy = -1;

@@ -175,15 +175,15 @@ Vec transform_vertex(Vec vertex, Vec translation, Axis axis_x, Axis axis_y) {
 }
 
 void finish_proxy(Proxy& proxy) {
-    if (proxy.vertices.empty()) return;
+    if (proxy.count == 0) return;
     int64_t x = 0;
     int64_t y = 0;
-    for (Vec vertex : proxy.vertices) {
+    for (int i = 0; i < proxy.count; ++i) {
+        const Vec vertex = proxy.vertex(i);
         x += vertex.x;
         y += vertex.y;
     }
-    proxy.center = {x / static_cast<int64_t>(proxy.vertices.size()),
-                    y / static_cast<int64_t>(proxy.vertices.size())};
+    proxy.center = {x / proxy.count, y / proxy.count};
 }
 
 } // namespace
@@ -224,15 +224,17 @@ Proxy make_proxy(const arc_shape& shape, int piece) {
     bool center_is_set = false;
     switch (shape.kind) {
     case ARC_SHAPE_CIRCLE:
-        proxy.vertices.push_back(Vec::from(shape.circle.center));
-        proxy.center = proxy.vertices[0];
+        proxy.count = 1;
+        proxy.inline_vertices[0] = Vec::from(shape.circle.center);
+        proxy.center = proxy.inline_vertices[0];
         center_is_set = true;
         proxy.radius = std::abs(from_float(shape.circle.radius));
         break;
     case ARC_SHAPE_CAPSULE:
-        proxy.vertices.push_back(Vec::from(shape.capsule.a));
-        proxy.vertices.push_back(Vec::from(shape.capsule.b));
-        proxy.center = midpoint(proxy.vertices[0], proxy.vertices[1]);
+        proxy.count = 2;
+        proxy.inline_vertices[0] = Vec::from(shape.capsule.a);
+        proxy.inline_vertices[1] = Vec::from(shape.capsule.b);
+        proxy.center = midpoint(proxy.inline_vertices[0], proxy.inline_vertices[1]);
         center_is_set = true;
         proxy.radius = std::abs(from_float(shape.capsule.radius));
         break;
@@ -242,7 +244,8 @@ Proxy make_proxy(const arc_shape& shape, int piece) {
                        std::abs(from_float(shape.aabb.half_extents.y))};
         const Vec min = center - half;
         const Vec max = center + half;
-        proxy.vertices = {min, {max.x, min.y}, max, {min.x, max.y}};
+        proxy.count = 4;
+        proxy.inline_vertices = {min, Vec{max.x, min.y}, max, Vec{min.x, max.y}};
         break;
     }
     case ARC_SHAPE_OBB: {
@@ -251,8 +254,9 @@ Proxy make_proxy(const arc_shape& shape, int piece) {
         const Axis axis_y = axis_x.perpendicular();
         const Vec x = axis_x.scale(std::abs(from_float(shape.obb.half_extents.x)));
         const Vec y = axis_y.scale(std::abs(from_float(shape.obb.half_extents.y)));
-        proxy.vertices = {center - x - y, center + x - y,
-                          center + x + y, center - x + y};
+        proxy.count = 4;
+        proxy.inline_vertices = {center - x - y, center + x - y,
+                                 center + x + y, center - x + y};
         break;
     }
     case ARC_SHAPE_POLYGON: {
@@ -264,26 +268,29 @@ Proxy make_proxy(const arc_shape& shape, int piece) {
         Vec local_center;
         int local_count = 0;
         if (polygon.convex) {
-            proxy.vertices.reserve(polygon.fixed_vertices.size());
+            proxy.borrowed_vertices = polygon.fixed_vertices.data();
+            proxy.count = static_cast<int>(polygon.fixed_vertices.size());
             for (Vec value : polygon.fixed_vertices) {
                 local_center += value;
                 ++local_count;
-                proxy.vertices.push_back(shape.polygon_rotation == 0
-                    ? value + translation
-                    : transform_vertex(value, translation, axis_x, axis_y));
             }
         } else {
             const size_t offset = static_cast<size_t>(piece) * 3;
+            proxy.borrowed_vertices = polygon.fixed_vertices.data();
+            proxy.borrowed_indices = polygon.triangles.data();
+            proxy.borrowed_index_offset = static_cast<int>(offset);
+            proxy.count = 3;
             for (size_t i = 0; i < 3; ++i) {
                 const Vec value = polygon.fixed_vertices[
                     static_cast<size_t>(polygon.triangles[offset + i])];
                 local_center += value;
                 ++local_count;
-                proxy.vertices.push_back(shape.polygon_rotation == 0
-                    ? value + translation
-                    : transform_vertex(value, translation, axis_x, axis_y));
             }
         }
+        proxy.offset = translation;
+        proxy.transformed = shape.polygon_rotation != 0;
+        proxy.axis_x = axis_x;
+        proxy.axis_y = axis_y;
         local_center.x /= local_count;
         local_center.y /= local_count;
         proxy.center = shape.polygon_rotation == 0
@@ -300,10 +307,10 @@ Proxy make_proxy(const arc_shape& shape, int piece) {
 }
 
 FxAabb proxy_bounds(const Proxy& proxy) {
-    Vec first = proxy.vertices[0];
+    Vec first = proxy.vertex(0);
     int64_t min_x = first.x, min_y = first.y, max_x = first.x, max_y = first.y;
-    for (size_t i = 1; i < proxy.vertices.size(); ++i) {
-        const Vec value = proxy.vertices[i];
+    for (int i = 1; i < proxy.count; ++i) {
+        const Vec value = proxy.vertex(i);
         min_x = std::min(min_x, value.x);
         min_y = std::min(min_y, value.y);
         max_x = std::max(max_x, value.x);
@@ -311,7 +318,7 @@ FxAabb proxy_bounds(const Proxy& proxy) {
     }
     min_x -= proxy.radius; min_y -= proxy.radius;
     max_x += proxy.radius; max_y += proxy.radius;
-    return {{min_x + ((max_x - min_x) / 2), min_y + ((max_y - min_y) / 2)},
+    return {{(min_x + max_x) / 2, (min_y + max_y) / 2},
             {(max_x - min_x) / 2, (max_y - min_y) / 2}};
 }
 

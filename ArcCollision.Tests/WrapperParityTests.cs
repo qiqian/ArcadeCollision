@@ -211,6 +211,56 @@ public class WrapperParityTests
         Assert.Equal(refQuery.Select(h => h.EntityId), nativeQuery.Select(h => h.EntityId));
     }
 
+    [Fact]
+    public void OddGridBoundsContactsAndSweepSignedZeroAreBitExact()
+    {
+        const float g = 1f / 256f;
+        var refPolygon = new Ref.Polygon(
+            new Ref.Vec2(0, 0), new Ref.Vec2(5 * g, 0),
+            new Ref.Vec2(5 * g, 3 * g), new Ref.Vec2(0, 3 * g));
+        var nativePolygon = new Native.Polygon(
+            new Native.Vec2(0, 0), new Native.Vec2(5 * g, 0),
+            new Native.Vec2(5 * g, 3 * g), new Native.Vec2(0, 3 * g));
+        var angleRef = new Ref.Angle32(0x10000000u);
+        var angleNative = new Native.Angle32(0x10000000u);
+
+        var refShape = new Ref.Shape(
+            refPolygon, new Ref.Vec2(-11 * g, -7 * g), angleRef);
+        var nativeShape = new Native.Shape(
+            nativePolygon, new Native.Vec2(-11 * g, -7 * g), angleNative);
+        AssertFloatBits(refShape.Bounds.Center.X, nativeShape.Bounds.Center.X);
+        AssertFloatBits(refShape.Bounds.Center.Y, nativeShape.Bounds.Center.Y);
+        AssertFloatBits(refShape.Bounds.HalfExtents.X, nativeShape.Bounds.HalfExtents.X);
+        AssertFloatBits(refShape.Bounds.HalfExtents.Y, nativeShape.Bounds.HalfExtents.Y);
+
+        for (int raw = -12; raw <= 4; raw++)
+        {
+            var targetRef = new Ref.Aabb(
+                new Ref.Vec2(raw * g, -4 * g), new Ref.Vec2(4 * g, 4 * g));
+            var targetNative = new Native.Aabb(
+                new Native.Vec2(raw * g, -4 * g), new Native.Vec2(4 * g, 4 * g));
+            Ref.Manifold expected = Ref.Collide.ShapeVsShape(refShape, targetRef);
+            Native.Manifold actual = Native.Collide.ShapeVsShape(nativeShape, targetNative);
+            Assert.Equal(expected.Colliding, actual.Colliding);
+            if (!expected.Colliding) continue;
+            AssertFloatBits(expected.Contact.X, actual.Contact.X);
+            AssertFloatBits(expected.Contact.Y, actual.Contact.Y);
+        }
+
+        Ref.SweepHit refSweep = Ref.Sweep.MovingShapeVsShape(
+            new Ref.Aabb(new Ref.Vec2(-5, 0), new Ref.Vec2(1, 1)),
+            new Ref.Vec2(10, 0), new Ref.Circle(Ref.Vec2.Zero, 1));
+        Native.SweepHit nativeSweep = Native.Sweep.MovingShapeVsShape(
+            new Native.Aabb(new Native.Vec2(-5, 0), new Native.Vec2(1, 1)),
+            new Native.Vec2(10, 0), new Native.Circle(Native.Vec2.Zero, 1));
+        AssertFloatBits(refSweep.Normal.X, nativeSweep.Normal.X);
+        AssertFloatBits(refSweep.Normal.Y, nativeSweep.Normal.Y);
+    }
+
+    private static void AssertFloatBits(float expected, float actual) =>
+        Assert.Equal(BitConverter.SingleToUInt32Bits(expected),
+            BitConverter.SingleToUInt32Bits(actual));
+
     private static (Ref.Shape Ref, Native.Shape Native)[] CreateShapes()
     {
         var refPolygon = new Ref.Polygon(

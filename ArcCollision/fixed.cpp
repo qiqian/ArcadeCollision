@@ -311,9 +311,16 @@ Vec Axis::scale(int64_t distance) const {
 }
 
 arc_aabb Bounds::to_public() const {
-    return {{to_float(center_x()), to_float(center_y())},
-            {to_float((max_x - min_x) / 2),
-             to_float((max_y - min_y) / 2)}};
+    // Match BpBounds.ToAabb/Aabb.FromMinMax exactly. Converting min/max first
+    // preserves half-grid centres and extents when the integer span is odd.
+    const float public_min_x = to_float(min_x);
+    const float public_min_y = to_float(min_y);
+    const float public_max_x = to_float(max_x);
+    const float public_max_y = to_float(max_y);
+    return {{(public_min_x + public_max_x) * 0.5f,
+             (public_min_y + public_max_y) * 0.5f},
+            {(public_max_x - public_min_x) * 0.5f,
+             (public_max_y - public_min_y) * 0.5f}};
 }
 
 // Convert to the public float manifold, restoring signed-zero normal components
@@ -329,19 +336,23 @@ arc_manifold FxManifold::to_public() const {
 }
 
 arc_sweep_hit FxSweep::to_public() const {
-    return hit
-        ? arc_sweep_hit{1, to_t(time), normal.to_public(), point.to_public()}
-        : arc_sweep_hit{0, 1.0f, {0, 0}, {0, 0}};
+    if (!hit) return {0, 1.0f, {0, 0}, {0, 0}};
+    arc_vec2 public_normal = normal.to_public();
+    if (normal.x == 0 && (negative_zero_mask & 1) != 0)
+        public_normal.x = -0.0f;
+    if (normal.y == 0 && (negative_zero_mask & 2) != 0)
+        public_normal.y = -0.0f;
+    return {1, to_t(time), public_normal, point.to_public()};
 }
 
 Vec midpoint(Vec a, Vec b) {
     return {a.x + ((b.x - a.x) >> 1), a.y + ((b.y - a.y) >> 1)};
 }
 
-Proxy Proxy::translated(Vec offset) const {
+Proxy Proxy::translated(Vec delta) const {
     Proxy result = *this;
-    for (Vec& vertex : result.vertices) vertex += offset;
-    result.center += offset;
+    result.offset += delta;
+    result.center += delta;
     return result;
 }
 

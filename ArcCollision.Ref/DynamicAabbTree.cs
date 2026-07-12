@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace ArcCollision;
 
@@ -32,13 +33,15 @@ public sealed class DynamicAabbTree : IDisposable
     private int _freeList;
     private int _nodeCount;
     private int _leafCount;
+    private int _disposed;
 
     public DynamicAabbTree() => InitializeFreeList(0);
 
-    public int Count => _leafCount;
+    public int Count { get { ThrowIfDisposed(); return _leafCount; } }
 
     public void EnsureCapacity(int proxyCapacity)
     {
+        ThrowIfDisposed();
         if (proxyCapacity < 0)
             throw new ArgumentOutOfRangeException(nameof(proxyCapacity));
         int requiredNodes = proxyCapacity == 0 ? 0 : proxyCapacity * 2 - 1;
@@ -48,6 +51,7 @@ public sealed class DynamicAabbTree : IDisposable
 
     public void Clear()
     {
+        ThrowIfDisposed();
         _root = -1;
         _nodeCount = 0;
         _leafCount = 0;
@@ -61,6 +65,7 @@ public sealed class DynamicAabbTree : IDisposable
     /// </summary>
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _root = -1;
         _nodeCount = 0;
         _leafCount = 0;
@@ -69,6 +74,7 @@ public sealed class DynamicAabbTree : IDisposable
     /// <summary>Creates a leaf and returns its direct proxy index.</summary>
     public int CreateProxy(int id, in BpBounds fatBounds)
     {
+        ThrowIfDisposed();
         int leaf = AllocateNode();
         _nodes[leaf].Bounds = fatBounds;
         _nodes[leaf].Id = id;
@@ -82,6 +88,7 @@ public sealed class DynamicAabbTree : IDisposable
 
     public bool MoveProxy(int proxy, in BpBounds bounds, in BpBounds fatBounds)
     {
+        ThrowIfDisposed();
         if (_nodes[proxy].Bounds.Contains(bounds))
             return false;
 
@@ -93,6 +100,7 @@ public sealed class DynamicAabbTree : IDisposable
 
     public void DestroyProxy(int proxy)
     {
+        ThrowIfDisposed();
         RemoveLeaf(proxy);
         FreeNode(proxy);
         _leafCount--;
@@ -100,6 +108,8 @@ public sealed class DynamicAabbTree : IDisposable
 
     public void Query(in BpBounds bounds, List<int> results)
     {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(results);
         if (_root == -1)
             return;
 
@@ -133,6 +143,7 @@ public sealed class DynamicAabbTree : IDisposable
     /// </summary>
     public void ComputeSelfPairs(List<(int A, int B)> results)
     {
+        ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(results);
         if (_root == -1 || _leafCount < 2)
             return;
@@ -443,4 +454,7 @@ public sealed class DynamicAabbTree : IDisposable
         _pairStackB[count] = b;
         count++;
     }
+
+    private void ThrowIfDisposed() =>
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 }

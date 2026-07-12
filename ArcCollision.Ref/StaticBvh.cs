@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace ArcCollision;
 
@@ -66,9 +67,11 @@ public sealed class StaticBvh : IDisposable
     private int[] _queryStack = new int[64];
     private int _nodeCount;
     private int _root = -1;
+    private int _disposed;
 
     public void EnsureCapacity(int leafCapacity)
     {
+        ThrowIfDisposed();
         if (leafCapacity < 0)
             throw new ArgumentOutOfRangeException(nameof(leafCapacity));
         if (_leaves.Length < leafCapacity)
@@ -80,6 +83,7 @@ public sealed class StaticBvh : IDisposable
 
     public void Clear()
     {
+        ThrowIfDisposed();
         _root = -1;
         _nodeCount = 0;
     }
@@ -91,12 +95,15 @@ public sealed class StaticBvh : IDisposable
     /// </summary>
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _root = -1;
         _nodeCount = 0;
     }
 
     public void Build(Dictionary<int, BpBounds> source)
     {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(source);
         int count = source.Count;
         if (count == 0)
         {
@@ -119,6 +126,8 @@ public sealed class StaticBvh : IDisposable
 
     public void Query(in BpBounds bounds, List<int> results)
     {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(results);
         if (_root == -1)
             return;
 
@@ -330,4 +339,7 @@ public sealed class StaticBvh : IDisposable
             Array.Resize(ref _queryStack, _queryStack.Length * 2);
         _queryStack[count++] = value;
     }
+
+    private void ThrowIfDisposed() =>
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 }

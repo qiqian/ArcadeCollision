@@ -195,6 +195,26 @@ void append_casts(
     }
 }
 
+void find_closest_cast(
+    arc_world* world, const arc_shape& mover, arc_vec2 motion,
+    const arc_collision_filter* filter,
+    bool& found, arc_world_cast_hit& closest) {
+    for (int index : world->candidates) {
+        Slot& slot = world->slots[static_cast<size_t>(index)];
+        if (!query_slot(slot, filter)) continue;
+        const arc_sweep_hit hit =
+            arc::sweep_shapes(mover, arc::Vec::from(motion), slot.shape.value)
+                .to_public();
+        if (!hit.hit) continue;
+        const arc_world_cast_hit candidate{
+            make_handle(world, static_cast<size_t>(index)), hit};
+        if (!found || cast_less(candidate, closest)) {
+            closest = candidate;
+            found = true;
+        }
+    }
+}
+
 arc_status ensure_world(const arc_world* world) {
     if (world) return ARC_STATUS_OK;
     arc::set_error("World is null.");
@@ -680,24 +700,33 @@ arc_status ARC_CALL arc_world_shape_cast(
     arc_world* world, const arc_shape* mover, arc_vec2 motion,
     const arc_collision_filter* filter,
     arc_world_cast_hit* output, arc_bool* found) {
-    if (!world || !mover || !output || !found)
+    if (!world || !mover || !output || !found
+        || !arc::validate_shape(*mover) || !arc::valid_vec(motion)) {
+        arc::set_error("Invalid world, mover, motion, or output.");
         return ARC_STATUS_INVALID_ARGUMENT;
-    int32_t required = 0;
-    arc_status status = arc_world_shape_cast_all(
-        world, mover, motion, filter, nullptr, 0, &required);
-    if (required == 0) {
+    }
+    try {
+        const arc::Bounds bounds = swept_bounds(*mover, motion);
+        bool has_hit = false;
+        arc_world_cast_hit closest{};
+
+        world->candidates.clear();
+        world->broadphase.query_dynamic(bounds, world->candidates);
+        find_closest_cast(
+            world, *mover, motion, filter, has_hit, closest);
+        world->candidates.clear();
+        world->broadphase.query_static(bounds, world->candidates);
+        find_closest_cast(
+            world, *mover, motion, filter, has_hit, closest);
+
+        *found = has_hit ? 1 : 0;
+        if (has_hit) *output = closest;
+        return ARC_STATUS_OK;
+    } catch (...) {
+        arc::set_error("Shape cast failed.");
         *found = 0;
-        return status == ARC_STATUS_BUFFER_TOO_SMALL ? ARC_STATUS_OK : status;
+        return ARC_STATUS_INTERNAL_ERROR;
     }
-    if (status != ARC_STATUS_BUFFER_TOO_SMALL) return status;
-    std::vector<arc_world_cast_hit> values(static_cast<size_t>(required));
-    status = arc_world_shape_cast_all(
-        world, mover, motion, filter, values.data(), required, &required);
-    if (status == ARC_STATUS_OK) {
-        *output = values[0];
-        *found = 1;
-    }
-    return status;
 }
 
 arc_status ARC_CALL arc_world_ray_cast_all(

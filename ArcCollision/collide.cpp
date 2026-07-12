@@ -37,9 +37,9 @@ Axis orient_axis(
 // axis.dot(vertex) mixes Q1.30 x 24.8 = scale-2^38; radius*AxisOne matches that
 // scale, so [min,max] is the interval swept by the rounded shape along the axis.
 void project(const Proxy& proxy, Axis axis, int64_t& min, int64_t& max) {
-    min = max = axis.dot(proxy.vertices[0]);
-    for (size_t i = 1; i < proxy.vertices.size(); ++i) {
-        const int64_t value = axis.dot(proxy.vertices[i]);
+    min = max = axis.dot(proxy.vertex(0));
+    for (int i = 1; i < proxy.count; ++i) {
+        const int64_t value = axis.dot(proxy.vertex(i));
         min = std::min(min, value);
         max = std::max(max, value);
     }
@@ -50,12 +50,13 @@ void project(const Proxy& proxy, Axis axis, int64_t& min, int64_t& max) {
 
 // Farthest point of the proxy in `direction` (hull support + radius offset).
 Vec support(const Proxy& proxy, Axis direction) {
-    Vec best = proxy.vertices[0];
+    Vec best = proxy.vertex(0);
     int64_t best_projection = direction.dot(best);
-    for (size_t i = 1; i < proxy.vertices.size(); ++i) {
-        const int64_t projection = direction.dot(proxy.vertices[i]);
+    for (int i = 1; i < proxy.count; ++i) {
+        const Vec candidate = proxy.vertex(i);
+        const int64_t projection = direction.dot(candidate);
         if (projection > best_projection) {
-            best = proxy.vertices[i];
+            best = candidate;
             best_projection = projection;
         }
     }
@@ -128,7 +129,8 @@ bool test_edge_axes(
 bool test_vertex_edge_axes(
     const Proxy& vertices, const Proxy& edges,
     const Proxy& a, const Proxy& b, SatState& state) {
-    for (Vec point : vertices.vertices) {
+    for (int vertex = 0; vertex < vertices.count; ++vertex) {
+        const Vec point = vertices.vertex(vertex);
         for (int edge = 0; edge < edges.edge_count(); ++edge) {
             const auto segment = edges.edge(edge);
             const Vec closest = closest_segment(
@@ -167,7 +169,8 @@ bool edge_axes_overlap(
 bool vertex_edge_axes_overlap(
     const Proxy& vertices, const Proxy& edges,
     const Proxy& a, const Proxy& b, bool& has_axis) {
-    for (Vec point : vertices.vertices) {
+    for (int vertex = 0; vertex < vertices.count; ++vertex) {
+        const Vec point = vertices.vertex(vertex);
         for (int edge = 0; edge < edges.edge_count(); ++edge) {
             const auto segment = edges.edge(edge);
             const Vec closest = closest_segment(
@@ -508,12 +511,15 @@ FxManifold capsule_capsule(arc_capsule first, arc_capsule second) {
     const int64_t radius_a = std::abs(from_float(first.radius));
     const int64_t radius_b = std::abs(from_float(second.radius));
     Proxy difference;
-    difference.vertices = {a0 - b0, a1 - b0, a1 - b1, a0 - b1};
+    difference.count = 4;
+    difference.inline_vertices = {a0 - b0, a1 - b0, a1 - b1, a0 - b1};
     difference.radius = radius_a + radius_b;
-    for (Vec value : difference.vertices) difference.center += value;
+    for (int i = 0; i < difference.count; ++i)
+        difference.center += difference.vertex(i);
     difference.center.x /= 4; difference.center.y /= 4;
     Proxy origin;
-    origin.vertices = {{0, 0}};
+    origin.count = 1;
+    origin.inline_vertices[0] = {0, 0};
     const FxManifold configuration = collide_proxy(difference, origin);
     if (!configuration.colliding) return {};
     const Axis normal = configuration.normal;
@@ -735,7 +741,7 @@ FxManifold collide_aabb_aabb(FxAabb a, FxAabb b) { return aabb_aabb(a, b); }
 // for the fully-contained case. Result is the minimum-penetration axis + clamped
 // support-midpoint contact.
 FxManifold collide_proxy(const Proxy& a, const Proxy& b) {
-    if (a.vertices.empty() || b.vertices.empty()) return {};
+    if (a.count == 0 || b.count == 0) return {};
     SatState state;
     if (!test_edge_axes(a, a, b, state)
         || !test_edge_axes(b, a, b, state))
