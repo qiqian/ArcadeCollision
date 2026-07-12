@@ -26,7 +26,7 @@ internal static class Fx
     // Keeps every derived delta, squared length and radius sum inside Int64.
     // Public coordinates remain usable up to roughly +/-1.95 million units.
     private const long MaxInputRaw = 500_000_000L;
-    public const float MaxInput = MaxInputRaw / (float)One;
+    public const float MaxInput = CollisionLimits.MaxCoordinate;
 
     public static long From(float v)
     {

@@ -118,6 +118,10 @@ public static partial class Sweep
         private readonly FxVec2[]? _vertices;
         private readonly int[]? _indices;
         private readonly int _indexOffset;
+        private readonly FxVec2 _translation;
+        private readonly FxAxis _axisX;
+        private readonly FxAxis _axisY;
+        private readonly bool _transformed;
 
         public readonly int Count;
         public readonly long Radius;
@@ -165,10 +169,44 @@ public static partial class Sweep
             Count = 3;
         }
 
+        private SweepProxy(
+            FxVec2[] vertices,
+            int[]? indices,
+            int indexOffset,
+            int count,
+            Vec2 translation,
+            Angle32 rotation)
+        {
+            this = default;
+            _vertices = vertices;
+            _indices = indices;
+            _indexOffset = indexOffset;
+            _translation = FxVec2.From(translation);
+            _axisX = FxAxis.FromAngle(rotation);
+            _axisY = _axisX.Perpendicular;
+            _transformed = rotation.Raw != 0;
+            Count = count;
+        }
+
+        public static SweepProxy Polygon(
+            FxVec2[] vertices,
+            int[]? indices,
+            int indexOffset,
+            int count,
+            Vec2 translation,
+            Angle32 rotation) =>
+            new(vertices, indices, indexOffset, count, translation, rotation);
+
         public FxVec2 Vertex(int index)
         {
             if (_vertices != null)
-                return _vertices[_indices == null ? index : _indices[_indexOffset + index]];
+            {
+                FxVec2 value = _vertices[
+                    _indices == null ? index : _indices[_indexOffset + index]];
+                if (_transformed)
+                    value = _axisX.Scale(value.X) + _axisY.Scale(value.Y);
+                return value + _translation;
+            }
             return index switch
             {
                 0 => _v0,
@@ -447,9 +485,12 @@ public static partial class Sweep
             {
                 Polygon polygon = shape.Polygon;
                 return polygon.IsConvex
-                    ? new SweepProxy(polygon.FixedVertices)
-                    : new SweepProxy(
-                        polygon.FixedVertices, polygon.TriangleIndices, piece * 3);
+                    ? SweepProxy.Polygon(
+                        polygon.FixedVertices, null, 0, polygon.FixedVertices.Length,
+                        shape.PolygonTranslation, shape.PolygonRotation)
+                    : SweepProxy.Polygon(
+                        polygon.FixedVertices, polygon.TriangleIndices, piece * 3, 3,
+                        shape.PolygonTranslation, shape.PolygonRotation);
             }
             default:
                 throw new ArgumentOutOfRangeException(nameof(shape));

@@ -69,12 +69,39 @@ internal readonly struct BpBounds
     }
 
     public BpBounds(Polygon polygon)
+        : this(polygon, Vec2.Zero, new Angle32(0))
+    {
+    }
+
+    public BpBounds(Polygon polygon, Vec2 translation, Angle32 rotation)
     {
         ArgumentNullException.ThrowIfNull(polygon);
-        MinX = polygon.MinXFx;
-        MinY = polygon.MinYFx;
-        MaxX = polygon.MaxXFx;
-        MaxY = polygon.MaxYFx;
+        FxVec2 offset = FxVec2.From(translation);
+        if (rotation.Raw == 0)
+        {
+            MinX = polygon.MinXFx + offset.X;
+            MinY = polygon.MinYFx + offset.Y;
+            MaxX = polygon.MaxXFx + offset.X;
+            MaxY = polygon.MaxYFx + offset.Y;
+            return;
+        }
+
+        FxAxis axisX = FxAxis.FromAngle(rotation);
+        FxAxis axisY = axisX.Perpendicular;
+        FxVec2 first = Transform(polygon.FixedVertices[0], offset, axisX, axisY);
+        long minX = first.X, minY = first.Y, maxX = first.X, maxY = first.Y;
+        for (int i = 1; i < polygon.FixedVertices.Length; i++)
+        {
+            FxVec2 vertex = Transform(polygon.FixedVertices[i], offset, axisX, axisY);
+            minX = Math.Min(minX, vertex.X);
+            minY = Math.Min(minY, vertex.Y);
+            maxX = Math.Max(maxX, vertex.X);
+            maxY = Math.Max(maxY, vertex.Y);
+        }
+        MinX = minX;
+        MinY = minY;
+        MaxX = maxX;
+        MaxY = maxY;
     }
 
     public BpBounds(Shape shape)
@@ -85,7 +112,8 @@ internal readonly struct BpBounds
             ShapeKind.Aabb => new BpBounds(shape.Aabb),
             ShapeKind.Capsule => new BpBounds(shape.Capsule),
             ShapeKind.Obb => new BpBounds(shape.Obb),
-            ShapeKind.Polygon => new BpBounds(shape.Polygon),
+            ShapeKind.Polygon => new BpBounds(
+                shape.Polygon, shape.PolygonTranslation, shape.PolygonRotation),
             _ => throw new ArgumentOutOfRangeException(nameof(shape)),
         };
     }
@@ -105,7 +133,18 @@ internal readonly struct BpBounds
     public BpBounds Expanded(long margin) =>
         new(MinX - margin, MinY - margin, MaxX + margin, MaxY + margin);
 
+    public BpBounds Translated(long x, long y) =>
+        new(MinX + x, MinY + y, MaxX + x, MaxY + y);
+
     public static BpBounds Union(in BpBounds a, in BpBounds b) => new(
         Math.Min(a.MinX, b.MinX), Math.Min(a.MinY, b.MinY),
         Math.Max(a.MaxX, b.MaxX), Math.Max(a.MaxY, b.MaxY));
+
+    public Aabb ToAabb() => Aabb.FromMinMax(
+        new Vec2(Fx.To(MinX), Fx.To(MinY)),
+        new Vec2(Fx.To(MaxX), Fx.To(MaxY)));
+
+    private static FxVec2 Transform(
+        FxVec2 vertex, FxVec2 offset, FxAxis axisX, FxAxis axisY) =>
+        offset + axisX.Scale(vertex.X) + axisY.Scale(vertex.Y);
 }

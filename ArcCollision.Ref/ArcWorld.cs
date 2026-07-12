@@ -55,13 +55,11 @@ public readonly struct CandidatePair
 {
     public readonly ArcHandle A;
     public readonly ArcHandle B;
-    internal readonly uint Revision;
 
-    internal CandidatePair(ArcHandle a, ArcHandle b, uint revision)
+    internal CandidatePair(ArcHandle a, ArcHandle b)
     {
         A = a;
         B = b;
-        Revision = revision;
     }
 }
 
@@ -77,6 +75,19 @@ public readonly struct ContactPair
         A = a;
         B = b;
         Manifold = manifold;
+    }
+}
+
+/// <summary>A world collider hit by a ray or translating shape cast.</summary>
+public readonly struct WorldCastHit
+{
+    public readonly ArcHandle Handle;
+    public readonly SweepHit Hit;
+
+    internal WorldCastHit(ArcHandle handle, SweepHit hit)
+    {
+        Handle = handle;
+        Hit = hit;
     }
 }
 
@@ -125,6 +136,19 @@ public sealed class ArcWorld : IDisposable
         }
     }
 
+    private sealed class CastHitComparer : IComparer<WorldCastHit>
+    {
+        public static readonly CastHitComparer Instance = new();
+
+        public int Compare(WorldCastHit x, WorldCastHit y)
+        {
+            int comparison = x.Hit.Time.CompareTo(y.Hit.Time);
+            return comparison != 0
+                ? comparison
+                : HandleComparer.Instance.Compare(x.Handle, y.Handle);
+        }
+    }
+
     private struct Slot
     {
         public Shape Shape;
@@ -135,46 +159,125 @@ public sealed class ArcWorld : IDisposable
         public int NextFree;
         public ushort Generation;
         public bool Active;
+        public bool Enabled;
         public bool Static;
     }
 
     private readonly SpatialHash _broadphase;
     private readonly uint _worldId;
-    private readonly List<int> _candidates = new();
-    private readonly List<(int A, int B)> _broadphasePairs = new();
-    private Slot[] _slots = new Slot[16];
+    private readonly List<int> _candidates;
+    private readonly List<(int A, int B)> _broadphasePairs;
+    private Slot[] _slots;
     private int _slotCount;
     private int _freeList = -1;
     private int _activeCount;
+    private int _enabledCount;
     private int _dynamicCount;
     private int _disposed;
-    private uint _revision = 1;
     private ushort[] _generationTable;
 
     public ArcWorld(float fatMargin = 16f)
+        : this(new ArcWorldOptions(fatMargin))
     {
-        _broadphase = new SpatialHash(fatMargin);
-        _worldId = AllocateWorldId(this);
-        _generationTable = s_handleGenerations[_worldId] ?? Array.Empty<ushort>();
     }
 
+    public ArcWorld(in ArcWorldOptions options)
+    {
+        int colliderCapacity = Math.Max(16, options.InitialColliderCapacity);
+        _slots = new Slot[colliderCapacity];
+        _candidates = new List<int>(colliderCapacity);
+        _broadphasePairs = new List<(int A, int B)>(options.InitialPairCapacity);
+        _broadphase = new SpatialHash(options.FatMargin);
+        _broadphase.EnsureCapacity(colliderCapacity);
+        _worldId = AllocateWorldId(this);
+        _generationTable = s_handleGenerations[_worldId] ?? Array.Empty<ushort>();
+        if (colliderCapacity != 0) EnsureGenerationCapacity(colliderCapacity - 1);
+    }
+
+    /// <summary>Total valid colliders, including disabled colliders.</summary>
     public int Count { get { ThrowIfDisposed(); return _activeCount; } }
+    /// <summary>Colliders currently participating in broadphase queries.</summary>
+    public int EnabledCount { get { ThrowIfDisposed(); return _enabledCount; } }
+    /// <summary>Total valid dynamic colliders, including disabled colliders.</summary>
     public int DynamicCount { get { ThrowIfDisposed(); return _dynamicCount; } }
+    /// <summary>Total valid static colliders, including disabled colliders.</summary>
     public int StaticCount { get { ThrowIfDisposed(); return _activeCount - _dynamicCount; } }
     public float FatMargin { get { ThrowIfDisposed(); return _broadphase.FatMargin; } }
 
     public ArcHandle Add(int entityId, in Shape shape) =>
-        AddCore(entityId, shape, CollisionFilter.Default, isStatic: false);
+        AddCore(entityId, shape, CollisionFilter.Default, isStatic: false, enabled: true);
 
     public ArcHandle Add(int entityId, in Shape shape, in CollisionFilter filter) =>
-        AddCore(entityId, shape, filter, isStatic: false);
+        AddCore(entityId, shape, filter, isStatic: false, enabled: true);
 
     public ArcHandle AddStatic(int entityId, in Shape shape) =>
-        AddCore(entityId, shape, CollisionFilter.Default, isStatic: true);
+        AddCore(entityId, shape, CollisionFilter.Default, isStatic: true, enabled: true);
 
     public ArcHandle AddStatic(
         int entityId, in Shape shape, in CollisionFilter filter) =>
-        AddCore(entityId, shape, filter, isStatic: true);
+        AddCore(entityId, shape, filter, isStatic: true, enabled: true);
+
+    public ArcHandle Add(
+        int entityId, in Shape shape, in CollisionFilter filter, bool enabled) =>
+        AddCore(entityId, shape, filter, isStatic: false, enabled);
+
+    public ArcHandle AddStatic(
+        int entityId, in Shape shape, in CollisionFilter filter, bool enabled) =>
+        AddCore(entityId, shape, filter, isStatic: true, enabled);
+
+    /// <summary>Preallocates storage used by colliders and candidate pairs.</summary>
+    public void EnsureCapacity(int colliderCapacity, int pairCapacity = 0)
+    {
+        ThrowIfDisposed();
+        if (colliderCapacity is < 0 or > MaxColliderCount)
+            throw new ArgumentOutOfRangeException(nameof(colliderCapacity));
+        if (pairCapacity < 0)
+            throw new ArgumentOutOfRangeException(nameof(pairCapacity));
+        if (_slots.Length < colliderCapacity)
+            Array.Resize(ref _slots, colliderCapacity);
+        if (colliderCapacity != 0)
+            EnsureGenerationCapacity(colliderCapacity - 1);
+        _candidates.EnsureCapacity(colliderCapacity);
+        _broadphasePairs.EnsureCapacity(pairCapacity);
+        _broadphase.EnsureCapacity(colliderCapacity);
+    }
+
+    /// <summary>
+    /// Subtracts <paramref name="originDelta"/> from every collider while
+    /// retaining handles, filters and enabled state. Useful for origin rebasing.
+    /// </summary>
+    public void ShiftOrigin(Vec2 originDelta)
+    {
+        ThrowIfDisposed();
+        _ = Fx.From(originDelta.X);
+        _ = Fx.From(originDelta.Y);
+        Vec2 motion = -originDelta;
+
+        // Validate the complete shift before mutating the world.
+        for (int i = 0; i < _slotCount; i++)
+        {
+            if (!_slots[i].Active) continue;
+            Shape moved = _slots[i].Shape.Moved(motion);
+            _ = new BpBounds(moved);
+        }
+
+        _broadphase.Clear();
+
+        for (int i = 0; i < _slotCount; i++)
+        {
+            ref Slot slot = ref _slots[i];
+            if (!slot.Active) continue;
+            slot.Shape = slot.Shape.Moved(motion);
+            slot.Bounds = new BpBounds(slot.Shape);
+            slot.TreeProxy = -1;
+            if (!slot.Enabled) continue;
+            if (slot.Static)
+                _broadphase.AddOrUpdateStatic(i, slot.Bounds);
+            else
+                slot.TreeProxy = _broadphase.AddDynamic(i, slot.Bounds);
+        }
+        _broadphase.BuildStatic();
+    }
 
     /// <summary>
     /// Rebuilds the immutable static BVH immediately. Call after batching static
@@ -193,6 +296,8 @@ public sealed class ArcWorld : IDisposable
         BpBounds bounds = new(shape);
         slot.Shape = shape;
         slot.Bounds = bounds;
+        if (!slot.Enabled)
+            return;
         if (slot.Static)
         {
             _broadphase.AddOrUpdateStatic(handle.Index, bounds);
@@ -201,35 +306,91 @@ public sealed class ArcWorld : IDisposable
         {
             _broadphase.UpdateDynamic(slot.TreeProxy, bounds);
         }
-        AdvanceRevision();
     }
 
     public CollisionFilter GetFilter(ArcHandle handle) => GetSlot(handle).Filter;
 
+    public bool TryGetFilter(ArcHandle handle, out CollisionFilter filter)
+    {
+        if (!IsValid(handle))
+        {
+            filter = default;
+            return false;
+        }
+        filter = _slots[handle.Index].Filter;
+        return true;
+    }
+
+    public Shape GetShape(ArcHandle handle) => GetSlot(handle).Shape;
+
+    public bool TryGetShape(ArcHandle handle, out Shape shape)
+    {
+        if (!IsValid(handle))
+        {
+            shape = default;
+            return false;
+        }
+        shape = _slots[handle.Index].Shape;
+        return true;
+    }
+
+    public int GetEntityId(ArcHandle handle) => GetSlot(handle).EntityId;
+
     /// <summary>
     /// Changes the collider's category membership and accepted categories.
-    /// Previously collected candidate pairs become stale when the value changes.
+    /// Previously collected candidates are rechecked against the new value.
     /// </summary>
     public void SetFilter(ArcHandle handle, in CollisionFilter filter)
     {
         ref Slot slot = ref GetSlot(handle);
         if (slot.Filter == filter) return;
         slot.Filter = filter;
-        AdvanceRevision();
     }
 
-    public void Remove(ArcHandle handle)
+    public bool IsEnabled(ArcHandle handle) => GetSlot(handle).Enabled;
+
+    /// <summary>
+    /// Enables or disables broadphase participation without invalidating the
+    /// handle. Disabled colliders retain their shape, filter and static status.
+    /// </summary>
+    public void SetEnabled(ArcHandle handle, bool enabled)
     {
         ref Slot slot = ref GetSlot(handle);
-        if (slot.Static)
+        if (slot.Enabled == enabled) return;
+
+        if (enabled)
+        {
+            if (slot.Static)
+                _broadphase.AddOrUpdateStatic(handle.Index, slot.Bounds);
+            else
+                slot.TreeProxy = _broadphase.AddDynamic(handle.Index, slot.Bounds);
+        }
+        else if (slot.Static)
         {
             _broadphase.RemoveStatic(handle.Index);
         }
         else
         {
             _broadphase.RemoveDynamic(slot.TreeProxy);
-            _dynamicCount--;
+            slot.TreeProxy = -1;
         }
+        slot.Enabled = enabled;
+        _enabledCount += enabled ? 1 : -1;
+    }
+
+    public void Remove(ArcHandle handle)
+    {
+        ref Slot slot = ref GetSlot(handle);
+        if (slot.Enabled && slot.Static)
+        {
+            _broadphase.RemoveStatic(handle.Index);
+        }
+        else if (slot.Enabled)
+        {
+            _broadphase.RemoveDynamic(slot.TreeProxy);
+        }
+        if (!slot.Static) _dynamicCount--;
+        if (slot.Enabled) _enabledCount--;
 
         slot.Shape = default;
         slot.Bounds = default;
@@ -237,12 +398,12 @@ public sealed class ArcWorld : IDisposable
         slot.EntityId = 0;
         slot.TreeProxy = -1;
         slot.Active = false;
+        slot.Enabled = false;
         slot.Static = false;
         slot.Generation = 0;
         slot.NextFree = _freeList;
         _freeList = handle.Index;
         _activeCount--;
-        AdvanceRevision();
     }
 
     public bool IsValid(ArcHandle handle) =>
@@ -258,7 +419,7 @@ public sealed class ArcWorld : IDisposable
         _broadphase.Clear();
         _candidates.Clear();
         _broadphasePairs.Clear();
-        _activeCount = _dynamicCount = 0;
+        _activeCount = _enabledCount = _dynamicCount = 0;
 
         _freeList = _slotCount == 0 ? -1 : 0;
         for (int i = 0; i < _slotCount; i++)
@@ -270,11 +431,11 @@ public sealed class ArcWorld : IDisposable
             slot.EntityId = 0;
             slot.TreeProxy = -1;
             slot.Active = false;
+            slot.Enabled = false;
             slot.Static = false;
             slot.Generation = 0;
             slot.NextFree = i + 1 < _slotCount ? i + 1 : -1;
         }
-        AdvanceRevision();
     }
 
     /// <summary>Collects broadphase candidates only; no manifolds are computed.</summary>
@@ -288,11 +449,12 @@ public sealed class ArcWorld : IDisposable
         {
             (int a, int b) = _broadphasePairs[i];
             if (_slots[a].Active && _slots[b].Active
-                && _slots[a].Filter.Allows(_slots[b].Filter)
+                && _slots[a].Enabled && _slots[b].Enabled
+                && _slots[a].Filter.CanCollideWith(_slots[b].Filter)
                 && _slots[a].Bounds.Overlaps(_slots[b].Bounds))
                 results.Add(CreatePair(a, b));
         }
-        results.Sort(CandidateComparer.Instance);
+        InPlaceSort.Sort(results, CandidateComparer.Instance);
     }
 
     /// <summary>Returns broadphase handles overlapping a transient query shape.</summary>
@@ -309,6 +471,65 @@ public sealed class ArcWorld : IDisposable
         in Shape query, in CollisionFilter filter, List<ArcHandle> results)
     {
         QueryCore(query, filter, applyFilter: true, results);
+    }
+
+    /// <summary>Returns the earliest unfiltered hit along a translation.</summary>
+    public bool ShapeCast(
+        in Shape mover, Vec2 motion, out WorldCastHit closest) =>
+        ShapeCastCore(mover, motion, default, applyFilter: false, out closest);
+
+    /// <summary>Returns the earliest mutually filtered hit along a translation.</summary>
+    public bool ShapeCast(
+        in Shape mover,
+        Vec2 motion,
+        in CollisionFilter filter,
+        out WorldCastHit closest) =>
+        ShapeCastCore(mover, motion, filter, applyFilter: true, out closest);
+
+    /// <summary>Collects every unfiltered hit, sorted by time then handle.</summary>
+    public void ShapeCastAll(
+        in Shape mover, Vec2 motion, List<WorldCastHit> results) =>
+        ShapeCastAllCore(mover, motion, default, applyFilter: false, results);
+
+    /// <summary>Collects every mutually filtered hit, sorted by time then handle.</summary>
+    public void ShapeCastAll(
+        in Shape mover,
+        Vec2 motion,
+        in CollisionFilter filter,
+        List<WorldCastHit> results) =>
+        ShapeCastAllCore(mover, motion, filter, applyFilter: true, results);
+
+    public bool RayCast(Vec2 origin, Vec2 motion, out WorldCastHit closest)
+    {
+        Shape point = new Circle(origin, 0f);
+        return ShapeCast(point, motion, out closest);
+    }
+
+    public bool RayCast(
+        Vec2 origin,
+        Vec2 motion,
+        in CollisionFilter filter,
+        out WorldCastHit closest)
+    {
+        Shape point = new Circle(origin, 0f);
+        return ShapeCast(point, motion, filter, out closest);
+    }
+
+    public void RayCastAll(
+        Vec2 origin, Vec2 motion, List<WorldCastHit> results)
+    {
+        Shape point = new Circle(origin, 0f);
+        ShapeCastAll(point, motion, results);
+    }
+
+    public void RayCastAll(
+        Vec2 origin,
+        Vec2 motion,
+        in CollisionFilter filter,
+        List<WorldCastHit> results)
+    {
+        Shape point = new Circle(origin, 0f);
+        ShapeCastAll(point, motion, filter, results);
     }
 
     private void QueryCore(
@@ -328,23 +549,119 @@ public sealed class ArcWorld : IDisposable
         _candidates.Clear();
         _broadphase.QueryStatic(bounds, _candidates);
         AppendQueryResults(bounds, filter, applyFilter, results);
-        results.Sort(HandleComparer.Instance);
+        InPlaceSort.Sort(results, HandleComparer.Instance);
     }
 
+    private bool ShapeCastCore(
+        in Shape mover,
+        Vec2 motion,
+        in CollisionFilter filter,
+        bool applyFilter,
+        out WorldCastHit closest)
+    {
+        ThrowIfDisposed();
+        BpBounds bounds = SweptBounds(mover, motion);
+        bool found = false;
+        closest = default;
+
+        _candidates.Clear();
+        _broadphase.QueryDynamic(bounds, _candidates);
+        FindClosestCast(mover, motion, filter, applyFilter, ref found, ref closest);
+        _candidates.Clear();
+        _broadphase.QueryStatic(bounds, _candidates);
+        FindClosestCast(mover, motion, filter, applyFilter, ref found, ref closest);
+        return found;
+    }
+
+    private void ShapeCastAllCore(
+        in Shape mover,
+        Vec2 motion,
+        in CollisionFilter filter,
+        bool applyFilter,
+        List<WorldCastHit> results)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(results);
+        results.Clear();
+        BpBounds bounds = SweptBounds(mover, motion);
+
+        _candidates.Clear();
+        _broadphase.QueryDynamic(bounds, _candidates);
+        AppendCastHits(mover, motion, filter, applyFilter, results);
+        _candidates.Clear();
+        _broadphase.QueryStatic(bounds, _candidates);
+        AppendCastHits(mover, motion, filter, applyFilter, results);
+        InPlaceSort.Sort(results, CastHitComparer.Instance);
+    }
+
+    private static BpBounds SweptBounds(in Shape mover, Vec2 motion)
+    {
+        BpBounds start = new(mover);
+        BpBounds end = start.Translated(Fx.From(motion.X), Fx.From(motion.Y));
+        return BpBounds.Union(start, end);
+    }
+
+    private void FindClosestCast(
+        in Shape mover,
+        Vec2 motion,
+        in CollisionFilter filter,
+        bool applyFilter,
+        ref bool found,
+        ref WorldCastHit closest)
+    {
+        for (int i = 0; i < _candidates.Count; i++)
+        {
+            int index = _candidates[i];
+            if (!CanQuerySlot(index, filter, applyFilter)) continue;
+            SweepHit hit = Sweep.MovingShapeVsShape(mover, motion, _slots[index].Shape);
+            if (!hit.Hit) continue;
+            var candidate = new WorldCastHit(CreateHandle(index), hit);
+            if (!found || CastHitComparer.Instance.Compare(candidate, closest) < 0)
+            {
+                closest = candidate;
+                found = true;
+            }
+        }
+    }
+
+    private void AppendCastHits(
+        in Shape mover,
+        Vec2 motion,
+        in CollisionFilter filter,
+        bool applyFilter,
+        List<WorldCastHit> results)
+    {
+        for (int i = 0; i < _candidates.Count; i++)
+        {
+            int index = _candidates[i];
+            if (!CanQuerySlot(index, filter, applyFilter)) continue;
+            SweepHit hit = Sweep.MovingShapeVsShape(mover, motion, _slots[index].Shape);
+            if (hit.Hit) results.Add(new WorldCastHit(CreateHandle(index), hit));
+        }
+    }
+
+    private bool CanQuerySlot(
+        int index, in CollisionFilter filter, bool applyFilter) =>
+        _slots[index].Active
+        && _slots[index].Enabled
+        && (!applyFilter || filter.CanCollideWith(_slots[index].Filter));
+
     /// <summary>
-    /// Computes narrowphase only for the selected candidate. Returns false when
-    /// the pair is stale, invalid, or no longer colliding.
+    /// Computes narrowphase only for the selected candidate using current slot
+    /// state. Returns false when either handle is invalid or disabled, the
+    /// current filters reject one another, or the shapes no longer collide.
     /// </summary>
     public bool TryComputeContact(in CandidatePair pair, out ContactPair contact)
     {
         ThrowIfDisposed();
-        if (pair.Revision != _revision || !IsValid(pair.A) || !IsValid(pair.B))
+        if (!IsValid(pair.A) || !IsValid(pair.B)
+            || !_slots[pair.A.Index].Enabled || !_slots[pair.B.Index].Enabled)
         {
             contact = default;
             return false;
         }
 
-        if (!_slots[pair.A.Index].Filter.Allows(_slots[pair.B.Index].Filter))
+        if (!_slots[pair.A.Index].Filter.CanCollideWith(_slots[pair.B.Index].Filter))
         {
             contact = default;
             return false;
@@ -367,7 +684,29 @@ public sealed class ArcWorld : IDisposable
         in Shape query, ArcHandle target, out Manifold manifold)
     {
         ThrowIfDisposed();
-        if (!IsValid(target))
+        if (!IsValid(target) || !_slots[target.Index].Enabled)
+        {
+            manifold = Manifold.None;
+            return false;
+        }
+        manifold = Collide.ShapeVsShape(query, _slots[target.Index].Shape);
+        return manifold.Colliding;
+    }
+
+    /// <summary>
+    /// Computes a transient query contact only when its filter and the target's
+    /// current filter mutually accept one another.
+    /// </summary>
+    public bool TryComputeContact(
+        in Shape query,
+        in CollisionFilter filter,
+        ArcHandle target,
+        out Manifold manifold)
+    {
+        ThrowIfDisposed();
+        if (!IsValid(target)
+            || !_slots[target.Index].Enabled
+            || !filter.CanCollideWith(_slots[target.Index].Filter))
         {
             manifold = Manifold.None;
             return false;
@@ -380,7 +719,8 @@ public sealed class ArcWorld : IDisposable
         int entityId,
         in Shape shape,
         in CollisionFilter filter,
-        bool isStatic)
+        bool isStatic,
+        bool enabled)
     {
         ThrowIfDisposed();
         if ((uint)entityId > ArcHandle.MaxEntityId)
@@ -395,21 +735,23 @@ public sealed class ArcWorld : IDisposable
         slot.EntityId = entityId;
         slot.TreeProxy = -1;
         slot.Active = true;
+        slot.Enabled = enabled;
         slot.Static = isStatic;
         slot.Generation = AllocateHandleGeneration(index);
 
-        if (isStatic)
+        if (enabled && isStatic)
         {
             _broadphase.AddOrUpdateStatic(index, slot.Bounds);
         }
-        else
+        else if (enabled)
         {
             slot.TreeProxy = _broadphase.AddDynamic(index, slot.Bounds);
-            _dynamicCount++;
         }
 
+        if (!isStatic) _dynamicCount++;
+
         _activeCount++;
-        AdvanceRevision();
+        if (enabled) _enabledCount++;
         return CreateHandle(index);
     }
 
@@ -449,7 +791,8 @@ public sealed class ArcWorld : IDisposable
         {
             int index = _candidates[i];
             if (_slots[index].Active
-                && (!applyFilter || filter.Allows(_slots[index].Filter))
+                && _slots[index].Enabled
+                && (!applyFilter || filter.CanCollideWith(_slots[index].Filter))
                 && _slots[index].Bounds.Overlaps(bounds))
                 results.Add(CreateHandle(index));
         }
@@ -460,8 +803,8 @@ public sealed class ArcWorld : IDisposable
         ArcHandle first = CreateHandle(a);
         ArcHandle second = CreateHandle(b);
         return HandleComparer.Instance.Compare(first, second) <= 0
-            ? new CandidatePair(first, second, _revision)
-            : new CandidatePair(second, first, _revision);
+            ? new CandidatePair(first, second)
+            : new CandidatePair(second, first);
     }
 
     private ArcHandle CreateHandle(int index)
@@ -480,6 +823,7 @@ public sealed class ArcWorld : IDisposable
         _slotCount = 0;
         _freeList = -1;
         _activeCount = 0;
+        _enabledCount = 0;
         _dynamicCount = 0;
         ReleaseWorldId(this, _worldId);
     }
@@ -549,12 +893,6 @@ public sealed class ArcWorld : IDisposable
     private void ThrowIfDisposed()
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-    }
-
-    private void AdvanceRevision()
-    {
-        _revision++;
-        if (_revision == 0) _revision = 1;
     }
 
 }

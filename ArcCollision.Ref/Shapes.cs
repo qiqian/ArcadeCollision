@@ -165,6 +165,25 @@ public sealed class Polygon
         TriangleIndices = IsConvex ? Array.Empty<int>() : Triangulate(_fixedVertices);
     }
 
+    private Polygon(Polygon source, Vec2 delta)
+    {
+        FxVec2 fixedDelta = FxVec2.From(delta);
+        _vertices = new Vec2[source._vertices.Length];
+        _fixedVertices = new FxVec2[source._fixedVertices.Length];
+        for (int i = 0; i < _vertices.Length; i++)
+        {
+            _vertices[i] = source._vertices[i] + delta;
+            _fixedVertices[i] = source._fixedVertices[i] + fixedDelta;
+        }
+        _bounds = source._bounds.Moved(delta);
+        MinXFx = source.MinXFx + fixedDelta.X;
+        MinYFx = source.MinYFx + fixedDelta.Y;
+        MaxXFx = source.MaxXFx + fixedDelta.X;
+        MaxYFx = source.MaxYFx + fixedDelta.Y;
+        TriangleIndices = source.TriangleIndices;
+        IsConvex = source.IsConvex;
+    }
+
     public int Count => _vertices.Length;
     public Vec2 this[int index] => _vertices[index];
     public ReadOnlySpan<Vec2> Vertices => _vertices;
@@ -172,12 +191,7 @@ public sealed class Polygon
     internal FxVec2[] FixedVertices => _fixedVertices;
 
     public Polygon Moved(Vec2 delta)
-    {
-        var moved = new Vec2[_vertices.Length];
-        for (int i = 0; i < moved.Length; i++)
-            moved[i] = _vertices[i] + delta;
-        return new Polygon(moved);
-    }
+        => new(this, delta);
 
     private static bool ComputeConvexity(FxVec2[] vertices)
     {

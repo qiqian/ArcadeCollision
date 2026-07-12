@@ -60,12 +60,21 @@ internal sealed class StaticBvh
     private int _nodeCount;
     private int _root = -1;
 
+    public void EnsureCapacity(int leafCapacity)
+    {
+        if (leafCapacity < 0)
+            throw new ArgumentOutOfRangeException(nameof(leafCapacity));
+        if (_leaves.Length < leafCapacity)
+            Array.Resize(ref _leaves, leafCapacity);
+        int requiredNodes = leafCapacity == 0 ? 0 : leafCapacity * 2 - 1;
+        if (_nodes.Length < requiredNodes)
+            Array.Resize(ref _nodes, requiredNodes);
+    }
+
     public void Clear()
     {
         _root = -1;
         _nodeCount = 0;
-        _leaves = Array.Empty<Leaf>();
-        _nodes = Array.Empty<Node>();
     }
 
     public void Build(Dictionary<int, BpBounds> source)
@@ -77,12 +86,11 @@ internal sealed class StaticBvh
             return;
         }
 
-        if (_leaves.Length != count)
-            _leaves = new Leaf[count];
+        EnsureCapacity(count);
         int leafIndex = 0;
         foreach (KeyValuePair<int, BpBounds> item in source)
             _leaves[leafIndex++] = new Leaf { Id = item.Key, Bounds = item.Value };
-        Array.Sort(_leaves, 0, count, IdComparer.Instance);
+        InPlaceSort.Sort(_leaves, 0, count, IdComparer.Instance);
 
         int requiredNodes = count * 2 - 1;
         if (_nodes.Length < requiredNodes)
@@ -157,7 +165,8 @@ internal sealed class StaticBvh
 
         if (middle == start || middle == start + count)
         {
-            Array.Sort(_leaves, start, count, axis == 0 ? XComparer.Instance : YComparer.Instance);
+            InPlaceSort.Sort(_leaves, start, count,
+                axis == 0 ? XComparer.Instance : YComparer.Instance);
             middle = start + count / 2;
         }
 

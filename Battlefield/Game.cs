@@ -1093,7 +1093,10 @@ internal sealed class Game
             {
                 Shape body = fighter.Body;
                 if (_bodyWorld.IsValid(fighter.BodyHandle))
+                {
                     _bodyWorld.Update(fighter.BodyHandle, body);
+                    _bodyWorld.SetEnabled(fighter.BodyHandle, true);
+                }
                 else
                     fighter.BodyHandle = _bodyWorld.Add(
                         fighter.EntityId,
@@ -1102,8 +1105,7 @@ internal sealed class Game
             }
             else if (_bodyWorld.IsValid(fighter.BodyHandle))
             {
-                _bodyWorld.Remove(fighter.BodyHandle);
-                fighter.BodyHandle = default;
+                _bodyWorld.SetEnabled(fighter.BodyHandle, false);
             }
         }
 
@@ -1174,7 +1176,7 @@ internal sealed class Game
     {
         for (int i = 0; i < Fighters.Count; i++)
             SyncHurtCollider(Fighters[i]);
-        if (_hurtWorld.DynamicCount == 0) return;
+        if (_hurtWorld.EnabledCount == 0) return;
 
         for (int attackerIndex = 0; attackerIndex < Fighters.Count; attackerIndex++)
         {
@@ -1200,7 +1202,7 @@ internal sealed class Game
                 if (MathF.Abs(attacker.Pos.Y - target.Pos.Y) > HitLane)
                     continue;
                 if (!_hurtWorld.TryComputeContact(
-                        attackShape, targetHandle, out Manifold manifold))
+                        attackShape, attackFilter, targetHandle, out Manifold manifold))
                     continue;
                 DebugManifolds.Add(new CollisionManifoldDebug(
                     manifold, CollisionManifoldKind.Attack));
@@ -1217,17 +1219,20 @@ internal sealed class Game
         if (target.Dead || !target.CombatActive || target.IsInvulnerable)
         {
             if (_hurtWorld.IsValid(target.HurtHandle))
-            {
-                _hurtWorld.Remove(target.HurtHandle);
-                target.HurtHandle = default;
-            }
+                _hurtWorld.SetEnabled(target.HurtHandle, false);
             return;
         }
 
         BoxShape hurt = target.CurrentHurtShape();
         Shape shape = new Obb(hurt.Center, hurt.HalfSize, hurt.Rotation);
         if (_hurtWorld.IsValid(target.HurtHandle))
+        {
             _hurtWorld.Update(target.HurtHandle, shape);
+            _hurtWorld.SetFilter(
+                target.HurtHandle,
+                BattlefieldCollisionFilters.Hurtbox(target.Faction));
+            _hurtWorld.SetEnabled(target.HurtHandle, true);
+        }
         else
             target.HurtHandle = _hurtWorld.Add(
                 target.EntityId,
@@ -1239,10 +1244,12 @@ internal sealed class Game
         attacker.Pos + new Vec2(attacker.Facing * hit.Box.Center.X, hit.Box.Center.Y - attacker.SkinY);
 
     internal bool HasBodyCollider(Fighter fighter) =>
-        _bodyWorld.IsValid(fighter.BodyHandle);
+        _bodyWorld.IsValid(fighter.BodyHandle)
+        && _bodyWorld.IsEnabled(fighter.BodyHandle);
 
     internal bool HasHurtCollider(Fighter fighter) =>
-        _hurtWorld.IsValid(fighter.HurtHandle);
+        _hurtWorld.IsValid(fighter.HurtHandle)
+        && _hurtWorld.IsEnabled(fighter.HurtHandle);
 
     internal static bool TryGetActiveAttackGeometry(
         Fighter attacker, out HitWindow hit, out Vec2 center)

@@ -322,7 +322,7 @@ public class BroadphaseScaleTests
     }
 
     [Fact]
-    public void StaleCandidates_AreRejectedAfterWorldChanges()
+    public void CandidateUsesCurrentStateAfterWorldChanges()
     {
         var world = new ArcWorld(8f);
         ArcHandle a = world.Add(1, new Circle(new Vec2(0, 0), 5f));
@@ -332,9 +332,9 @@ public class BroadphaseScaleTests
         CandidatePair pair = Assert.Single(pairs);
         Assert.True(world.TryComputeContact(pair, out _));
 
-        // Any mutation advances the revision; the old candidate must go stale.
+        // Candidates are broadphase hints. Current handle, filter and shape state
+        // is rechecked instead of invalidating every pair for an unrelated update.
         world.Update(a, new Circle(new Vec2(0, 0), 5f));
-        Assert.False(world.TryComputeContact(pair, out _),
-            "stale candidate pair accepted after world mutation");
+        Assert.True(world.TryComputeContact(pair, out _));
     }
 }

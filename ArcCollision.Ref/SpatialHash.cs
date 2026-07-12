@@ -26,6 +26,15 @@ internal sealed class SpatialHash
 
     internal float FatMargin => Fx.To(_fatMarginFx);
 
+    internal void EnsureCapacity(int colliderCapacity)
+    {
+        if (colliderCapacity < 0)
+            throw new ArgumentOutOfRangeException(nameof(colliderCapacity));
+        _dynamicTree.EnsureCapacity(colliderCapacity);
+        _staticBounds.EnsureCapacity(colliderCapacity);
+        _staticBvh.EnsureCapacity(colliderCapacity);
+    }
+
     internal int AddDynamic(int slotIndex, in BpBounds bounds) =>
         _dynamicTree.CreateProxy(slotIndex, bounds.Expanded(_fatMarginFx));
 

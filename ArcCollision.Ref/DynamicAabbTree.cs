@@ -30,6 +30,15 @@ internal sealed class DynamicAabbTree
 
     public int Count => _leafCount;
 
+    public void EnsureCapacity(int proxyCapacity)
+    {
+        if (proxyCapacity < 0)
+            throw new ArgumentOutOfRangeException(nameof(proxyCapacity));
+        int requiredNodes = proxyCapacity == 0 ? 0 : proxyCapacity * 2 - 1;
+        while (_nodes.Length < requiredNodes)
+            GrowNodes();
+    }
+
     public void Clear()
     {
         _root = -1;
@@ -365,8 +374,16 @@ internal sealed class DynamicAabbTree
     private void GrowNodes()
     {
         int oldLength = _nodes.Length;
+        int oldFreeList = _freeList;
         Array.Resize(ref _nodes, oldLength * 2);
-        InitializeFreeList(oldLength);
+        for (int i = oldLength; i < _nodes.Length - 1; i++)
+        {
+            _nodes[i].Parent = i + 1;
+            _nodes[i].Height = -1;
+        }
+        _nodes[^1].Parent = oldFreeList;
+        _nodes[^1].Height = -1;
+        _freeList = oldLength;
     }
 
     private void InitializeFreeList(int start)

@@ -19,6 +19,9 @@ public static class CollisionCategories
 /// </summary>
 public readonly struct CollisionFilter : IEquatable<CollisionFilter>
 {
+    /// <summary>A filter that cannot collide with anything.</summary>
+    public static readonly CollisionFilter Disabled = default;
+
     /// <summary>
     /// Default filter: belongs to <see cref="CollisionCategories.Default"/> and
     /// accepts every category.
@@ -35,10 +38,16 @@ public readonly struct CollisionFilter : IEquatable<CollisionFilter>
         CollidesWith = collidesWith;
     }
 
+    /// <summary>True when this filter has no category or accepted-category bits.</summary>
+    public bool IsDisabled => Categories == 0 || CollidesWith == 0;
+
     /// <summary>Returns true only when both filters accept one another.</summary>
-    public bool Allows(in CollisionFilter other) =>
+    public bool CanCollideWith(in CollisionFilter other) =>
         (Categories & other.CollidesWith) != 0
         && (other.Categories & CollidesWith) != 0;
+
+    /// <summary>Alias for <see cref="CanCollideWith"/>.</summary>
+    public bool Allows(in CollisionFilter other) => CanCollideWith(other);
 
     public bool Equals(CollisionFilter other) =>
         Categories == other.Categories && CollidesWith == other.CollidesWith;

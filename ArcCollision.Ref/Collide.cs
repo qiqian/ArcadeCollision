@@ -685,6 +685,9 @@ public static partial class Collide
         private readonly int[]? _indices;
         private readonly int _indexOffset;
         private readonly FxVec2 _offset;
+        private readonly FxAxis _axisX;
+        private readonly FxAxis _axisY;
+        private readonly bool _rotated;
 
         public readonly int Count;
         public readonly long Radius;
@@ -756,18 +759,52 @@ public static partial class Collide
             _indices = source._indices;
             _indexOffset = source._indexOffset;
             _offset = source._offset + offset;
+            _axisX = source._axisX;
+            _axisY = source._axisY;
+            _rotated = source._rotated;
             Count = source.Count;
             Radius = source.Radius;
             Center = source.Center + offset;
         }
 
+        private ConvexProxy(
+            in ConvexProxy source, FxVec2 translation, Angle32 rotation)
+        {
+            _v0 = source._v0;
+            _v1 = source._v1;
+            _v2 = source._v2;
+            _v3 = source._v3;
+            _vertices = source._vertices;
+            _indices = source._indices;
+            _indexOffset = source._indexOffset;
+            _offset = translation;
+            _axisX = FxAxis.FromAngle(rotation);
+            _axisY = _axisX.Perpendicular;
+            _rotated = true;
+            Count = source.Count;
+            Radius = source.Radius;
+            Center = Transform(source.Center) + translation;
+        }
+
         public ConvexProxy Translated(FxVec2 offset) =>
             offset.X == 0 && offset.Y == 0 ? this : new ConvexProxy(this, offset);
+
+        public ConvexProxy Transformed(Vec2 translation, Angle32 rotation)
+        {
+            FxVec2 offset = FxVec2.From(translation);
+            return rotation.Raw == 0
+                ? Translated(offset)
+                : new ConvexProxy(this, offset, rotation);
+        }
 
         public FxVec2 Vertex(int index)
         {
             if (_vertices != null)
-                return _vertices[_indices == null ? index : _indices[_indexOffset + index]] + _offset;
+            {
+                FxVec2 value = _vertices[
+                    _indices == null ? index : _indices[_indexOffset + index]];
+                return (_rotated ? Transform(value) : value) + _offset;
+            }
             FxVec2 vertex = index switch
             {
                 0 => _v0,
@@ -776,7 +813,7 @@ public static partial class Collide
                 3 => _v3,
                 _ => throw new ArgumentOutOfRangeException(nameof(index)),
             };
-            return vertex + _offset;
+            return (_rotated ? Transform(vertex) : vertex) + _offset;
         }
 
         public int EdgeCount => Count <= 1 ? 0 : Count == 2 ? 1 : Count;
@@ -798,6 +835,9 @@ public static partial class Collide
             }
             return new FxVec2(x / count, y / count);
         }
+
+        private FxVec2 Transform(FxVec2 vertex) =>
+            _axisX.Scale(vertex.X) + _axisY.Scale(vertex.Y);
     }
 
     private struct SatState
@@ -850,9 +890,10 @@ public static partial class Collide
             case ShapeKind.Polygon:
             {
                 Polygon polygon = shape.Polygon;
-                return polygon.IsConvex
+                ConvexProxy proxy = polygon.IsConvex
                     ? new ConvexProxy(polygon.FixedVertices)
                     : new ConvexProxy(polygon.FixedVertices, polygon.TriangleIndices, piece * 3);
+                return proxy.Transformed(shape.PolygonTranslation, shape.PolygonRotation);
             }
             default:
                 throw new ArgumentOutOfRangeException(nameof(shape));
