@@ -265,6 +265,97 @@ public class ArcWorldTests
     }
 
     [Fact]
+    public void DefaultFiltersPreserveExistingPairBehaviour()
+    {
+        using var world = new ArcWorld();
+        world.Add(1, new Circle(Vec2.Zero, 1));
+        world.Add(2, new Circle(new Vec2(1, 0), 1));
+        var candidates = new List<CandidatePair>();
+
+        world.ComputePairs(candidates);
+
+        Assert.Single(candidates);
+    }
+
+    [Fact]
+    public void PairFilteringRequiresMutualAcceptance()
+    {
+        const uint attack = 1u << 1;
+        const uint hurtbox = 1u << 2;
+        using var world = new ArcWorld();
+        world.Add(1, new Circle(Vec2.Zero, 1),
+            new CollisionFilter(attack, hurtbox));
+        ArcHandle target = world.Add(2, new Circle(new Vec2(1, 0), 1),
+            new CollisionFilter(hurtbox, 0));
+        var candidates = new List<CandidatePair>();
+
+        Assert.Equal(new CollisionFilter(hurtbox, 0), world.GetFilter(target));
+
+        world.ComputePairs(candidates);
+        Assert.Empty(candidates);
+
+        world.SetFilter(target, new CollisionFilter(hurtbox, attack));
+        world.ComputePairs(candidates);
+        Assert.Single(candidates);
+    }
+
+    [Fact]
+    public void SettingSameFilterDoesNotInvalidateCollectedPair()
+    {
+        using var world = new ArcWorld();
+        ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 1));
+        world.Add(2, new Circle(new Vec2(1, 0), 1));
+        var candidates = new List<CandidatePair>();
+        world.ComputePairs(candidates);
+        CandidatePair pair = Assert.Single(candidates);
+
+        world.SetFilter(first, CollisionFilter.Default);
+
+        Assert.True(world.TryComputeContact(pair, out _));
+    }
+
+    [Fact]
+    public void ChangingFilterInvalidatesCollectedPairs()
+    {
+        using var world = new ArcWorld();
+        ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 1));
+        world.Add(2, new Circle(new Vec2(1, 0), 1));
+        var candidates = new List<CandidatePair>();
+        world.ComputePairs(candidates);
+        CandidatePair stale = Assert.Single(candidates);
+
+        world.SetFilter(first, new CollisionFilter(
+            CollisionCategories.Default, collidesWith: 0));
+
+        Assert.False(world.TryComputeContact(stale, out _));
+        world.ComputePairs(candidates);
+        Assert.Empty(candidates);
+    }
+
+    [Fact]
+    public void FilteredQueryUsesTransientShapeFilter()
+    {
+        const uint attack = 1u << 1;
+        const uint hurtbox = 1u << 2;
+        const uint scenery = 1u << 3;
+        using var world = new ArcWorld();
+        world.AddStatic(10, new Circle(Vec2.Zero, 1),
+            new CollisionFilter(hurtbox, attack));
+        world.AddStatic(20, new Circle(Vec2.Zero, 1),
+            new CollisionFilter(scenery, CollisionCategories.All));
+        world.BuildStatic();
+        Shape query = new Circle(Vec2.Zero, 2);
+        var results = new List<ArcHandle>();
+
+        world.Query(query, new CollisionFilter(attack, hurtbox), results);
+
+        Assert.Equal(10, Assert.Single(results).EntityId);
+
+        world.Query(query, results);
+        Assert.Equal(2, results.Count);
+    }
+
+    [Fact]
     public void MutationInvalidatesPreviouslyCollectedPairs()
     {
         var world = new ArcWorld(2f);

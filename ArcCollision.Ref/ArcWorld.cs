@@ -129,6 +129,7 @@ public sealed class ArcWorld : IDisposable
     {
         public Shape Shape;
         public BpBounds Bounds;
+        public CollisionFilter Filter;
         public int EntityId;
         public int TreeProxy;
         public int NextFree;
@@ -162,8 +163,18 @@ public sealed class ArcWorld : IDisposable
     public int StaticCount { get { ThrowIfDisposed(); return _activeCount - _dynamicCount; } }
     public float FatMargin { get { ThrowIfDisposed(); return _broadphase.FatMargin; } }
 
-    public ArcHandle Add(int entityId, in Shape shape) => AddCore(entityId, shape, isStatic: false);
-    public ArcHandle AddStatic(int entityId, in Shape shape) => AddCore(entityId, shape, isStatic: true);
+    public ArcHandle Add(int entityId, in Shape shape) =>
+        AddCore(entityId, shape, CollisionFilter.Default, isStatic: false);
+
+    public ArcHandle Add(int entityId, in Shape shape, in CollisionFilter filter) =>
+        AddCore(entityId, shape, filter, isStatic: false);
+
+    public ArcHandle AddStatic(int entityId, in Shape shape) =>
+        AddCore(entityId, shape, CollisionFilter.Default, isStatic: true);
+
+    public ArcHandle AddStatic(
+        int entityId, in Shape shape, in CollisionFilter filter) =>
+        AddCore(entityId, shape, filter, isStatic: true);
 
     /// <summary>
     /// Rebuilds the immutable static BVH immediately. Call after batching static
@@ -193,6 +204,20 @@ public sealed class ArcWorld : IDisposable
         AdvanceRevision();
     }
 
+    public CollisionFilter GetFilter(ArcHandle handle) => GetSlot(handle).Filter;
+
+    /// <summary>
+    /// Changes the collider's category membership and accepted categories.
+    /// Previously collected candidate pairs become stale when the value changes.
+    /// </summary>
+    public void SetFilter(ArcHandle handle, in CollisionFilter filter)
+    {
+        ref Slot slot = ref GetSlot(handle);
+        if (slot.Filter == filter) return;
+        slot.Filter = filter;
+        AdvanceRevision();
+    }
+
     public void Remove(ArcHandle handle)
     {
         ref Slot slot = ref GetSlot(handle);
@@ -208,6 +233,7 @@ public sealed class ArcWorld : IDisposable
 
         slot.Shape = default;
         slot.Bounds = default;
+        slot.Filter = default;
         slot.EntityId = 0;
         slot.TreeProxy = -1;
         slot.Active = false;
@@ -240,6 +266,7 @@ public sealed class ArcWorld : IDisposable
             ref Slot slot = ref _slots[i];
             slot.Shape = default;
             slot.Bounds = default;
+            slot.Filter = default;
             slot.EntityId = 0;
             slot.TreeProxy = -1;
             slot.Active = false;
@@ -261,6 +288,7 @@ public sealed class ArcWorld : IDisposable
         {
             (int a, int b) = _broadphasePairs[i];
             if (_slots[a].Active && _slots[b].Active
+                && _slots[a].Filter.Allows(_slots[b].Filter)
                 && _slots[a].Bounds.Overlaps(_slots[b].Bounds))
                 results.Add(CreatePair(a, b));
         }
@@ -270,6 +298,25 @@ public sealed class ArcWorld : IDisposable
     /// <summary>Returns broadphase handles overlapping a transient query shape.</summary>
     public void Query(in Shape query, List<ArcHandle> results)
     {
+        QueryCore(query, default, applyFilter: false, results);
+    }
+
+    /// <summary>
+    /// Returns broadphase handles overlapping a transient query shape whose
+    /// collision filter mutually accepts the target collider's filter.
+    /// </summary>
+    public void Query(
+        in Shape query, in CollisionFilter filter, List<ArcHandle> results)
+    {
+        QueryCore(query, filter, applyFilter: true, results);
+    }
+
+    private void QueryCore(
+        in Shape query,
+        in CollisionFilter filter,
+        bool applyFilter,
+        List<ArcHandle> results)
+    {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(results);
         results.Clear();
@@ -277,10 +324,10 @@ public sealed class ArcWorld : IDisposable
 
         _candidates.Clear();
         _broadphase.QueryDynamic(bounds, _candidates);
-        AppendQueryResults(bounds, results);
+        AppendQueryResults(bounds, filter, applyFilter, results);
         _candidates.Clear();
         _broadphase.QueryStatic(bounds, _candidates);
-        AppendQueryResults(bounds, results);
+        AppendQueryResults(bounds, filter, applyFilter, results);
         results.Sort(HandleComparer.Instance);
     }
 
@@ -292,6 +339,12 @@ public sealed class ArcWorld : IDisposable
     {
         ThrowIfDisposed();
         if (pair.Revision != _revision || !IsValid(pair.A) || !IsValid(pair.B))
+        {
+            contact = default;
+            return false;
+        }
+
+        if (!_slots[pair.A.Index].Filter.Allows(_slots[pair.B.Index].Filter))
         {
             contact = default;
             return false;
@@ -323,7 +376,11 @@ public sealed class ArcWorld : IDisposable
         return manifold.Colliding;
     }
 
-    private ArcHandle AddCore(int entityId, in Shape shape, bool isStatic)
+    private ArcHandle AddCore(
+        int entityId,
+        in Shape shape,
+        in CollisionFilter filter,
+        bool isStatic)
     {
         ThrowIfDisposed();
         if ((uint)entityId > ArcHandle.MaxEntityId)
@@ -334,6 +391,7 @@ public sealed class ArcWorld : IDisposable
         ref Slot slot = ref _slots[index];
         slot.Shape = shape;
         slot.Bounds = new BpBounds(shape);
+        slot.Filter = filter;
         slot.EntityId = entityId;
         slot.TreeProxy = -1;
         slot.Active = true;
@@ -381,12 +439,18 @@ public sealed class ArcWorld : IDisposable
         return ref _slots[handle.Index];
     }
 
-    private void AppendQueryResults(BpBounds bounds, List<ArcHandle> results)
+    private void AppendQueryResults(
+        BpBounds bounds,
+        in CollisionFilter filter,
+        bool applyFilter,
+        List<ArcHandle> results)
     {
         for (int i = 0; i < _candidates.Count; i++)
         {
             int index = _candidates[i];
-            if (_slots[index].Active && _slots[index].Bounds.Overlaps(bounds))
+            if (_slots[index].Active
+                && (!applyFilter || filter.Allows(_slots[index].Filter))
+                && _slots[index].Bounds.Overlaps(bounds))
                 results.Add(CreateHandle(index));
         }
     }

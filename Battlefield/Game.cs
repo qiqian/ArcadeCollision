@@ -1095,7 +1095,10 @@ internal sealed class Game
                 if (_bodyWorld.IsValid(fighter.BodyHandle))
                     _bodyWorld.Update(fighter.BodyHandle, body);
                 else
-                    fighter.BodyHandle = _bodyWorld.Add(fighter.EntityId, body);
+                    fighter.BodyHandle = _bodyWorld.Add(
+                        fighter.EntityId,
+                        body,
+                        BattlefieldCollisionFilters.FighterBody);
             }
             else if (_bodyWorld.IsValid(fighter.BodyHandle))
             {
@@ -1180,7 +1183,9 @@ internal sealed class Game
                 continue;
 
             Shape attackShape = CreateHitShape(attacker, hit, hitCenter);
-            _hurtWorld.Query(attackShape, _hitCandidates);
+            CollisionFilter attackFilter =
+                BattlefieldCollisionFilters.Attack(attacker.Faction);
+            _hurtWorld.Query(attackShape, attackFilter, _hitCandidates);
 
             for (int candidateIndex = 0; candidateIndex < _hitCandidates.Count; candidateIndex++)
             {
@@ -1224,7 +1229,10 @@ internal sealed class Game
         if (_hurtWorld.IsValid(target.HurtHandle))
             _hurtWorld.Update(target.HurtHandle, shape);
         else
-            target.HurtHandle = _hurtWorld.Add(target.EntityId, shape);
+            target.HurtHandle = _hurtWorld.Add(
+                target.EntityId,
+                shape,
+                BattlefieldCollisionFilters.Hurtbox(target.Faction));
     }
 
     private static Vec2 HitCenter(Fighter attacker, in HitWindow hit) =>
