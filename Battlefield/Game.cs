@@ -3,6 +3,11 @@ using System.Collections.Generic;
 
 namespace ArcCollision.Battlefield;
 
+internal enum CollisionManifoldKind { Body, Attack }
+
+internal readonly record struct CollisionManifoldDebug(
+    Manifold Manifold, CollisionManifoldKind Kind);
+
 /// <summary>
 /// Combat-only translation of Quiver's Downtown Beatdown source. Source-space
 /// values are mapped once from 1920x1080 by WorldScale; there is no vertical
@@ -29,6 +34,7 @@ internal sealed class Game
     private const float ArriveRange = 10f * WorldScale;
 
     public readonly List<Fighter> Fighters = new();
+    internal readonly List<CollisionManifoldDebug> DebugManifolds = new();
     public Fighter Player = null!;
 
     public bool GameOver, Win;
@@ -86,6 +92,7 @@ internal sealed class Game
         _hurtWorld.Clear();
         _bodyPairs.Clear();
         _hitCandidates.Clear();
+        DebugManifolds.Clear();
         Array.Clear(_entitiesById);
         Array.Clear(_bodyCorrections);
         _nextEntityId = 0;
@@ -242,6 +249,8 @@ internal sealed class Game
             Hitstop = MathF.Max(0f, Hitstop - dt);
             return;
         }
+
+        DebugManifolds.Clear();
 
         // QuiverActionKnockoutLaunch slows the tree to 0.2 when the player dies.
         if (!Player.Alive && !Player.Dead)
@@ -1104,6 +1113,8 @@ internal sealed class Game
             Fighter b = FighterFor(pair.B);
             if (a.Dead || b.Dead || !a.CombatActive || !b.CombatActive) continue;
             if (!_bodyWorld.TryComputeContact(pair, out ContactPair contact)) continue;
+            DebugManifolds.Add(new CollisionManifoldDebug(
+                contact.Manifold, CollisionManifoldKind.Body));
             Vec2 separation = contact.Manifold.Normal * (contact.Manifold.Depth * .5f);
             _bodyCorrections[a.EntityId] -= separation;
             _bodyCorrections[b.EntityId] += separation;
@@ -1165,13 +1176,10 @@ internal sealed class Game
         for (int attackerIndex = 0; attackerIndex < Fighters.Count; attackerIndex++)
         {
             Fighter attacker = Fighters[attackerIndex];
-            if (!attacker.CombatActive
-                || attacker.State is not (FState.Attack or FState.AirAttack)
-                || attacker.Attack == null
-                || !attacker.Attack.TryWindowAt(attacker.AttackTime, out HitWindow hit))
+            if (!TryGetActiveAttackGeometry(attacker, out HitWindow hit, out Vec2 hitCenter))
                 continue;
 
-            Shape attackShape = CreateHitShape(attacker, hit);
+            Shape attackShape = CreateHitShape(attacker, hit, hitCenter);
             _hurtWorld.Query(attackShape, _hitCandidates);
 
             for (int candidateIndex = 0; candidateIndex < _hitCandidates.Count; candidateIndex++)
@@ -1186,8 +1194,11 @@ internal sealed class Game
                     continue;
                 if (MathF.Abs(attacker.Pos.Y - target.Pos.Y) > HitLane)
                     continue;
-                if (!_hurtWorld.TryComputeContact(attackShape, targetHandle, out _))
+                if (!_hurtWorld.TryComputeContact(
+                        attackShape, targetHandle, out Manifold manifold))
                     continue;
+                DebugManifolds.Add(new CollisionManifoldDebug(
+                    manifold, CollisionManifoldKind.Attack));
                 if (attacker.WasHitBy(target, hit.HitId))
                     continue;
                 ApplyHit(attacker, target, hit);
@@ -1219,9 +1230,31 @@ internal sealed class Game
     private static Vec2 HitCenter(Fighter attacker, in HitWindow hit) =>
         attacker.Pos + new Vec2(attacker.Facing * hit.Box.Center.X, hit.Box.Center.Y - attacker.SkinY);
 
-    private static Shape CreateHitShape(Fighter attacker, in HitWindow hit)
+    internal bool HasBodyCollider(Fighter fighter) =>
+        _bodyWorld.IsValid(fighter.BodyHandle);
+
+    internal bool HasHurtCollider(Fighter fighter) =>
+        _hurtWorld.IsValid(fighter.HurtHandle);
+
+    internal static bool TryGetActiveAttackGeometry(
+        Fighter attacker, out HitWindow hit, out Vec2 center)
     {
-        Vec2 center = HitCenter(attacker, hit);
+        if (attacker.CombatActive
+            && attacker.State is FState.Attack or FState.AirAttack
+            && attacker.Attack != null
+            && attacker.Attack.TryWindowAt(attacker.AttackTime, out hit))
+        {
+            center = HitCenter(attacker, hit);
+            return true;
+        }
+
+        hit = default;
+        center = Vec2.Zero;
+        return false;
+    }
+
+    private static Shape CreateHitShape(Fighter attacker, in HitWindow hit, Vec2 center)
+    {
         if (hit.ShapeKind == HitShapeKind.HorizontalCapsule)
         {
             float halfSpine = MathF.Max(0f, hit.CapsuleHeight * .5f - hit.CapsuleRadius);

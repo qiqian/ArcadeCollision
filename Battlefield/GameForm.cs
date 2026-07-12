@@ -38,12 +38,14 @@ public sealed class GameForm : Form
     private float _taxDeathAge;
     private Vec2 _taxDeathPos;
     private float _taxDeathFacing = -1f;
+    private bool _showCollisionShapes;
 
     private const float VW = Game.ArenaW;   // virtual render width
     private const float VH = 720f;          // virtual render height
 
     private readonly Font _fEndTitle = new("Segoe UI", 44f, FontStyle.Bold);
     private readonly Font _fEndHint = new("Segoe UI", 16f, FontStyle.Bold);
+    private readonly Font _fCollisionDebug = new("Segoe UI", 10f, FontStyle.Bold);
     private readonly Bitmap _buffer = new((int)VW, (int)VH, PixelFormat.Format32bppPArgb);
     private Direct2DPresenter? _presenter;
     private const double FixedStep = 1.0 / 60.0;
@@ -176,6 +178,9 @@ public sealed class GameForm : Form
             _attackQueued = _jumpQueued = false;
         }
 
+        if (Pressed(Keys.C))
+            _showCollisionShapes = !_showCollisionShapes;
+
         _attackQueued |= Pressed(Keys.J);
         _jumpQueued |= Pressed(Keys.Space);
         _accumulator += elapsed;
@@ -290,11 +295,203 @@ public sealed class GameForm : Form
 
         g.Restore(combatSpace);
         _stageRenderer.DrawForeground(g);
+        if (_showCollisionShapes) DrawCollisionShapes(g);
 
         g.Restore(world);
 
         DrawHud(g);
+        if (_showCollisionShapes) DrawCollisionLegend(g);
         if (_game.GameOver) DrawEndScreen(g);
+    }
+
+    // ------------------------------------------------ collision debug overlay
+
+    private static readonly Color BodyColliderColor = Color.FromArgb(230, 30, 205, 255);
+    private static readonly Color HurtColliderColor = Color.FromArgb(230, 80, 255, 110);
+    private static readonly Color AttackColliderColor = Color.FromArgb(240, 255, 65, 65);
+
+    private void DrawCollisionShapes(Graphics g)
+    {
+        float lineWidth = 2f / MathF.Max(0.1f, _camZoom);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        // Draw the less urgent layers first so active attacks remain visible
+        // where several colliders overlap.
+        foreach (Fighter fighter in _game.Fighters)
+            if (_game.HasBodyCollider(fighter))
+                DrawCapsule(g, fighter.Body, BodyColliderColor, lineWidth);
+
+        foreach (Fighter fighter in _game.Fighters)
+        {
+            if (!_game.HasHurtCollider(fighter)) continue;
+            BoxShape hurt = fighter.CurrentHurtShape();
+            DrawObb(g, hurt.Center, hurt.HalfSize, hurt.Rotation,
+                HurtColliderColor, lineWidth);
+        }
+
+        foreach (Fighter fighter in _game.Fighters)
+        {
+            if (!Game.TryGetActiveAttackGeometry(
+                    fighter, out HitWindow hit, out Vec2 center))
+                continue;
+
+            if (hit.ShapeKind == HitShapeKind.HorizontalCapsule)
+            {
+                float halfSpine = MathF.Max(0f,
+                    hit.CapsuleHeight * .5f - hit.CapsuleRadius);
+                DrawCapsule(g, new Capsule(
+                    center - new Vec2(halfSpine, 0f),
+                    center + new Vec2(halfSpine, 0f),
+                    hit.CapsuleRadius), AttackColliderColor, lineWidth);
+            }
+            else
+            {
+                DrawObb(g, center, hit.Box.HalfSize,
+                    hit.Box.Rotation * fighter.Facing,
+                    AttackColliderColor, lineWidth);
+            }
+        }
+
+        DrawCollisionManifolds(g, lineWidth);
+    }
+
+    private void DrawCollisionManifolds(Graphics g, float lineWidth)
+    {
+        float zoom = MathF.Max(0.1f, _camZoom);
+        float pointRadius = 4f / zoom;
+
+        foreach (CollisionManifoldDebug debug in _game.DebugManifolds)
+        {
+            Manifold manifold = debug.Manifold;
+            Color color = debug.Kind == CollisionManifoldKind.Body
+                ? BodyColliderColor
+                : AttackColliderColor;
+            Vec2 start = manifold.Contact;
+            Vec2 normal = manifold.Normal;
+            Vec2 end = start + normal * manifold.Depth;
+
+            using var normalPen = new Pen(color, lineWidth * 1.5f)
+            {
+                StartCap = LineCap.Round,
+                EndCap = LineCap.Round,
+            };
+            g.DrawLine(normalPen, start.X, start.Y, end.X, end.Y);
+
+            // Keep the arrow head inside the depth-scaled vector so its tip is
+            // exactly Contact + Normal * Depth.
+            if (manifold.Depth > 0f && normal.LengthSquared > 0f)
+            {
+                float head = MathF.Min(7f / zoom, manifold.Depth * .4f);
+                Vec2 back = end - normal * head;
+                Vec2 side = new(-normal.Y * head * .55f, normal.X * head * .55f);
+                g.DrawLine(normalPen, end.X, end.Y,
+                    back.X + side.X, back.Y + side.Y);
+                g.DrawLine(normalPen, end.X, end.Y,
+                    back.X - side.X, back.Y - side.Y);
+            }
+
+            using var pointFill = new SolidBrush(Color.FromArgb(245, 255, 245, 80));
+            using var pointOutline = new Pen(color, lineWidth);
+            g.FillEllipse(pointFill, start.X - pointRadius, start.Y - pointRadius,
+                pointRadius * 2f, pointRadius * 2f);
+            g.DrawEllipse(pointOutline, start.X - pointRadius, start.Y - pointRadius,
+                pointRadius * 2f, pointRadius * 2f);
+
+            using var label = new SolidBrush(color);
+            g.DrawString($"d={manifold.Depth:0.##}", _fCollisionDebug, label,
+                end.X + 5f / zoom, end.Y - 10f / zoom);
+        }
+    }
+
+    private static void DrawCapsule(
+        Graphics g, Capsule capsule, Color color, float lineWidth)
+    {
+        float dx = capsule.B.X - capsule.A.X;
+        float dy = capsule.B.Y - capsule.A.Y;
+        float length = MathF.Sqrt(dx * dx + dy * dy);
+        float radius = capsule.Radius;
+
+        using var path = new GraphicsPath();
+        if (length <= 0.0001f)
+        {
+            path.AddEllipse(capsule.A.X - radius, capsule.A.Y - radius,
+                radius * 2f, radius * 2f);
+        }
+        else
+        {
+            float nx = -dy / length * radius;
+            float ny = dx / length * radius;
+            float angle = MathF.Atan2(dy, dx) * 180f / MathF.PI;
+            var endArc = new RectangleF(capsule.B.X - radius, capsule.B.Y - radius,
+                radius * 2f, radius * 2f);
+            var startArc = new RectangleF(capsule.A.X - radius, capsule.A.Y - radius,
+                radius * 2f, radius * 2f);
+
+            path.AddLine(capsule.A.X + nx, capsule.A.Y + ny,
+                capsule.B.X + nx, capsule.B.Y + ny);
+            // Sweep away from the spine. A positive GDI+ sweep here travels
+            // through the capsule interior and makes both caps look concave.
+            path.AddArc(endArc, angle + 90f, -180f);
+            path.AddLine(capsule.B.X - nx, capsule.B.Y - ny,
+                capsule.A.X - nx, capsule.A.Y - ny);
+            path.AddArc(startArc, angle - 90f, -180f);
+            path.CloseFigure();
+        }
+
+        FillAndOutline(g, path, color, lineWidth);
+    }
+
+    private static void DrawObb(
+        Graphics g, Vec2 center, Vec2 half, float rotation,
+        Color color, float lineWidth)
+    {
+        float c = MathF.Cos(rotation);
+        float s = MathF.Sin(rotation);
+        var axisX = new Vec2(c * half.X, s * half.X);
+        var axisY = new Vec2(-s * half.Y, c * half.Y);
+        PointF[] points =
+        {
+            Point(center - axisX - axisY),
+            Point(center + axisX - axisY),
+            Point(center + axisX + axisY),
+            Point(center - axisX + axisY),
+        };
+
+        using var path = new GraphicsPath();
+        path.AddPolygon(points);
+        FillAndOutline(g, path, color, lineWidth);
+    }
+
+    private static void FillAndOutline(
+        Graphics g, GraphicsPath path, Color color, float lineWidth)
+    {
+        using var fill = new SolidBrush(Color.FromArgb(48, color.R, color.G, color.B));
+        using var outline = new Pen(color, lineWidth) { LineJoin = LineJoin.Round };
+        g.FillPath(fill, path);
+        g.DrawPath(outline, path);
+    }
+
+    private static PointF Point(Vec2 value) => new(value.X, value.Y);
+
+    private void DrawCollisionLegend(Graphics g)
+    {
+        const float x = 16f;
+        const float y = 680f;
+        using var background = new SolidBrush(Color.FromArgb(175, 10, 10, 14));
+        g.FillRectangle(background, x - 7f, y - 5f, 355f, 27f);
+        DrawLegendItem(g, "BODY", x, y, BodyColliderColor);
+        DrawLegendItem(g, "HURT", x + 100f, y, HurtColliderColor);
+        DrawLegendItem(g, "ATTACK", x + 200f, y, AttackColliderColor);
+        using var hint = new SolidBrush(Color.FromArgb(210, 235, 235, 240));
+        g.DrawString("[C]", _fCollisionDebug, hint, x + 303f, y - 1f);
+    }
+
+    private void DrawLegendItem(Graphics g, string text, float x, float y, Color color)
+    {
+        using var swatch = new SolidBrush(color);
+        using var label = new SolidBrush(Color.White);
+        g.FillRectangle(swatch, x, y + 2f, 13f, 13f);
+        g.DrawString(text, _fCollisionDebug, label, x + 19f, y - 1f);
     }
 
     private void DrawEndScreen(Graphics g)
@@ -686,6 +883,7 @@ public sealed class GameForm : Form
             _stageRenderer.Dispose();
             _fEndTitle.Dispose();
             _fEndHint.Dispose();
+            _fCollisionDebug.Dispose();
             foreach (Image? image in new[] {
                 _hudPlayerBase, _hudPlayerUnder, _hudPlayerProgress, _hudHeart,
                 _hudEnemyBase, _hudEnemyUnder, _hudEnemyProgress, _hudEnemyHeart,
