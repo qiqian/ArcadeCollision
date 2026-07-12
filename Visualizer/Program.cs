@@ -1,3 +1,4 @@
+global using ArcCollision.Wrapper;
 using System;
 using System.Windows.Forms;
 
