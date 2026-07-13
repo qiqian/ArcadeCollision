@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Optimize>true</Optimize>
+    <RootNamespace>ArcCollision.Benchmarks</RootNamespace>
+    <AssemblyName>ArcCollision.Benchmarks</AssemblyName>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ArcCollision.Ref\ArcCollision.Ref.csproj" />
+    <ProjectReference Include="..\ArcCollision.Wrapper\ArcCollision.Wrapper.csproj" />
+  </ItemGroup>
+
+  <Target Name="CopyNativeArcCollisionForBenchmark" AfterTargets="Build">
+    <ItemGroup>
+      <NativeArcCollision Include="..\ArcCollision\build\windows-x64\$(Configuration)\arccollision.dll"
+                          Condition="Exists('..\ArcCollision\build\windows-x64\$(Configuration)\arccollision.dll')" />
+      <NativeArcCollision Include="..\ArcCollision\build\linux-x64\libarccollision.so"
+                          Condition="Exists('..\ArcCollision\build\linux-x64\libarccollision.so')" />
+      <NativeArcCollision Include="..\ArcCollision\build\macos-universal\libarccollision.dylib"
+                          Condition="Exists('..\ArcCollision\build\macos-universal\libarccollision.dylib')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(NativeArcCollision)" DestinationFolder="$(TargetDir)"
+          SkipUnchangedFiles="true" Condition="'@(NativeArcCollision)' != ''" />
+  </Target>
+</Project>
