@@ -73,7 +73,7 @@ public sealed class DynamicAabbTree : IDisposable
 
     public DynamicAabbTree()
     {
-        if (NativeMethods.GetAbiVersion() != 2)
+        if (NativeMethods.GetAbiVersion() != 3)
             throw new InvalidOperationException("ArcCollision native ABI version mismatch.");
         _handle = NativeMethods.DynamicTreeCreate();
         if (_handle.IsInvalid)
@@ -146,7 +146,7 @@ public sealed class StaticBvh : IDisposable
 
     public StaticBvh()
     {
-        if (NativeMethods.GetAbiVersion() != 2)
+        if (NativeMethods.GetAbiVersion() != 3)
             throw new InvalidOperationException("ArcCollision native ABI version mismatch.");
         _handle = NativeMethods.StaticBvhCreate();
         if (_handle.IsInvalid)

@@ -3,7 +3,8 @@
 // arc_handle), the hybrid broadphase, and reusable scratch buffers. Handles carry a
 // world id so a stale handle from another world is rejected. This file also hosts
 // the standalone broadphase C API (arc_dynamic_tree / arc_static_bvh) at the end.
-// Array-returning entry points use the two-call output=null/capacity=0 protocol.
+// World bulk operations publish borrowed views of world-owned result vectors;
+// standalone broadphase arrays retain the two-call output/capacity protocol.
 #include "broadphase.h"
 
 #include <mutex>
@@ -93,7 +94,10 @@ struct arc_world {
         candidates.reserve(static_cast<size_t>(std::max(16, options.initial_collider_capacity)));
         pairs.reserve(static_cast<size_t>(options.initial_pair_capacity));
         pair_values.reserve(static_cast<size_t>(options.initial_pair_capacity));
-        cast_values.reserve(static_cast<size_t>(options.initial_pair_capacity));
+        query_values.reserve(static_cast<size_t>(
+            std::max(16, options.initial_collider_capacity)));
+        cast_values.reserve(static_cast<size_t>(
+            std::max(16, options.initial_collider_capacity)));
         broadphase.ensure_capacity(std::max(16, options.initial_collider_capacity));
     }
 
@@ -221,6 +225,32 @@ arc_status ensure_world(const arc_world* world) {
     return ARC_STATUS_INVALID_ARGUMENT;
 }
 
+// Publish a read-only view of a result vector owned by the world. The pointer is
+// never transferred to the caller and is valid only for the lifetime documented
+// by the public World bulk-result API contract.
+template<class T>
+bool initialize_world_results(const T** output, int32_t* count) {
+    if (output) *output = nullptr;
+    if (count) *count = 0;
+    if (!output || !count) {
+        arc::set_error("Result data and count outputs are required.");
+        return false;
+    }
+    return true;
+}
+
+template<class T>
+arc_status publish_world_results(
+    const std::vector<T>& values, const T** output, int32_t* count) {
+    if (values.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+        arc::set_error("Result count exceeds the C ABI limit.");
+        return ARC_STATUS_INTERNAL_ERROR;
+    }
+    *output = values.empty() ? nullptr : values.data();
+    *count = static_cast<int32_t>(values.size());
+    return ARC_STATUS_OK;
+}
+
 } // namespace
 
 extern "C" {
@@ -312,7 +342,7 @@ arc_status ARC_CALL arc_world_ensure_capacity(
         world->pairs.reserve(static_cast<size_t>(pair_capacity));
         world->pair_values.reserve(static_cast<size_t>(pair_capacity));
         world->query_values.reserve(static_cast<size_t>(collider_capacity));
-        world->cast_values.reserve(static_cast<size_t>(pair_capacity));
+        world->cast_values.reserve(static_cast<size_t>(collider_capacity));
         world->broadphase.ensure_capacity(collider_capacity);
         return ARC_STATUS_OK;
     } catch (...) {
@@ -581,8 +611,9 @@ arc_status ARC_CALL arc_world_shift_origin(
 }
 
 arc_status ARC_CALL arc_world_compute_pairs(
-    arc_world* world, arc_candidate_pair* output,
-    int32_t capacity, int32_t* required) {
+    arc_world* world, const arc_candidate_pair** output, int32_t* count) {
+    if (!initialize_world_results(output, count))
+        return ARC_STATUS_INVALID_ARGUMENT;
     if (!world) return ensure_world(world);
     try {
         world->broadphase.compute_pairs(world->pairs);
@@ -597,8 +628,7 @@ arc_status ARC_CALL arc_world_compute_pairs(
                     make_pair(world, pair.first, pair.second));
         }
         std::sort(world->pair_values.begin(), world->pair_values.end(), pair_less);
-        return arc::copy_results(
-            world->pair_values, output, capacity, required);
+        return publish_world_results(world->pair_values, output, count);
     } catch (...) {
         arc::set_error("Pair computation failed.");
         return ARC_STATUS_INTERNAL_ERROR;
@@ -607,8 +637,10 @@ arc_status ARC_CALL arc_world_compute_pairs(
 
 arc_status ARC_CALL arc_world_query(
     arc_world* world, const arc_shape* query,
-    const arc_collision_filter* filter, arc_handle* output,
-    int32_t capacity, int32_t* required) {
+    const arc_collision_filter* filter,
+    const arc_handle** output, int32_t* count) {
+    if (!initialize_world_results(output, count))
+        return ARC_STATUS_INVALID_ARGUMENT;
     if (!world || !query || !arc::validate_shape(*query)) {
         arc::set_error("Invalid world or query shape.");
         return ARC_STATUS_INVALID_ARGUMENT;
@@ -623,8 +655,7 @@ arc_status ARC_CALL arc_world_query(
         world->broadphase.query_static(bounds, world->candidates);
         append_query(world, bounds, filter);
         std::sort(world->query_values.begin(), world->query_values.end(), handle_less);
-        return arc::copy_results(
-            world->query_values, output, capacity, required);
+        return publish_world_results(world->query_values, output, count);
     } catch (...) {
         arc::set_error("Query failed.");
         return ARC_STATUS_INTERNAL_ERROR;
@@ -671,8 +702,10 @@ arc_status ARC_CALL arc_world_try_contact_shape(
 
 arc_status ARC_CALL arc_world_shape_cast_all(
     arc_world* world, const arc_shape* mover, arc_vec2 motion,
-    const arc_collision_filter* filter, arc_world_cast_hit* output,
-    int32_t capacity, int32_t* required) {
+    const arc_collision_filter* filter,
+    const arc_world_cast_hit** output, int32_t* count) {
+    if (!initialize_world_results(output, count))
+        return ARC_STATUS_INVALID_ARGUMENT;
     if (!world || !mover || !arc::validate_shape(*mover)
         || !arc::valid_vec(motion)) {
         arc::set_error("Invalid world, mover, or motion.");
@@ -688,8 +721,7 @@ arc_status ARC_CALL arc_world_shape_cast_all(
         world->broadphase.query_static(bounds, world->candidates);
         append_casts(world, *mover, motion, filter);
         std::sort(world->cast_values.begin(), world->cast_values.end(), cast_less);
-        return arc::copy_results(
-            world->cast_values, output, capacity, required);
+        return publish_world_results(world->cast_values, output, count);
     } catch (...) {
         arc::set_error("Shape cast failed.");
         return ARC_STATUS_INTERNAL_ERROR;
@@ -731,13 +763,13 @@ arc_status ARC_CALL arc_world_shape_cast(
 
 arc_status ARC_CALL arc_world_ray_cast_all(
     arc_world* world, arc_vec2 origin, arc_vec2 motion,
-    const arc_collision_filter* filter, arc_world_cast_hit* output,
-    int32_t capacity, int32_t* required) {
+    const arc_collision_filter* filter,
+    const arc_world_cast_hit** output, int32_t* count) {
     arc_shape point{};
     point.kind = ARC_SHAPE_CIRCLE;
     point.circle = {origin, 0};
     return arc_world_shape_cast_all(
-        world, &point, motion, filter, output, capacity, required);
+        world, &point, motion, filter, output, count);
 }
 
 arc_status ARC_CALL arc_world_ray_cast(

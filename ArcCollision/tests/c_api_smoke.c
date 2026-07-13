@@ -22,7 +22,8 @@ static int locked_hash_smoke(void)
     arc_shape shapes[6] = {{0}};
     int entities[6] = {10, 20, 30, 40, 50, 60};
     arc_world* world = arc_world_create(&(arc_world_options){1, 16, 16});
-    arc_handle query[6];
+    const arc_handle* query = 0;
+    const arc_candidate_pair* pair_view = 0;
     arc_candidate_pair pairs[15];
     int query_count = 0, pair_count = 0, i;
     unsigned hash = 2166136261u;
@@ -54,14 +55,15 @@ static int locked_hash_smoke(void)
         arc_shape all = {0};
         all.kind = ARC_SHAPE_AABB;
         all.aabb = (arc_aabb){{0, 0}, {20, 20}};
-        if (arc_world_query(world, &all, 0, query, 6, &query_count)
+        if (arc_world_query(world, &all, 0, &query, &query_count)
             != ARC_STATUS_OK) return 34;
     }
     for (i = 0; i < query_count; ++i) {
         hash = add_hash(hash, query[i].packed_entity_id & 0x0fffffffu);
     }
-    if (arc_world_compute_pairs(world, pairs, 15, &pair_count)
+    if (arc_world_compute_pairs(world, &pair_view, &pair_count)
         != ARC_STATUS_OK) return 35;
+    memcpy(pairs, pair_view, (size_t)pair_count * sizeof(*pairs));
     for (i = 0; i < pair_count; ++i) {
         arc_contact_pair contact;
         arc_bool colliding;
@@ -102,8 +104,8 @@ static int broadphase_stress(void)
     int i, j;
     int expected_pairs = 0;
     int required = 0;
-    arc_candidate_pair* pairs;
-    arc_handle query_results[count];
+    const arc_candidate_pair* pairs = 0;
+    const arc_handle* query_results = 0;
     arc_shape query = {0};
     if (!world) return 20;
 
@@ -164,15 +166,9 @@ static int broadphase_stress(void)
                 ++expected_pairs;
         }
     }
-    if (arc_world_compute_pairs(world, 0, 0, &required)
-            != (expected_pairs ? ARC_STATUS_BUFFER_TOO_SMALL : ARC_STATUS_OK)
+    if (arc_world_compute_pairs(world, &pairs, &required) != ARC_STATUS_OK
         || required != expected_pairs)
         return 26;
-    pairs = (arc_candidate_pair*)malloc(
-        (size_t)(required ? required : 1) * sizeof(*pairs));
-    if (!pairs) return 27;
-    if (arc_world_compute_pairs(world, pairs, required, &required)
-        != ARC_STATUS_OK) return 28;
     for (i = 1; i < required; ++i) {
         unsigned previous_a = pairs[i - 1].a.packed_entity_id & 0x0fffffffu;
         unsigned current_a = pairs[i].a.packed_entity_id & 0x0fffffffu;
@@ -182,7 +178,6 @@ static int broadphase_stress(void)
             || (previous_a == current_a && previous_b > current_b))
             return 29;
     }
-    free(pairs);
 
     query.kind = ARC_SHAPE_AABB;
     query.aabb.center = (arc_vec2){8, 6};
@@ -194,7 +189,7 @@ static int broadphase_stress(void)
             && fabsf(circles[i].center.y - 6.0f) <= 4.25f)
             ++expected_pairs;
     }
-    if (arc_world_query(world, &query, 0, query_results, count, &required)
+    if (arc_world_query(world, &query, 0, &query_results, &required)
             != ARC_STATUS_OK
         || required != expected_pairs)
         return 30;
@@ -261,15 +256,14 @@ int main(void)
     {
         arc_handle second;
         int required = 0;
+        const arc_candidate_pair* pairs = 0;
         status = arc_world_add(world, 8, &shape, filter, 1, 1, &second);
         if (status != ARC_STATUS_OK) return 7;
-        status = arc_world_compute_pairs(world, 0, 0, &required);
-        if (status != ARC_STATUS_BUFFER_TOO_SMALL || required != 1) return 8;
+        status = arc_world_compute_pairs(world, &pairs, &required);
+        if (status != ARC_STATUS_OK || required != 1) return 8;
         {
-            arc_candidate_pair pair;
-            status = arc_world_compute_pairs(world, &pair, 1, &required);
-            if (status != ARC_STATUS_OK || required != 1
-                || pair.a.packed_entity_id % (1u << 28) != 7
+            arc_candidate_pair pair = pairs[0];
+            if (pair.a.packed_entity_id % (1u << 28) != 7
                 || pair.b.packed_entity_id % (1u << 28) != 8)
                 return 9;
         }

@@ -33,7 +33,7 @@
 extern "C" {
 #endif
 
-#define ARC_ABI_VERSION 2u   /* bumped: arc_shape is now a 24-byte tagged union */
+#define ARC_ABI_VERSION 3u   /* World bulk APIs now return borrowed result views. */
 #define ARC_MAX_WORLD_COUNT 15
 #define ARC_MAX_COLLIDER_COUNT 1048576
 #define ARC_MAX_ENTITY_ID 268435455
@@ -190,8 +190,13 @@ ARC_API int32_t ARC_CALL arc_get_sweep_algorithm(const arc_shape* mover, const a
 
 /* Collision world. Handles become stale after remove/clear/destroy. Static
    additions may be batched and finalized with arc_world_build_static.
-   Pair/query/cast array APIs use a two-call pattern: pass output=NULL and
-   capacity=0 to obtain required, then provide a caller-owned buffer. */
+
+   The compute-pairs, query and cast-all APIs return borrowed read-only views of
+   result buffers owned by the world. Consume the returned data immediately; it
+   must not be modified or freed and becomes invalid on the next call using the
+   same world (or when that world is cleared/destroyed). Empty results return
+   data=NULL and count=0. World access is not synchronized; callers must prevent
+   concurrent operations on the same world. */
 ARC_API arc_world* ARC_CALL arc_world_create(const arc_world_options* options);
 ARC_API void ARC_CALL arc_world_destroy(arc_world* world);
 ARC_API arc_status ARC_CALL arc_world_clear(arc_world* world);
@@ -212,14 +217,14 @@ ARC_API arc_status ARC_CALL arc_world_set_filter(arc_world* world, arc_handle ha
 ARC_API arc_status ARC_CALL arc_world_get_enabled(const arc_world* world, arc_handle handle, arc_bool* out_enabled);
 ARC_API arc_status ARC_CALL arc_world_set_enabled(arc_world* world, arc_handle handle, arc_bool enabled);
 ARC_API arc_status ARC_CALL arc_world_shift_origin(arc_world* world, arc_vec2 origin_delta);
-ARC_API arc_status ARC_CALL arc_world_compute_pairs(arc_world* world, arc_candidate_pair* output, int32_t capacity, int32_t* required);
-ARC_API arc_status ARC_CALL arc_world_query(arc_world* world, const arc_shape* query, const arc_collision_filter* filter_or_null, arc_handle* output, int32_t capacity, int32_t* required);
+ARC_API arc_status ARC_CALL arc_world_compute_pairs(arc_world* world, const arc_candidate_pair** out_data, int32_t* out_count);
+ARC_API arc_status ARC_CALL arc_world_query(arc_world* world, const arc_shape* query, const arc_collision_filter* filter_or_null, const arc_handle** out_data, int32_t* out_count);
 ARC_API arc_status ARC_CALL arc_world_try_contact_pair(arc_world* world, arc_candidate_pair pair, arc_contact_pair* out_contact, arc_bool* out_colliding);
 ARC_API arc_status ARC_CALL arc_world_try_contact_shape(arc_world* world, const arc_shape* query, const arc_collision_filter* filter_or_null, arc_handle target, arc_manifold* out_manifold, arc_bool* out_colliding);
 ARC_API arc_status ARC_CALL arc_world_shape_cast(arc_world* world, const arc_shape* mover, arc_vec2 motion, const arc_collision_filter* filter_or_null, arc_world_cast_hit* out_hit, arc_bool* out_found);
-ARC_API arc_status ARC_CALL arc_world_shape_cast_all(arc_world* world, const arc_shape* mover, arc_vec2 motion, const arc_collision_filter* filter_or_null, arc_world_cast_hit* output, int32_t capacity, int32_t* required);
+ARC_API arc_status ARC_CALL arc_world_shape_cast_all(arc_world* world, const arc_shape* mover, arc_vec2 motion, const arc_collision_filter* filter_or_null, const arc_world_cast_hit** out_data, int32_t* out_count);
 ARC_API arc_status ARC_CALL arc_world_ray_cast(arc_world* world, arc_vec2 origin, arc_vec2 motion, const arc_collision_filter* filter_or_null, arc_world_cast_hit* out_hit, arc_bool* out_found);
-ARC_API arc_status ARC_CALL arc_world_ray_cast_all(arc_world* world, arc_vec2 origin, arc_vec2 motion, const arc_collision_filter* filter_or_null, arc_world_cast_hit* output, int32_t capacity, int32_t* required);
+ARC_API arc_status ARC_CALL arc_world_ray_cast_all(arc_world* world, arc_vec2 origin, arc_vec2 motion, const arc_collision_filter* filter_or_null, const arc_world_cast_hit** out_data, int32_t* out_count);
 
 /* Standalone broadphase structures. These expose the same incremental dynamic
    tree and one-shot static BVH the world uses internally, for callers that want

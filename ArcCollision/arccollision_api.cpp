@@ -10,6 +10,11 @@
 // must fail the build here instead of silently corrupting marshaling.
 static_assert(sizeof(arc_shape) == 24, "arc_shape must be 24 bytes (pack 4)");
 static_assert(sizeof(arc_status) == sizeof(int32_t), "arc_status must be 32 bits");
+static_assert(sizeof(arc_handle) == 8, "arc_handle must be 8 bytes");
+static_assert(sizeof(arc_candidate_pair) == 16, "arc_candidate_pair must be 16 bytes");
+static_assert(sizeof(arc_sweep_hit) == 24, "arc_sweep_hit must be 24 bytes");
+static_assert(sizeof(arc_world_cast_hit) == 32, "arc_world_cast_hit must be 32 bytes");
+static_assert(offsetof(arc_world_cast_hit, hit) == 8, "cast hit payload at 8");
 static_assert(offsetof(arc_shape, kind) == 0, "kind at 0");
 static_assert(offsetof(arc_shape, circle) == 4, "primitive union at 4");
 static_assert(offsetof(arc_shape, polygon_rotation) == 4, "polygon_rotation at 4");
