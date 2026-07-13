@@ -56,6 +56,7 @@ bool build_polygon(arc_polygon& polygon, const arc_vec2* vertices, int32_t count
     polygon.vertices.assign(vertices, vertices + count);
     float min_x = vertices[0].x, min_y = vertices[0].y;
     float max_x = vertices[0].x, max_y = vertices[0].y;
+    Vec centroid_sum;
     polygon.fixed_vertices.reserve(static_cast<size_t>(count));
     for (int32_t i = 0; i < count; ++i) {
         if (!valid_vec(vertices[i])) {
@@ -66,8 +67,14 @@ bool build_polygon(arc_polygon& polygon, const arc_vec2* vertices, int32_t count
         min_y = std::min(min_y, vertices[i].y);
         max_x = std::max(max_x, vertices[i].x);
         max_y = std::max(max_y, vertices[i].y);
-        polygon.fixed_vertices.push_back(Vec::from(vertices[i]));
+        const Vec fixed_vertex = Vec::from(vertices[i]);
+        polygon.fixed_vertices.push_back(fixed_vertex);
+        centroid_sum += fixed_vertex;
     }
+    polygon.centroid = {
+        centroid_sum.x / count,
+        centroid_sum.y / count,
+    };
     polygon.public_bounds = {
         {(min_x + max_x) * 0.5f, (min_y + max_y) * 0.5f},
         {(max_x - min_x) * 0.5f, (max_y - min_y) * 0.5f},
@@ -266,14 +273,10 @@ Proxy make_proxy(const arc_shape& shape, int piece) {
         const Axis axis_x = Axis::from_angle(shape.polygon_rotation);
         const Axis axis_y = axis_x.perpendicular();
         Vec local_center;
-        int local_count = 0;
         if (polygon.convex) {
             proxy.borrowed_vertices = polygon.fixed_vertices.data();
             proxy.count = static_cast<int>(polygon.fixed_vertices.size());
-            for (Vec value : polygon.fixed_vertices) {
-                local_center += value;
-                ++local_count;
-            }
+            local_center = polygon.centroid;
         } else {
             const size_t offset = static_cast<size_t>(piece) * 3;
             proxy.borrowed_vertices = polygon.fixed_vertices.data();
@@ -284,15 +287,14 @@ Proxy make_proxy(const arc_shape& shape, int piece) {
                 const Vec value = polygon.fixed_vertices[
                     static_cast<size_t>(polygon.triangles[offset + i])];
                 local_center += value;
-                ++local_count;
             }
+            local_center.x /= 3;
+            local_center.y /= 3;
         }
         proxy.offset = translation;
         proxy.transformed = shape.polygon_rotation != 0;
         proxy.axis_x = axis_x;
         proxy.axis_y = axis_y;
-        local_center.x /= local_count;
-        local_center.y /= local_count;
         proxy.center = shape.polygon_rotation == 0
             ? local_center + translation
             : transform_vertex(local_center, translation, axis_x, axis_y);
@@ -487,6 +489,7 @@ arc_polygon* ARC_CALL arc_polygon_moved(const arc_polygon* polygon, arc_vec2 del
         }
         moved->triangles = polygon->triangles;
         moved->convex = polygon->convex;
+        moved->centroid = polygon->centroid + fixed_delta;
         moved->bounds = polygon->bounds.translated(fixed_delta.x, fixed_delta.y);
         moved->public_bounds = {
             {polygon->public_bounds.center.x + delta.x,

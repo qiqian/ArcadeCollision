@@ -43,7 +43,10 @@ extern "C" {
 #define ARC_CATEGORY_ALL UINT32_MAX
 
 typedef int32_t arc_bool;
-typedef enum arc_status {
+/* Fixed-width status type: keep function return ABI stable even when a caller
+   compiles C/C++ with options such as -fshort-enums. */
+typedef int32_t arc_status;
+enum {
     ARC_STATUS_OK = 0,
     ARC_STATUS_INVALID_ARGUMENT = 1,
     ARC_STATUS_OUT_OF_RANGE = 2,
@@ -51,7 +54,7 @@ typedef enum arc_status {
     ARC_STATUS_BUFFER_TOO_SMALL = 4,
     ARC_STATUS_WORLD_LIMIT = 5,
     ARC_STATUS_INTERNAL_ERROR = 6
-} arc_status;
+};
 
 typedef struct arc_vec2 { float x, y; } arc_vec2;
 typedef struct arc_circle { arc_vec2 center; float radius; } arc_circle;

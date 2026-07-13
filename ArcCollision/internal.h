@@ -306,13 +306,14 @@ arc_status copy_results(const std::vector<T>& values, T* output,
 
 // Reference-counted polygon shared across arc_shape handles. Caches both the
 // public float vertices and their 24.8 fixed form, a fan/ear triangulation
-// (concave polygons collide per-triangle), and precomputed bounds. Created by
-// arc_polygon_create and released via retain/release.
+// (concave polygons collide per-triangle), fixed centroid, and precomputed
+// bounds. Created by arc_polygon_create and released via retain/release.
 struct arc_polygon {
     std::atomic<uint32_t> refs{1};
     std::vector<arc_vec2> vertices;
     std::vector<arc::Vec> fixed_vertices;
     std::vector<int> triangles;
+    arc::Vec centroid;
     arc::Bounds bounds;
     arc_aabb public_bounds{};
     bool convex = false;

@@ -205,6 +205,7 @@ static int broadphase_stress(void)
 int main(void)
 {
     if (arc_get_abi_version() != ARC_ABI_VERSION) return 1;
+    if (sizeof(arc_status) != sizeof(int32_t)) return 13;
 
     arc_circle a = {{0.0f, 0.0f}, 1.0f};
     arc_circle b = {{1.5f, 0.0f}, 1.0f};

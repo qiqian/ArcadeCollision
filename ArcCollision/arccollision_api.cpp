@@ -9,6 +9,7 @@
 // mirrors these exact offsets by hand, so a padding surprise on any compiler
 // must fail the build here instead of silently corrupting marshaling.
 static_assert(sizeof(arc_shape) == 24, "arc_shape must be 24 bytes (pack 4)");
+static_assert(sizeof(arc_status) == sizeof(int32_t), "arc_status must be 32 bits");
 static_assert(offsetof(arc_shape, kind) == 0, "kind at 0");
 static_assert(offsetof(arc_shape, circle) == 4, "primitive union at 4");
 static_assert(offsetof(arc_shape, polygon_rotation) == 4, "polygon_rotation at 4");
