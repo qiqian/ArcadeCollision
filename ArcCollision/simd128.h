@@ -67,6 +67,42 @@ inline bool no_lane_greater(
     return _mm_testz_si128(invalid, invalid) != 0;
 }
 
+// A four-lane int32 vector holding one AABB {min_x, min_y, max_x, max_y}.
+using Box4 = __m128i;
+inline Box4 load_box(const int32_t* box) {
+    return _mm_loadu_si128(reinterpret_cast<const __m128i*>(box));
+}
+
+// Overlap test of four box pairs at once. Each argument is a whole AABB. Returns
+// a 4-bit mask whose bit i is set iff a<i> overlaps b<i>. Transposes the AoS boxes
+// to SoA lanes, then one 4-lane separating-axis test -- no per-test branch/reduce.
+inline int overlap_mask4(
+    Box4 a0, Box4 a1, Box4 a2, Box4 a3,
+    Box4 b0, Box4 b1, Box4 b2, Box4 b3) {
+    const Box4 al0 = _mm_unpacklo_epi32(a0, a1);   // a0.min a1.min
+    const Box4 al1 = _mm_unpacklo_epi32(a2, a3);
+    const Box4 ah0 = _mm_unpackhi_epi32(a0, a1);   // a0.max a1.max
+    const Box4 ah1 = _mm_unpackhi_epi32(a2, a3);
+    const Box4 a_min_x = _mm_unpacklo_epi64(al0, al1);
+    const Box4 a_min_y = _mm_unpackhi_epi64(al0, al1);
+    const Box4 a_max_x = _mm_unpacklo_epi64(ah0, ah1);
+    const Box4 a_max_y = _mm_unpackhi_epi64(ah0, ah1);
+    const Box4 bl0 = _mm_unpacklo_epi32(b0, b1);
+    const Box4 bl1 = _mm_unpacklo_epi32(b2, b3);
+    const Box4 bh0 = _mm_unpackhi_epi32(b0, b1);
+    const Box4 bh1 = _mm_unpackhi_epi32(b2, b3);
+    const Box4 b_min_x = _mm_unpacklo_epi64(bl0, bl1);
+    const Box4 b_min_y = _mm_unpackhi_epi64(bl0, bl1);
+    const Box4 b_max_x = _mm_unpacklo_epi64(bh0, bh1);
+    const Box4 b_max_y = _mm_unpackhi_epi64(bh0, bh1);
+    const Box4 separated = _mm_or_si128(
+        _mm_or_si128(_mm_cmpgt_epi32(a_min_x, b_max_x),
+                     _mm_cmpgt_epi32(b_min_x, a_max_x)),
+        _mm_or_si128(_mm_cmpgt_epi32(a_min_y, b_max_y),
+                     _mm_cmpgt_epi32(b_min_y, a_max_y)));
+    return (~_mm_movemask_ps(_mm_castsi128_ps(separated))) & 0xF;
+}
+
 #elif defined(ARC_SIMD128_NEON)
 
 using I64x2 = int64x2_t;
@@ -104,6 +140,34 @@ inline bool no_lane_greater(
         vcgtq_s64(first_left, first_right),
         vcgtq_s64(second_left, second_right));
     return (vgetq_lane_u64(invalid, 0) | vgetq_lane_u64(invalid, 1)) == 0;
+}
+
+// A four-lane int32 vector holding one AABB {min_x, min_y, max_x, max_y}.
+using Box4 = int32x4_t;
+inline Box4 load_box(const int32_t* box) { return vld1q_s32(box); }
+
+// Overlap test of four box pairs at once; see the SSE version for semantics.
+inline int overlap_mask4(
+    Box4 a0, Box4 a1, Box4 a2, Box4 a3,
+    Box4 b0, Box4 b1, Box4 b2, Box4 b3) {
+    const int32x4x2_t at0 = vtrnq_s32(a0, a1);
+    const int32x4x2_t at1 = vtrnq_s32(a2, a3);
+    const Box4 a_min_x = vcombine_s32(vget_low_s32(at0.val[0]), vget_low_s32(at1.val[0]));
+    const Box4 a_min_y = vcombine_s32(vget_low_s32(at0.val[1]), vget_low_s32(at1.val[1]));
+    const Box4 a_max_x = vcombine_s32(vget_high_s32(at0.val[0]), vget_high_s32(at1.val[0]));
+    const Box4 a_max_y = vcombine_s32(vget_high_s32(at0.val[1]), vget_high_s32(at1.val[1]));
+    const int32x4x2_t bt0 = vtrnq_s32(b0, b1);
+    const int32x4x2_t bt1 = vtrnq_s32(b2, b3);
+    const Box4 b_min_x = vcombine_s32(vget_low_s32(bt0.val[0]), vget_low_s32(bt1.val[0]));
+    const Box4 b_min_y = vcombine_s32(vget_low_s32(bt0.val[1]), vget_low_s32(bt1.val[1]));
+    const Box4 b_max_x = vcombine_s32(vget_high_s32(bt0.val[0]), vget_high_s32(bt1.val[0]));
+    const Box4 b_max_y = vcombine_s32(vget_high_s32(bt0.val[1]), vget_high_s32(bt1.val[1]));
+    const uint32x4_t separated = vorrq_u32(
+        vorrq_u32(vcgtq_s32(a_min_x, b_max_x), vcgtq_s32(b_min_x, a_max_x)),
+        vorrq_u32(vcgtq_s32(a_min_y, b_max_y), vcgtq_s32(b_min_y, a_max_y)));
+    const uint32_t weights[4] = {1u, 2u, 4u, 8u};
+    const uint32x4_t weighted = vandq_u32(vmvnq_u32(separated), vld1q_u32(weights));
+    return static_cast<int>(vaddvq_u32(weighted));
 }
 
 #endif

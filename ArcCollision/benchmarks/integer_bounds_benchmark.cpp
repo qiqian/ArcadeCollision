@@ -85,6 +85,34 @@ ARC_NOINLINE uint64_t simd_overlap_pass(const Scene& scene, int repeats) {
     return result;
 }
 
+// Gather four (randomly-indexed) box pairs and test them with one 4-wide SIMD
+// overlap (SoA transpose + one separating-axis test), counting the mask bits.
+ARC_NOINLINE uint64_t gather_overlap_pass(const Scene& scene, int repeats) {
+    uint64_t result = 0;
+    const size_t n = scene.order.size();
+    for (int repeat = 0; repeat < repeats; ++repeat) {
+        size_t i = 0;
+        for (; i + 4 <= n; i += 4) {
+            const uint32_t i0 = scene.order[i], i1 = scene.order[i + 1];
+            const uint32_t i2 = scene.order[i + 2], i3 = scene.order[i + 3];
+            const int mask = arc::simd128::overlap_mask4(
+                arc::simd128::load_box(&scene.first[i0].min_x),
+                arc::simd128::load_box(&scene.first[i1].min_x),
+                arc::simd128::load_box(&scene.first[i2].min_x),
+                arc::simd128::load_box(&scene.first[i3].min_x),
+                arc::simd128::load_box(&scene.second[i0].min_x),
+                arc::simd128::load_box(&scene.second[i1].min_x),
+                arc::simd128::load_box(&scene.second[i2].min_x),
+                arc::simd128::load_box(&scene.second[i3].min_x));
+            result += (mask & 1) + ((mask >> 1) & 1)
+                    + ((mask >> 2) & 1) + ((mask >> 3) & 1);
+        }
+        for (; i < n; ++i)
+            result += scene.first[scene.order[i]].overlaps(scene.second[scene.order[i]]);
+    }
+    return result;
+}
+
 ARC_NOINLINE uint64_t scalar_unite_pass(const Scene& scene, int repeats) {
     uint64_t result = 0;
     for (int repeat = 0; repeat < repeats; ++repeat) {
@@ -146,13 +174,20 @@ int main() {
     benchmark_sink ^= scalar_overlap_pass(sparse, 1);
     benchmark_sink ^= simd_overlap_pass(sparse, 1);
 
-    print_comparison("overlap sparse",
+    // The 4-wide gather must count exactly the same overlaps as scalar.
+    if (gather_overlap_pass(sparse, 1) != scalar_overlap_pass(sparse, 1)
+        || gather_overlap_pass(dense, 1) != scalar_overlap_pass(dense, 1)) {
+        std::cout << "gather overlap mask mismatch!\n";
+        return 2;
+    }
+
+    print_comparison("overlap sparse (scalar vs gather4)",
         best_milliseconds([&] { return scalar_overlap_pass(sparse, Repeats); }),
-        best_milliseconds([&] { return simd_overlap_pass(sparse, Repeats); }));
-    print_comparison("overlap dense",
+        best_milliseconds([&] { return gather_overlap_pass(sparse, Repeats); }));
+    print_comparison("overlap dense  (scalar vs gather4)",
         best_milliseconds([&] { return scalar_overlap_pass(dense, Repeats); }),
-        best_milliseconds([&] { return simd_overlap_pass(dense, Repeats); }));
-    print_comparison("bounds unite",
+        best_milliseconds([&] { return gather_overlap_pass(dense, Repeats); }));
+    print_comparison("bounds unite   (scalar vs simd)",
         best_milliseconds([&] { return scalar_unite_pass(dense, Repeats); }),
         best_milliseconds([&] { return simd_unite_pass(dense, Repeats); }));
     return benchmark_sink == UINT64_C(0xffffffffffffffff) ? 1 : 0;
