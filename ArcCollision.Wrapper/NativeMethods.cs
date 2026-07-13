@@ -12,7 +12,7 @@ internal enum NativeStatus
 
 // Mirrors the native arc_shape tagged union (pack 4, 24 bytes) byte-for-byte:
 // kind@0, then a union@4 where the primitive geometries and the polygon transform
-// (translation@4, rotation@12, pointer@16) share storage -- only the member
+// (rotation@4, translation@8, pointer@16) share storage -- only the member
 // matching Kind is live. Offsets are locked by static_asserts in the native
 // arccollision_api.cpp; keep the two in lockstep.
 [StructLayout(LayoutKind.Explicit, Pack = 4, Size = 24)]

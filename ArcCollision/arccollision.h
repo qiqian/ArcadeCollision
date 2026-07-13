@@ -33,7 +33,7 @@
 extern "C" {
 #endif
 
-#define ARC_ABI_VERSION 2u   /* bumped: arc_shape is now a 32-byte tagged union */
+#define ARC_ABI_VERSION 2u   /* bumped: arc_shape is now a 24-byte tagged union */
 #define ARC_MAX_WORLD_COUNT 15
 #define ARC_MAX_COLLIDER_COUNT 1048576
 #define ARC_MAX_ENTITY_ID 268435455
