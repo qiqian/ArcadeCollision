@@ -265,7 +265,7 @@ void sweep_convex(
     }
 }
 
-FxSweep reverse_relative(FxSweep hit, Vec original_motion) {
+FxSweep reverse_relative(FxSweep hit) {
     if (!hit.hit) return hit;
     const uint8_t old_mask = hit.negative_zero_mask;
     hit.normal = -hit.normal;
@@ -274,7 +274,7 @@ FxSweep reverse_relative(FxSweep hit, Vec original_motion) {
         hit.negative_zero_mask |= 1;
     if (hit.normal.y == 0 && (old_mask & 2) == 0)
         hit.negative_zero_mask |= 2;
-    hit.point += original_motion.times_t(hit.time);
+    hit.translate_public_point = true;
     return hit;
 }
 
@@ -308,17 +308,17 @@ bool fast_sweep(
     }
     if (mover.kind == ARC_SHAPE_AABB && target.kind == ARC_SHAPE_CIRCLE) {
         hit = reverse_relative(moving_circle_aabb(
-            fixed_circle(target.circle), -motion, fixed_aabb(mover.aabb)), motion);
+            fixed_circle(target.circle), -motion, fixed_aabb(mover.aabb)));
         return true;
     }
     if (mover.kind == ARC_SHAPE_CAPSULE && target.kind == ARC_SHAPE_CIRCLE) {
         hit = reverse_relative(moving_circle_capsule(
-            fixed_circle(target.circle), -motion, mover.capsule), motion);
+            fixed_circle(target.circle), -motion, mover.capsule));
         return true;
     }
     if (mover.kind == ARC_SHAPE_OBB && target.kind == ARC_SHAPE_CIRCLE) {
         hit = reverse_relative(moving_circle_obb(
-            fixed_circle(target.circle), -motion, mover.obb), motion);
+            fixed_circle(target.circle), -motion, mover.obb));
         return true;
     }
     return false;
@@ -329,7 +329,7 @@ bool fast_sweep(
 // Ray vs circle: smallest t in [0,1] solving |origin + t*motion - center|^2 = r^2.
 // The quadratic's coefficients are pre-scaled (product_shift) so the discriminant
 // stays in int64; an origin already inside reports t=0.
-FxSweep ray_circle(Vec origin, Vec motion, FxCircle circle) {
+FxSweep ray_circle(const Vec& origin, const Vec& motion, const FxCircle& circle) {
     const Vec relative = origin - circle.center;
     const int64_t a = motion.length_sq();
     if (a == 0) {
@@ -361,7 +361,7 @@ FxSweep ray_circle(Vec origin, Vec motion, FxCircle circle) {
             Axis::from_vector(point - circle.center, Axis::unit_x()), point};
 }
 
-FxSweep ray_aabb(Vec origin, Vec motion, FxAabb box) {
+FxSweep ray_aabb(const Vec& origin, const Vec& motion, const FxAabb& box) {
     const Vec min = box.min(), max = box.max();
     int64_t enter = 0, exit = TOne;
     Axis normal;
@@ -384,7 +384,7 @@ FxSweep ray_aabb(Vec origin, Vec motion, FxAabb box) {
 }
 
 FxSweep ray_capsule(
-    Vec origin, Vec motion, Vec a, Vec b, int64_t radius) {
+    const Vec& origin, const Vec& motion, const Vec& a, const Vec& b, int64_t radius) {
     const Vec segment = b - a;
     if (segment.length_sq() == 0)
         return ray_circle(origin, motion, {a, radius});
@@ -425,7 +425,7 @@ FxSweep ray_capsule(
 // overlap at t=0 report an immediate hit; otherwise sweep every convex-piece pair
 // (concave shapes decompose) and keep the earliest impact.
 FxSweep sweep_shapes(
-    const arc_shape& mover, Vec motion, const arc_shape& target) {
+    const arc_shape& mover, const Vec& motion, const arc_shape& target) {
     FxSweep fast;
     if (fast_sweep(mover, motion, target, fast)) return fast;
     const FxManifold initial = collide_shapes(mover, target);
@@ -481,7 +481,8 @@ arc_sweep_hit sweep_checked(
         return {0, 1.0f, {0, 0}, {0, 0}};
     }
     try {
-        return arc::sweep_shapes(*mover, arc::Vec::from(motion), *target).to_public();
+        return arc::sweep_shapes(*mover, arc::Vec::from(motion), *target)
+            .to_public(motion);
     } catch (const std::exception& exception) {
         arc::set_error(exception.what());
         return {0, 1.0f, {0, 0}, {0, 0}};

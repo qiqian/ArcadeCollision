@@ -10,7 +10,7 @@ namespace arc {
 
 // Closest point on segment [a,b] to `point`. out_time receives the 16.16
 // parameter along the segment (0 at a, TOne at b), clamped to the endpoints.
-Vec closest_segment(Vec point, Vec a, Vec b, int64_t* out_time) {
+Vec closest_segment(const Vec& point, const Vec& a, const Vec& b, int64_t* out_time) {
     const Vec ab = b - a;
     const int64_t length_sq = ab.length_sq();
     if (length_sq == 0) {
@@ -27,7 +27,7 @@ Vec closest_segment(Vec point, Vec a, Vec b, int64_t* out_time) {
 // solution: solve for s on segment 1, project onto segment 2, re-clamp. Degenerate
 // (zero-length) segments fall back to the point/segment cases.
 int64_t closest_segments(
-    Vec p1, Vec q1, Vec p2, Vec q2, Vec& c1, Vec& c2) {
+    const Vec& p1, const Vec& q1, const Vec& p2, const Vec& q2, Vec& c1, Vec& c2) {
     const Vec d1 = q1 - p1;
     const Vec d2 = q2 - p2;
     const Vec r = p1 - p2;

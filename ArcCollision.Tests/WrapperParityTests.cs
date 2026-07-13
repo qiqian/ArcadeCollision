@@ -255,6 +255,98 @@ public class WrapperParityTests
             new Native.Vec2(10, 0), new Native.Circle(Native.Vec2.Zero, 1));
         AssertFloatBits(refSweep.Normal.X, nativeSweep.Normal.X);
         AssertFloatBits(refSweep.Normal.Y, nativeSweep.Normal.Y);
+        AssertFloatBits(refSweep.Point.X, nativeSweep.Point.X);
+        AssertFloatBits(refSweep.Point.Y, nativeSweep.Point.Y);
+    }
+
+    [Fact]
+    public void ManagedPrimitiveHelpersAreBitExact()
+    {
+        Ref.Vec2 refNormalized = new Ref.Vec2(1f / 7f, 2f / 11f).Normalized();
+        Native.Vec2 nativeNormalized =
+            new Native.Vec2(1f / 7f, 2f / 11f).Normalized();
+        AssertFloatBits(refNormalized.X, nativeNormalized.X);
+        AssertFloatBits(refNormalized.Y, nativeNormalized.Y);
+
+        AssertFloatBits(
+            Ref.Manifold.None.SeparationForA.X,
+            Native.Manifold.None.SeparationForA.X);
+        AssertFloatBits(
+            Ref.Manifold.None.SeparationForA.Y,
+            Native.Manifold.None.SeparationForA.Y);
+
+        var refNonColliding = new Ref.Manifold(
+            false, new Ref.Vec2(2, -3), 4, Ref.Vec2.Zero);
+        var nativeNonColliding = new Native.Manifold(
+            false, new Native.Vec2(2, -3), 4, Native.Vec2.Zero);
+        AssertFloatBits(
+            refNonColliding.SeparationForA.X,
+            nativeNonColliding.SeparationForA.X);
+        AssertFloatBits(
+            refNonColliding.SeparationForA.Y,
+            nativeNonColliding.SeparationForA.Y);
+        AssertFloatBits(
+            refNonColliding.SeparationForB.X,
+            nativeNonColliding.SeparationForB.X);
+        AssertFloatBits(
+            refNonColliding.SeparationForB.Y,
+            nativeNonColliding.SeparationForB.Y);
+    }
+
+    [Fact]
+    public void MovedPolygonRetainsCachedBoundsBits()
+    {
+        const float grid = 1f / 256f;
+        var reference = new Ref.Polygon(
+            Ref.Vec2.Zero, new Ref.Vec2(grid, 0), new Ref.Vec2(0, grid));
+        var native = new Native.Polygon(
+            Native.Vec2.Zero, new Native.Vec2(grid, 0), new Native.Vec2(0, grid));
+
+        Ref.Aabb expected = reference.Moved(new Ref.Vec2(1_000_000, 0)).Bounds;
+        Native.Aabb actual = native.Moved(new Native.Vec2(1_000_000, 0)).Bounds;
+        AssertFloatBits(expected.Center.X, actual.Center.X);
+        AssertFloatBits(expected.Center.Y, actual.Center.Y);
+        AssertFloatBits(expected.HalfExtents.X, actual.HalfExtents.X);
+        AssertFloatBits(expected.HalfExtents.Y, actual.HalfExtents.Y);
+    }
+
+    [Fact]
+    public void StandaloneBroadphaseQueriesAppendToExistingLists()
+    {
+        var bounds = new Ref.BpBounds(-10, -10, 10, 10);
+        var nativeBounds = new Native.BpBounds(-10, -10, 10, 10);
+        using (var reference = new Ref.DynamicAabbTree())
+        using (var native = new Native.DynamicAabbTree())
+        {
+            reference.CreateProxy(7, bounds);
+            reference.CreateProxy(9, bounds);
+            native.CreateProxy(7, nativeBounds);
+            native.CreateProxy(9, nativeBounds);
+
+            var expectedQuery = new List<int> { -1 };
+            var actualQuery = new List<int> { -1 };
+            reference.Query(bounds, expectedQuery);
+            native.Query(nativeBounds, actualQuery);
+            Assert.Equal(expectedQuery, actualQuery);
+
+            var expectedPairs = new List<(int A, int B)> { (-3, -2) };
+            var actualPairs = new List<(int A, int B)> { (-3, -2) };
+            reference.ComputeSelfPairs(expectedPairs);
+            native.ComputeSelfPairs(actualPairs);
+            Assert.Equal(expectedPairs, actualPairs);
+        }
+
+        using (var reference = new Ref.StaticBvh())
+        using (var native = new Native.StaticBvh())
+        {
+            reference.Build(new Dictionary<int, Ref.BpBounds> { [5] = bounds });
+            native.Build(new Dictionary<int, Native.BpBounds> { [5] = nativeBounds });
+            var expected = new List<int> { -1 };
+            var actual = new List<int> { -1 };
+            reference.Query(bounds, expected);
+            native.Query(nativeBounds, actual);
+            Assert.Equal(expected, actual);
+        }
     }
 
     private static void AssertFloatBits(float expected, float actual) =>

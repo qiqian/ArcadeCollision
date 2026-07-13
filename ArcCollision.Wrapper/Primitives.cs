@@ -27,7 +27,10 @@ public readonly struct Vec2 : IEquatable<Vec2>
     public Vec2 Normalized(Vec2 fallback = default)
     {
         float lengthSquared = LengthSquared;
-        return lengthSquared < 1e-12f ? fallback : this / MathF.Sqrt(lengthSquared);
+        if (lengthSquared < 1e-12f)
+            return fallback;
+        float inverseLength = 1f / MathF.Sqrt(lengthSquared);
+        return new Vec2(X * inverseLength, Y * inverseLength);
     }
     public static Vec2 Lerp(Vec2 a, Vec2 b, float t) => a + (b - a) * t;
     public static Vec2 Min(Vec2 a, Vec2 b) => new(MathF.Min(a.X, b.X), MathF.Min(a.Y, b.Y));
@@ -159,6 +162,7 @@ internal sealed class PolygonHandle : SafeHandleZeroOrMinusOneIsInvalid
 public sealed class Polygon
 {
     private readonly Vec2[] _vertices;
+    private readonly Aabb _bounds;
     internal PolygonHandle Handle { get; }
 
     public Polygon(params Vec2[] vertices) : this(vertices.AsSpan()) { }
@@ -168,29 +172,37 @@ public sealed class Polygon
         for (int i = 0; i < vertices.Length; i++)
             FixedValidation.Vec2(vertices[i]);
         _vertices = vertices.ToArray();
+        _bounds = ComputeBounds(_vertices);
         IntPtr pointer = NativeMethods.PolygonCreate(_vertices, _vertices.Length);
         if (pointer == IntPtr.Zero) NativeMethods.ThrowLastError("Polygon creation failed.");
         Handle = new PolygonHandle(pointer);
     }
     internal Polygon(IntPtr retainedPointer)
+        : this(retainedPointer, NativeMethods.PolygonGetBounds(retainedPointer))
+    {
+    }
+    internal Polygon(IntPtr retainedPointer, Aabb bounds)
     {
         Handle = new PolygonHandle(retainedPointer);
         int count = NativeMethods.PolygonGetCount(retainedPointer);
         _vertices = new Vec2[count];
         NativeMethods.Check(NativeMethods.PolygonGetVertices(retainedPointer, _vertices, count, out _));
+        _bounds = bounds;
     }
     public int Count => _vertices.Length;
     public Vec2 this[int index] => _vertices[index];
     public ReadOnlySpan<Vec2> Vertices => _vertices;
-    public Aabb Bounds
+    public Aabb Bounds => _bounds;
+
+    private static Aabb ComputeBounds(Vec2[] vertices)
     {
-        get
+        Vec2 min = vertices[0], max = min;
+        for (int i = 1; i < vertices.Length; i++)
         {
-            Vec2 min = _vertices[0], max = min;
-            for (int i = 1; i < _vertices.Length; i++)
-            { min = Vec2.Min(min, _vertices[i]); max = Vec2.Max(max, _vertices[i]); }
-            return Aabb.FromMinMax(min, max);
+            min = Vec2.Min(min, vertices[i]);
+            max = Vec2.Max(max, vertices[i]);
         }
+        return Aabb.FromMinMax(min, max);
     }
     public Polygon Moved(Vec2 delta)
     {
@@ -198,7 +210,7 @@ public sealed class Polygon
         IntPtr pointer = NativeMethods.PolygonMoved(Handle.DangerousGetHandle(), delta);
         if (pointer == IntPtr.Zero) NativeMethods.ThrowLastError("Polygon movement failed.");
         GC.KeepAlive(this);
-        return new Polygon(pointer);
+        return new Polygon(pointer, _bounds.Moved(delta));
     }
 }
 
@@ -261,8 +273,8 @@ public readonly struct Manifold
     public readonly Vec2 Contact;
     public Manifold(bool colliding, Vec2 normal, float depth, Vec2 contact) { Colliding = colliding; Normal = normal; Depth = depth; Contact = contact; }
     public static readonly Manifold None = new(false, Vec2.Zero, 0, Vec2.Zero);
-    public Vec2 SeparationForA => Colliding ? -Normal * Depth : Vec2.Zero;
-    public Vec2 SeparationForB => Colliding ? Normal * Depth : Vec2.Zero;
+    public Vec2 SeparationForA => Normal * -Depth;
+    public Vec2 SeparationForB => Normal * Depth;
 }
 
 [StructLayout(LayoutKind.Sequential)]

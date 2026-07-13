@@ -188,7 +188,7 @@ void append_casts(
         if (!query_slot(slot, filter)) continue;
         const arc_sweep_hit hit =
             arc::sweep_shapes(mover, arc::Vec::from(motion), slot.shape.value)
-                .to_public();
+                .to_public(motion);
         if (hit.hit)
             world->cast_values.push_back({
                 make_handle(world, static_cast<size_t>(index)), hit});
@@ -204,7 +204,7 @@ void find_closest_cast(
         if (!query_slot(slot, filter)) continue;
         const arc_sweep_hit hit =
             arc::sweep_shapes(mover, arc::Vec::from(motion), slot.shape.value)
-                .to_public();
+                .to_public(motion);
         if (!hit.hit) continue;
         const arc_world_cast_hit candidate{
             make_handle(world, static_cast<size_t>(index)), hit};

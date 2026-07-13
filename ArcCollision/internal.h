@@ -40,7 +40,7 @@ void set_error(const char* text);
 
 // Boundary validation + float<->fixed conversion (see fixed.cpp).
 bool valid_scalar(float value);           // finite and within the safe range
-bool valid_vec(arc_vec2 value);
+bool valid_vec(const arc_vec2& value);
 int64_t from_float(float value);          // world float -> 24.8, round-half-even
 float to_float(int64_t value);            // 24.8 -> world float
 float to_t(int64_t value);                // 16.16 -> [0,1] float
@@ -71,16 +71,16 @@ struct Vec {
 
     Vec() = default;
     Vec(int64_t px, int64_t py) : x(px), y(py) {}
-    static Vec from(arc_vec2 value) { return {from_float(value.x), from_float(value.y)}; }
+    static Vec from(const arc_vec2& value) { return {from_float(value.x), from_float(value.y)}; }
     arc_vec2 to_public() const { return {to_float(x), to_float(y)}; }
-    Vec operator+(Vec other) const { return {x + other.x, y + other.y}; }
-    Vec operator-(Vec other) const { return {x - other.x, y - other.y}; }
+    Vec operator+(const Vec& other) const { return {x + other.x, y + other.y}; }
+    Vec operator-(const Vec& other) const { return {x - other.x, y - other.y}; }
     Vec operator-() const { return {-x, -y}; }
-    Vec& operator+=(Vec other) { x += other.x; y += other.y; return *this; }
-    Vec& operator-=(Vec other) { x -= other.x; y -= other.y; return *this; }
-    int64_t dot(Vec other) const { return x * other.x + y * other.y; }
+    Vec& operator+=(const Vec& other) { x += other.x; y += other.y; return *this; }
+    Vec& operator-=(const Vec& other) { x -= other.x; y -= other.y; return *this; }
+    int64_t dot(const Vec& other) const { return x * other.x + y * other.y; }
     int64_t length_sq() const { return x * x + y * y; }
-    int64_t dist_sq(Vec other) const { return (*this - other).length_sq(); }
+    int64_t dist_sq(const Vec& other) const { return (*this - other).length_sq(); }
     int64_t length() const { return sqrt_i64(length_sq()); }
     Vec times_t(int64_t time) const { return {mul_t(x, time), mul_t(y, time)}; }
 };
@@ -97,15 +97,15 @@ struct Axis {
     Axis(int64_t px, int64_t py) : x(px), y(py) {}
     static Axis unit_x() { return {AxisOne, 0}; }
     static Axis unit_y() { return {0, AxisOne}; }
-    static Axis from_vector(Vec value, Axis fallback);
-    static Axis from_components(int64_t x, int64_t y, Axis fallback);
+    static Axis from_vector(const Vec& value, const Axis& fallback);
+    static Axis from_components(int64_t x, int64_t y, const Axis& fallback);
     static Axis from_angle(uint32_t angle);
-    static Axis transform(Axis basis_x, Axis basis_y, Axis local);
+    static Axis transform(const Axis& basis_x, const Axis& basis_y, const Axis& local);
     bool is_zero() const { return x == 0 && y == 0; }
     Axis perpendicular() const { return {-y, x}; }
     Axis operator-() const { return {-x, -y}; }
-    int64_t dot(Vec position) const { return position.x * x + position.y * y; }
-    int64_t dot(Axis other) const;
+    int64_t dot(const Vec& position) const { return position.x * x + position.y * y; }
+    int64_t dot(const Axis& other) const;
     Vec scale(int64_t distance) const;
     arc_vec2 to_public() const {
         return {x / static_cast<float>(AxisOne), y / static_cast<float>(AxisOne)};
@@ -182,7 +182,22 @@ struct FxSweep {
     Axis normal;
     Vec point;
     uint8_t negative_zero_mask = 0;
+    // Reverse-relative fast paths map the fixed contact back to the mover's
+    // frame at the public float boundary, matching Vec2 multiplication/addition
+    // order in the managed implementation without affecting collision math.
+    bool translate_public_point = false;
+
+    // Converts the internal deterministic sweep result to the float-based C API
+    // representation. Time, normal and contact point remain integers throughout
+    // the collision calculation and are converted only at this public boundary.
+    //
+    // The motion overload is required by reverse-relative fast paths (AABB,
+    // capsule or OBB moving against a circle). Their contact point is initially
+    // calculated in the circle's relative frame, then mapped back with the
+    // caller's original float motion so the operation order and result bits match
+    // ArcCollision.Ref. Direct ray/primitive sweeps use the parameterless form.
     arc_sweep_hit to_public() const;
+    arc_sweep_hit to_public(const arc_vec2& public_motion) const;
     static FxSweep miss() { return {}; }
 };
 
@@ -222,20 +237,20 @@ struct Proxy {
     std::pair<Vec, Vec> edge(int index) const {
         return {vertex(index), vertex(count == 2 ? 1 : (index + 1) % count)};
     }
-    Proxy translated(Vec offset) const;
+    Proxy translated(const Vec& offset) const;
 };
 
 // Distance / geometry primitives (distance.cpp).
-Vec closest_segment(Vec point, Vec a, Vec b, int64_t* out_time = nullptr);
-int64_t closest_segments(Vec p1, Vec q1, Vec p2, Vec q2, Vec& c1, Vec& c2);
-Vec midpoint(Vec a, Vec b);
+Vec closest_segment(const Vec& point, const Vec& a, const Vec& b, int64_t* out_time = nullptr);
+int64_t closest_segments(const Vec& p1, const Vec& q1, const Vec& p2, const Vec& q2, Vec& c1, Vec& c2);
+Vec midpoint(const Vec& a, const Vec& b);
 
 // Shape handling (shapes.cpp): bounds, validation, translation, polygon
 // refcounting, and reduction to SAT proxies (a concave polygon has >1 piece).
 FxAabb proxy_bounds(const Proxy& proxy);
 Bounds shape_bounds(const arc_shape& shape);
 bool validate_shape(const arc_shape& shape);
-arc_shape moved_shape(arc_shape shape, arc_vec2 delta);
+arc_shape moved_shape(arc_shape shape, const arc_vec2& delta);
 void retain_shape(const arc_shape& shape);
 void release_shape(const arc_shape& shape);
 int piece_count(const arc_shape& shape);
@@ -245,23 +260,23 @@ Proxy make_proxy(const arc_shape& shape, int piece = 0);
 FxManifold collide_proxy(const Proxy& a, const Proxy& b);
 FxManifold collide_shapes(const arc_shape& a, const arc_shape& b);
 // Fixed-point primitive collisions (no float round-trip) for the sweep t=0 paths.
-FxManifold collide_circle_circle(FxCircle a, FxCircle b);
-FxManifold collide_circle_aabb(FxCircle circle, FxAabb box);
-FxManifold collide_aabb_aabb(FxAabb a, FxAabb b);
+FxManifold collide_circle_circle(const FxCircle& a, const FxCircle& b);
+FxManifold collide_circle_aabb(const FxCircle& circle, const FxAabb& box);
+FxManifold collide_aabb_aabb(const FxAabb& a, const FxAabb& b);
 bool overlap_shapes(const arc_shape& a, const arc_shape& b);
-FxSweep ray_circle(Vec origin, Vec motion, FxCircle circle);
-FxSweep ray_aabb(Vec origin, Vec motion, FxAabb box);
-FxSweep ray_capsule(Vec origin, Vec motion, Vec a, Vec b, int64_t radius);
-FxSweep sweep_shapes(const arc_shape& mover, Vec motion, const arc_shape& target);
+FxSweep ray_circle(const Vec& origin, const Vec& motion, const FxCircle& circle);
+FxSweep ray_aabb(const Vec& origin, const Vec& motion, const FxAabb& box);
+FxSweep ray_capsule(const Vec& origin, const Vec& motion, const Vec& a, const Vec& b, int64_t radius);
+FxSweep sweep_shapes(const arc_shape& mover, const Vec& motion, const arc_shape& target);
 
-inline FxCircle fixed_circle(arc_circle value) {
+inline FxCircle fixed_circle(const arc_circle& value) {
     return {Vec::from(value.center), from_float(value.radius)};
 }
-inline FxAabb fixed_aabb(arc_aabb value) {
+inline FxAabb fixed_aabb(const arc_aabb& value) {
     return {Vec::from(value.center), Vec::from(value.half_extents)};
 }
 // Two colliders interact only when each filter accepts the other's category.
-inline bool filter_allows(arc_collision_filter a, arc_collision_filter b) {
+inline bool filter_allows(const arc_collision_filter& a, const arc_collision_filter& b) {
     return (a.categories & b.collides_with) != 0
         && (b.categories & a.collides_with) != 0;
 }

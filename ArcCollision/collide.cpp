@@ -203,7 +203,7 @@ bool sat_overlaps(const Proxy& a, const Proxy& b) {
 // Circle/circle: exact. Touch (distance == radius) counts as colliding, depth 0.
 // Contact is the overlap midpoint along the centre line; the many other pairs
 // reduce to this (closest points expanded by their radii).
-FxManifold circle_circle(FxCircle a, FxCircle b) {
+FxManifold circle_circle(const FxCircle& a, const FxCircle& b) {
     const Vec delta = b.center - a.center;
     const int64_t radius = a.radius + b.radius;
     const int64_t distance_sq = delta.length_sq();
@@ -218,7 +218,7 @@ FxManifold circle_circle(FxCircle a, FxCircle b) {
 
 // AABB/AABB: exact. Inclusive touch (overlap == 0 is colliding, depth 0) to match
 // circle_circle and the boolean predicates. Ejects along the shallower axis.
-FxManifold aabb_aabb(FxAabb a, FxAabb b) {
+FxManifold aabb_aabb(const FxAabb& a, const FxAabb& b) {
     const Vec delta = b.center - a.center;
     const int64_t overlap_x = a.half.x + b.half.x - std::abs(delta.x);
     if (overlap_x < 0) return {};
@@ -240,7 +240,7 @@ FxManifold aabb_aabb(FxAabb a, FxAabb b) {
 
 // Circle/AABB: exact. If the centre is outside, the closest box point gives the
 // normal/depth; if inside (distance 0), eject through the nearest face.
-FxManifold circle_aabb(FxCircle circle, FxAabb box) {
+FxManifold circle_aabb(const FxCircle& circle, const FxAabb& box) {
     const Vec min = box.min();
     const Vec max = box.max();
     const Vec closest{std::clamp(circle.center.x, min.x, max.x),
@@ -279,13 +279,13 @@ struct BoxProxy {
     int64_t half_y;
 };
 
-BoxProxy make_box(arc_aabb box) {
+BoxProxy make_box(const arc_aabb& box) {
     return {Vec::from(box.center), Axis::unit_x(), Axis::unit_y(),
             std::abs(from_float(box.half_extents.x)),
             std::abs(from_float(box.half_extents.y))};
 }
 
-BoxProxy make_box(arc_obb box) {
+BoxProxy make_box(const arc_obb& box) {
     const Axis axis_x = Axis::from_angle(box.angle);
     return {Vec::from(box.center), axis_x, axis_x.perpendicular(),
             std::abs(from_float(box.half_extents.x)),
@@ -295,7 +295,7 @@ BoxProxy make_box(arc_obb box) {
 // Project a box onto an axis directly (no vertex loop): centre projection +/- the
 // extent, where the extent sums each half-axis times |axis . box-axis|.
 void project_box(
-    const BoxProxy& box, Axis axis, int64_t& min, int64_t& max) {
+    const BoxProxy& box, const Axis& axis, int64_t& min, int64_t& max) {
     const int64_t center = axis.dot(box.center);
     const int64_t radius =
         std::abs(box.axis_x.dot(axis)) * box.half_x
@@ -304,7 +304,7 @@ void project_box(
     max = center + radius;
 }
 
-Vec box_support(const BoxProxy& box, Axis direction) {
+Vec box_support(const BoxProxy& box, const Axis& direction) {
     Vec result = box.center;
     result += box.axis_x.scale(
         box.axis_x.dot(direction) >= 0 ? box.half_x : -box.half_x);
@@ -322,7 +322,7 @@ FxAabb box_bounds(const BoxProxy& box) {
 }
 
 bool test_box_axis(
-    Axis test, const BoxProxy& a, const BoxProxy& b,
+    const Axis& test, const BoxProxy& a, const BoxProxy& b,
     int64_t& best_overlap, int64_t& best_depth, Axis& best_axis) {
     int64_t min_a, max_a, min_b, max_b;
     project_box(a, test, min_a, max_a);
@@ -361,7 +361,7 @@ FxManifold box_box(const BoxProxy& a, const BoxProxy& b) {
 
 // Circle/OBB: rotate the circle into the box's local frame (reducing to
 // circle/AABB), solve there, then rotate the normal/contact back to world space.
-FxManifold circle_obb(arc_circle circle, arc_obb box) {
+FxManifold circle_obb(const arc_circle& circle, const arc_obb& box) {
     const BoxProxy target = make_box(box);
     const FxCircle source = fixed_circle(circle);
     const Vec delta = source.center - target.center;
@@ -380,7 +380,7 @@ FxManifold circle_obb(arc_circle circle, arc_obb box) {
 }
 
 void project_capsule(
-    Vec a, Vec b, int64_t radius, Axis axis, int64_t& min, int64_t& max) {
+    const Vec& a, const Vec& b, int64_t radius, const Axis& axis, int64_t& min, int64_t& max) {
     const int64_t first = axis.dot(a);
     const int64_t second = axis.dot(b);
     const int64_t radius_projection = radius * AxisOne;
@@ -388,7 +388,7 @@ void project_capsule(
     max = std::max(first, second) + radius_projection;
 }
 
-Vec capsule_support(Vec a, Vec b, int64_t radius, Axis direction) {
+Vec capsule_support(const Vec& a, const Vec& b, int64_t radius, const Axis& direction) {
     const Vec endpoint = direction.dot(a) >= direction.dot(b) ? a : b;
     return endpoint + direction.scale(radius);
 }
@@ -399,7 +399,7 @@ Vec box_vertex(const BoxProxy& box, int index) {
     return box.center + box.axis_x.scale(x) + box.axis_y.scale(y);
 }
 
-FxAabb segment_bounds(Vec a, Vec b, int64_t radius) {
+FxAabb segment_bounds(const Vec& a, const Vec& b, int64_t radius) {
     const int64_t min_x = std::min(a.x, b.x) - radius;
     const int64_t min_y = std::min(a.y, b.y) - radius;
     const int64_t max_x = std::max(a.x, b.x) + radius;
@@ -409,7 +409,7 @@ FxAabb segment_bounds(Vec a, Vec b, int64_t radius) {
 }
 
 bool test_capsule_box_axis(
-    Axis test, Vec a, Vec b, int64_t radius, const BoxProxy& box,
+    const Axis& test, const Vec& a, const Vec& b, int64_t radius, const BoxProxy& box,
     int64_t& best_overlap, int64_t& best_depth, Axis& best_axis) {
     int64_t min_a, max_a, min_b, max_b;
     project_capsule(a, b, radius, test, min_a, max_a);
@@ -432,7 +432,7 @@ bool test_capsule_box_axis(
 // Capsule/box SAT: the box's two face normals, the spine-perpendicular, and the
 // four corner-to-spine closest axes (the rounded-hull axes) together separate a
 // capsule from a box.
-FxManifold capsule_box(arc_capsule capsule, const BoxProxy& box) {
+FxManifold capsule_box(const arc_capsule& capsule, const BoxProxy& box) {
     const Vec a = Vec::from(capsule.a);
     const Vec b = Vec::from(capsule.b);
     const int64_t radius = std::abs(from_float(capsule.radius));
@@ -469,7 +469,7 @@ FxManifold capsule_box(arc_capsule capsule, const BoxProxy& box) {
 
 // Circle/capsule: reduce to circle/circle against the closest point on the spine.
 // The degenerate case (circle centred on the spine) picks the spine-perpendicular.
-FxManifold circle_capsule(arc_circle circle, arc_capsule capsule) {
+FxManifold circle_capsule(const arc_circle& circle, const arc_capsule& capsule) {
     const FxCircle fixed = fixed_circle(circle);
     const Vec a = Vec::from(capsule.a);
     const Vec b = Vec::from(capsule.b);
@@ -505,7 +505,7 @@ FxManifold reverse(FxManifold value) {
 // (4 points) inflated by the summed radii, tested against the origin. SAT on that
 // gives the true MTV even when the spines cross, where a naive closest-point
 // reduction would saturate. Contact is the clamped support-point midpoint.
-FxManifold capsule_capsule(arc_capsule first, arc_capsule second) {
+FxManifold capsule_capsule(const arc_capsule& first, const arc_capsule& second) {
     const Vec a0 = Vec::from(first.a), a1 = Vec::from(first.b);
     const Vec b0 = Vec::from(second.a), b1 = Vec::from(second.b);
     const int64_t radius_a = std::abs(from_float(first.radius));
@@ -545,14 +545,14 @@ FxManifold capsule_capsule(arc_capsule first, arc_capsule second) {
 // -----------------------------------------------------------------------------
 // Boolean-only primitive overlap tests
 
-bool circle_circle_overlap(arc_circle a, arc_circle b) {
+bool circle_circle_overlap(const arc_circle& a, const arc_circle& b) {
     const FxCircle first = fixed_circle(a);
     const FxCircle second = fixed_circle(b);
     const int64_t radius = first.radius + second.radius;
     return first.center.dist_sq(second.center) <= radius * radius;
 }
 
-bool circle_aabb_overlap(arc_circle circle, arc_aabb box) {
+bool circle_aabb_overlap(const arc_circle& circle, const arc_aabb& box) {
     const FxCircle source = fixed_circle(circle);
     const FxAabb target = fixed_aabb(box);
     const Vec min = target.min();
@@ -563,7 +563,7 @@ bool circle_aabb_overlap(arc_circle circle, arc_aabb box) {
     return source.center.dist_sq(closest) <= source.radius * source.radius;
 }
 
-bool circle_capsule_overlap(arc_circle circle, arc_capsule capsule) {
+bool circle_capsule_overlap(const arc_circle& circle, const arc_capsule& capsule) {
     const Vec center = Vec::from(circle.center);
     const Vec closest = closest_segment(
         center, Vec::from(capsule.a), Vec::from(capsule.b));
@@ -572,7 +572,7 @@ bool circle_capsule_overlap(arc_circle circle, arc_capsule capsule) {
     return center.dist_sq(closest) <= radius * radius;
 }
 
-bool capsule_capsule_overlap(arc_capsule a, arc_capsule b) {
+bool capsule_capsule_overlap(const arc_capsule& a, const arc_capsule& b) {
     Vec closest_a;
     Vec closest_b;
     const int64_t distance_sq = closest_segments(
@@ -583,7 +583,7 @@ bool capsule_capsule_overlap(arc_capsule a, arc_capsule b) {
     return distance_sq <= radius * radius;
 }
 
-bool aabb_aabb_overlap(arc_aabb a, arc_aabb b) {
+bool aabb_aabb_overlap(const arc_aabb& a, const arc_aabb& b) {
     const FxAabb first = fixed_aabb(a);
     const FxAabb second = fixed_aabb(b);
     const Vec first_min = first.min();
@@ -594,7 +594,7 @@ bool aabb_aabb_overlap(arc_aabb a, arc_aabb b) {
         && first_max.y >= second_min.y && second_max.y >= first_min.y;
 }
 
-bool box_axis_overlaps(Axis axis, const BoxProxy& a, const BoxProxy& b) {
+bool box_axis_overlaps(const Axis& axis, const BoxProxy& a, const BoxProxy& b) {
     int64_t min_a, max_a, min_b, max_b;
     project_box(a, axis, min_a, max_a);
     project_box(b, axis, min_b, max_b);
@@ -608,7 +608,7 @@ bool boxes_overlap(const BoxProxy& a, const BoxProxy& b) {
         && box_axis_overlaps(b.axis_y, a, b);
 }
 
-bool circle_obb_overlap(arc_circle circle, arc_obb box) {
+bool circle_obb_overlap(const arc_circle& circle, const arc_obb& box) {
     const BoxProxy target = make_box(box);
     const FxCircle source = fixed_circle(circle);
     const Vec delta = source.center - target.center;
@@ -623,14 +623,14 @@ bool circle_obb_overlap(arc_circle circle, arc_obb box) {
 }
 
 bool capsule_box_axis_overlaps(
-    Axis axis, Vec a, Vec b, int64_t radius, const BoxProxy& box) {
+    const Axis& axis, const Vec& a, const Vec& b, int64_t radius, const BoxProxy& box) {
     int64_t min_a, max_a, min_b, max_b;
     project_capsule(a, b, radius, axis, min_a, max_a);
     project_box(box, axis, min_b, max_b);
     return max_a >= min_b && max_b >= min_a;
 }
 
-bool capsule_box_overlap(arc_capsule capsule, const BoxProxy& box) {
+bool capsule_box_overlap(const arc_capsule& capsule, const BoxProxy& box) {
     const Vec a = Vec::from(capsule.a);
     const Vec b = Vec::from(capsule.b);
     const int64_t radius = std::abs(from_float(capsule.radius));
@@ -660,7 +660,7 @@ bool capsule_box_overlap(arc_capsule capsule, const BoxProxy& box) {
 
 // For concave shapes, the representative manifold is the deepest overlapping
 // convex sub-piece (ties broken canonically for determinism).
-bool is_better_piece(FxManifold candidate, FxManifold best) {
+bool is_better_piece(const FxManifold& candidate, const FxManifold& best) {
     if (!best.colliding || candidate.depth > best.depth) return true;
     if (candidate.depth < best.depth) return false;
     return canonical_before(candidate.normal, best.normal);
@@ -668,7 +668,7 @@ bool is_better_piece(FxManifold candidate, FxManifold best) {
 
 // Deepest colliding (piece_a, piece_b) pair with shape A shifted by `offset`.
 FxManifold deepest_piece(
-    const arc_shape& a, const arc_shape& b, int pieces_a, int pieces_b, Vec offset) {
+    const arc_shape& a, const arc_shape& b, int pieces_a, int pieces_b, const Vec& offset) {
     FxManifold best;
     for (int i = 0; i < pieces_a; ++i) {
         const Proxy proxy_a = make_proxy(a, i).translated(offset);
@@ -732,9 +732,9 @@ FxManifold concave_collision(
 // Fixed-point primitive collisions exposed for the sweep's "already overlapping
 // at t=0" branches, so they resolve the initial contact from the fixed values
 // directly -- no arc_shape/float round-trip, bit-identical to the C# reference.
-FxManifold collide_circle_circle(FxCircle a, FxCircle b) { return circle_circle(a, b); }
-FxManifold collide_circle_aabb(FxCircle circle, FxAabb box) { return circle_aabb(circle, box); }
-FxManifold collide_aabb_aabb(FxAabb a, FxAabb b) { return aabb_aabb(a, b); }
+FxManifold collide_circle_circle(const FxCircle& a, const FxCircle& b) { return circle_circle(a, b); }
+FxManifold collide_circle_aabb(const FxCircle& circle, const FxAabb& box) { return circle_aabb(circle, box); }
+FxManifold collide_aabb_aabb(const FxAabb& a, const FxAabb& b) { return aabb_aabb(a, b); }
 
 // Generic convex-vs-convex SAT: test both hulls' edge normals, add vertex/edge
 // axes when either shape is rounded (a radius), and fall back to the centre delta
@@ -866,19 +866,19 @@ bool overlap_shapes(const arc_shape& a, const arc_shape& b) {
 
 namespace {
 
-arc_shape shape_circle(arc_circle value) {
+arc_shape shape_circle(const arc_circle& value) {
     arc_shape shape{};
     shape.kind = ARC_SHAPE_CIRCLE;
     shape.circle = value;
     return shape;
 }
-arc_shape shape_aabb(arc_aabb value) {
+arc_shape shape_aabb(const arc_aabb& value) {
     arc_shape shape{};
     shape.kind = ARC_SHAPE_AABB;
     shape.aabb = value;
     return shape;
 }
-arc_shape shape_capsule(arc_capsule value) {
+arc_shape shape_capsule(const arc_capsule& value) {
     arc_shape shape{};
     shape.kind = ARC_SHAPE_CAPSULE;
     shape.capsule = value;
@@ -958,13 +958,21 @@ arc_aabb ARC_CALL arc_shape_get_bounds(const arc_shape* shape) {
         case ARC_SHAPE_AABB:
             return shape->aabb;
         case ARC_SHAPE_CAPSULE: {
-            const float min_x = std::min(shape->capsule.a.x, shape->capsule.b.x)
+            // MathF.Min/Max select the second operand when finite values compare
+            // equal. Preserve that detail for signed-zero parity with C#.
+            const auto managed_min = [](float a, float b) {
+                return a < b ? a : b;
+            };
+            const auto managed_max = [](float a, float b) {
+                return a > b ? a : b;
+            };
+            const float min_x = managed_min(shape->capsule.a.x, shape->capsule.b.x)
                 - shape->capsule.radius;
-            const float min_y = std::min(shape->capsule.a.y, shape->capsule.b.y)
+            const float min_y = managed_min(shape->capsule.a.y, shape->capsule.b.y)
                 - shape->capsule.radius;
-            const float max_x = std::max(shape->capsule.a.x, shape->capsule.b.x)
+            const float max_x = managed_max(shape->capsule.a.x, shape->capsule.b.x)
                 + shape->capsule.radius;
-            const float max_y = std::max(shape->capsule.a.y, shape->capsule.b.y)
+            const float max_y = managed_max(shape->capsule.a.y, shape->capsule.b.y)
                 + shape->capsule.radius;
             return {{(min_x + max_x) * 0.5f, (min_y + max_y) * 0.5f},
                     {(max_x - min_x) * 0.5f, (max_y - min_y) * 0.5f}};

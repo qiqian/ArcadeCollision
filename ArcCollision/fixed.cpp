@@ -78,7 +78,7 @@ bool valid_scalar(float value) {
         && value <= ARC_MAX_COORDINATE;
 }
 
-bool valid_vec(arc_vec2 value) {
+bool valid_vec(const arc_vec2& value) {
     return valid_scalar(value.x) && valid_scalar(value.y);
 }
 
@@ -226,7 +226,7 @@ int64_t sqrt_i64(int64_t value) {
     return static_cast<int64_t>(result);
 }
 
-Axis Axis::from_vector(Vec value, Axis fallback) {
+Axis Axis::from_vector(const Vec& value, const Axis& fallback) {
     return from_components(value.x, value.y, fallback);
 }
 
@@ -237,7 +237,7 @@ Axis Axis::from_vector(Vec value, Axis fallback) {
 // int64 allows before the sqrt, giving high_length = |v| * 2^(extra_shift/2);
 // pre-scale the numerators by the matching 2^(extra_shift/2) so ratio_q30 sees
 // full precision even for near-degenerate edges.
-Axis Axis::from_components(int64_t px, int64_t py, Axis fallback) {
+Axis Axis::from_components(int64_t px, int64_t py, const Axis& fallback) {
     const int64_t length_sq = px * px + py * py;
     if (length_sq == 0) return fallback;
     int extra_shift = 60;
@@ -291,7 +291,7 @@ Axis Axis::from_angle(uint32_t angle) {
 
 // Rotate a local-frame axis back into world space by the (basis_x, basis_y)
 // frame, renormalizing so the result stays a Q1.30 unit axis.
-Axis Axis::transform(Axis basis_x, Axis basis_y, Axis local) {
+Axis Axis::transform(const Axis& basis_x, const Axis& basis_y, const Axis& local) {
     const int64_t px = round_shift(
         basis_x.x * local.x + basis_y.x * local.y, AxisShift);
     const int64_t py = round_shift(
@@ -300,7 +300,7 @@ Axis Axis::transform(Axis basis_x, Axis basis_y, Axis local) {
 }
 
 // Cosine of the angle between two unit axes: (Q1.30 . Q1.30) >> 30 back to Q1.30.
-int64_t Axis::dot(Axis other) const {
+int64_t Axis::dot(const Axis& other) const {
     return round_shift(x * other.x + y * other.y, AxisShift);
 }
 
@@ -336,20 +336,33 @@ arc_manifold FxManifold::to_public() const {
 }
 
 arc_sweep_hit FxSweep::to_public() const {
+    return to_public({0, 0});
+}
+
+arc_sweep_hit FxSweep::to_public(const arc_vec2& public_motion) const {
     if (!hit) return {0, 1.0f, {0, 0}, {0, 0}};
     arc_vec2 public_normal = normal.to_public();
     if (normal.x == 0 && (negative_zero_mask & 1) != 0)
         public_normal.x = -0.0f;
     if (normal.y == 0 && (negative_zero_mask & 2) != 0)
         public_normal.y = -0.0f;
-    return {1, to_t(time), public_normal, point.to_public()};
+    const float public_time = to_t(time);
+    arc_vec2 public_point = point.to_public();
+    if (translate_public_point) {
+        // Keep multiply and add as distinct float operations, as in C# Vec2.
+        volatile float delta_x = public_motion.x * public_time;
+        volatile float delta_y = public_motion.y * public_time;
+        public_point.x = public_point.x + delta_x;
+        public_point.y = public_point.y + delta_y;
+    }
+    return {1, public_time, public_normal, public_point};
 }
 
-Vec midpoint(Vec a, Vec b) {
+Vec midpoint(const Vec& a, const Vec& b) {
     return {a.x + ((b.x - a.x) >> 1), a.y + ((b.y - a.y) >> 1)};
 }
 
-Proxy Proxy::translated(Vec delta) const {
+Proxy Proxy::translated(const Vec& delta) const {
     Proxy result = *this;
     result.offset += delta;
     result.center += delta;

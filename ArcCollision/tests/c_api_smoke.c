@@ -234,6 +234,16 @@ int main(void)
             return 4;
     }
 
+    {
+        arc_shape capsule = {0};
+        arc_aabb bounds;
+        capsule.kind = ARC_SHAPE_CAPSULE;
+        capsule.capsule = (arc_capsule){{-0.0f, -1}, {0.0f, 1}, -0.0f};
+        bounds = arc_shape_get_bounds(&capsule);
+        if (float_bits(bounds.half_extents.x) != float_bits(0.0f))
+            return 12;
+    }
+
     arc_world_options options = {16.0f, 16, 16};
     arc_world* world = arc_world_create(&options);
     if (!world) return 5;

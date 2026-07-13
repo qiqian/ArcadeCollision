@@ -386,7 +386,7 @@ Bounds shape_bounds(const arc_shape& shape) {
     }
 }
 
-arc_shape moved_shape(arc_shape shape, arc_vec2 motion) {
+arc_shape moved_shape(arc_shape shape, const arc_vec2& motion) {
     switch (shape.kind) {
     case ARC_SHAPE_CIRCLE:
         shape.circle.center.x += motion.x; shape.circle.center.y += motion.y; break;
