@@ -2,6 +2,7 @@
 #define ARCCOLLISION_INTERNAL_H
 
 #include "arccollision.h"
+#include "simd128.h"
 
 #include <algorithm>
 #include <array>
@@ -125,17 +126,31 @@ struct FxAabb {
     Vec max() const { return center + half; }
 };
 
-// Broadphase bounds stored as integer min/max (24.8). Kept exact so the tree
-// structure and pair enumeration are deterministic; mirrors C# BpBounds.
+// Broadphase bounds as int32 fixed-point (24.8) min/max. int32 halves the node
+// footprint vs int64, so more nodes fit per cache line -- the real broadphase win,
+// since traversal is memory-bound. This requires |position| + |extent| to stay in
+// int32 (< 2^31 fixed ~= 8.39M world units), which the +/-ARC_MAX_COORDINATE input
+// limit guarantees with margin. Only min/max are stored as int32; derived spans
+// (max - min, up to ~2^31) widen to int64 for perimeter/center/SAH so they never
+// overflow. overlaps/contains stay scalar on purpose: they short-circuit (most
+// broadphase pairs are disjoint), which beats a branchless SIMD reduction here.
+// Mirrors C# BpBounds.
 struct Bounds {
-    int64_t min_x = 0;
-    int64_t min_y = 0;
-    int64_t max_x = 0;
-    int64_t max_y = 0;
+    int32_t min_x = 0;
+    int32_t min_y = 0;
+    int32_t max_x = 0;
+    int32_t max_y = 0;
 
-    int64_t center_x() const { return min_x + ((max_x - min_x) >> 1); }
-    int64_t center_y() const { return min_y + ((max_y - min_y) >> 1); }
-    int64_t perimeter() const { return 2 * ((max_x - min_x) + (max_y - min_y)); }
+    int32_t center_x() const {
+        return static_cast<int32_t>(min_x + ((static_cast<int64_t>(max_x) - min_x) >> 1));
+    }
+    int32_t center_y() const {
+        return static_cast<int32_t>(min_y + ((static_cast<int64_t>(max_y) - min_y) >> 1));
+    }
+    int64_t perimeter() const {
+        return 2 * ((static_cast<int64_t>(max_x) - min_x)
+                  + (static_cast<int64_t>(max_y) - min_y));
+    }
     bool overlaps(const Bounds& other) const {
         return min_x <= other.max_x && other.min_x <= max_x
             && min_y <= other.max_y && other.min_y <= max_y;
@@ -144,22 +159,32 @@ struct Bounds {
         return min_x <= other.min_x && min_y <= other.min_y
             && max_x >= other.max_x && max_y >= other.max_y;
     }
+    // Margin/offset are 24.8 fixed (int64) that stay within int32 for in-range
+    // colliders; narrow the result. Callers pass int64 without casting.
     Bounds expanded(int64_t margin) const {
-        return {min_x - margin, min_y - margin, max_x + margin, max_y + margin};
+        return {static_cast<int32_t>(min_x - margin), static_cast<int32_t>(min_y - margin),
+                static_cast<int32_t>(max_x + margin), static_cast<int32_t>(max_y + margin)};
     }
     Bounds translated(int64_t x, int64_t y) const {
-        return {min_x + x, min_y + y, max_x + x, max_y + y};
+        return {static_cast<int32_t>(min_x + x), static_cast<int32_t>(min_y + y),
+                static_cast<int32_t>(max_x + x), static_cast<int32_t>(max_y + y)};
     }
     static Bounds unite(const Bounds& a, const Bounds& b) {
         return {std::min(a.min_x, b.min_x), std::min(a.min_y, b.min_y),
                 std::max(a.max_x, b.max_x), std::max(a.max_y, b.max_y)};
     }
     FxAabb to_fx_aabb() const {
-        return {{min_x + ((max_x - min_x) / 2), min_y + ((max_y - min_y) / 2)},
-                {(max_x - min_x) / 2, (max_y - min_y) / 2}};
+        const int64_t half_w = (static_cast<int64_t>(max_x) - min_x) / 2;
+        const int64_t half_h = (static_cast<int64_t>(max_y) - min_y) / 2;
+        return {{min_x + half_w, min_y + half_h}, {half_w, half_h}};
     }
     arc_aabb to_public() const;
 };
+
+// SIMD loads rely only on the private integer layouts, never on public C ABI
+// structs. Fail at compile time if a compiler ever inserts unexpected padding.
+static_assert(sizeof(Vec) == sizeof(int64_t) * 2, "Vec must be two packed int64 lanes");
+static_assert(sizeof(Bounds) == sizeof(int32_t) * 4, "Bounds must be four packed int32 lanes");
 
 // Result of a discrete overlap test. normal points from the first shape toward
 // the second; depth is the penetration along it (0 for an exact touch). The

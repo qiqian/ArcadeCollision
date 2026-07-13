@@ -104,7 +104,9 @@ bool build_polygon(arc_polygon& polygon, const arc_vec2* vertices, int32_t count
     }
 
     const Vec first = polygon.fixed_vertices[0];
-    polygon.bounds = {first.x, first.y, first.x, first.y};
+    // Vertices are within the coordinate limit, so they narrow to int32 bounds.
+    polygon.bounds = {static_cast<int32_t>(first.x), static_cast<int32_t>(first.y),
+                      static_cast<int32_t>(first.x), static_cast<int32_t>(first.y)};
     int turn_sign = 0;
     int64_t signed_area = 0;
     polygon.convex = true;
@@ -112,10 +114,10 @@ bool build_polygon(arc_polygon& polygon, const arc_vec2* vertices, int32_t count
         const Vec a = polygon.fixed_vertices[static_cast<size_t>(i)];
         const Vec b = polygon.fixed_vertices[static_cast<size_t>((i + 1) % count)];
         const Vec c = polygon.fixed_vertices[static_cast<size_t>((i + 2) % count)];
-        polygon.bounds.min_x = std::min(polygon.bounds.min_x, a.x);
-        polygon.bounds.min_y = std::min(polygon.bounds.min_y, a.y);
-        polygon.bounds.max_x = std::max(polygon.bounds.max_x, a.x);
-        polygon.bounds.max_y = std::max(polygon.bounds.max_y, a.y);
+        polygon.bounds.min_x = std::min(polygon.bounds.min_x, static_cast<int32_t>(a.x));
+        polygon.bounds.min_y = std::min(polygon.bounds.min_y, static_cast<int32_t>(a.y));
+        polygon.bounds.max_x = std::max(polygon.bounds.max_x, static_cast<int32_t>(a.x));
+        polygon.bounds.max_y = std::max(polygon.bounds.max_y, static_cast<int32_t>(a.y));
         signed_area += a.x * b.y - a.y * b.x;
         const int64_t turn = cross(a, b, c);
         if (turn == 0) continue;
@@ -310,19 +312,38 @@ Proxy make_proxy(const arc_shape& shape, int piece) {
 
 FxAabb proxy_bounds(const Proxy& proxy) {
     Vec first = proxy.vertex(0);
-    int64_t min_x = first.x, min_y = first.y, max_x = first.x, max_y = first.y;
+    simd128::I64x2 minimum = simd128::load(&first.x);
+    simd128::I64x2 maximum = minimum;
     for (int i = 1; i < proxy.count; ++i) {
         const Vec value = proxy.vertex(i);
-        min_x = std::min(min_x, value.x);
-        min_y = std::min(min_y, value.y);
-        max_x = std::max(max_x, value.x);
-        max_y = std::max(max_y, value.y);
+        const simd128::I64x2 vertex = simd128::load(&value.x);
+        minimum = simd128::minimum(minimum, vertex);
+        maximum = simd128::maximum(maximum, vertex);
     }
-    min_x -= proxy.radius; min_y -= proxy.radius;
-    max_x += proxy.radius; max_y += proxy.radius;
-    return {{(min_x + max_x) / 2, (min_y + max_y) / 2},
-            {(max_x - min_x) / 2, (max_y - min_y) / 2}};
+    const simd128::I64x2 radius = simd128::splat(proxy.radius);
+    minimum = simd128::subtract(minimum, radius);
+    maximum = simd128::add(maximum, radius);
+    Vec min_value, max_value;
+    simd128::store(&min_value.x, minimum);
+    simd128::store(&max_value.x, maximum);
+    return {{(min_value.x + max_value.x) / 2,
+             (min_value.y + max_value.y) / 2},
+            {(max_value.x - min_value.x) / 2,
+             (max_value.y - min_value.y) / 2}};
 }
+
+namespace {
+
+// center/half are 24.8 fixed (int64) that fit int32 within the coordinate limit;
+// narrow to the int32 broadphase Bounds.
+Bounds bounds_from_center_half(Vec center, Vec half) {
+    return {static_cast<int32_t>(center.x - half.x),
+            static_cast<int32_t>(center.y - half.y),
+            static_cast<int32_t>(center.x + half.x),
+            static_cast<int32_t>(center.y + half.y)};
+}
+
+} // namespace
 
 // Broadphase bounds for a shape. The OBB/rotated-polygon cases derive the extent
 // from the Q1.30 axes (ceil-divided so the box never under-covers), which is why
@@ -333,22 +354,22 @@ Bounds shape_bounds(const arc_shape& shape) {
     case ARC_SHAPE_CIRCLE: {
         const Vec center = Vec::from(shape.circle.center);
         const int64_t radius = std::abs(from_float(shape.circle.radius));
-        return {center.x - radius, center.y - radius,
-                center.x + radius, center.y + radius};
+        return bounds_from_center_half(center, {radius, radius});
     }
     case ARC_SHAPE_AABB: {
         const Vec center = Vec::from(shape.aabb.center);
         const Vec half{std::abs(from_float(shape.aabb.half_extents.x)),
                        std::abs(from_float(shape.aabb.half_extents.y))};
-        return {center.x - half.x, center.y - half.y,
-                center.x + half.x, center.y + half.y};
+        return bounds_from_center_half(center, half);
     }
     case ARC_SHAPE_CAPSULE: {
         const Vec a = Vec::from(shape.capsule.a);
         const Vec b = Vec::from(shape.capsule.b);
         const int64_t radius = std::abs(from_float(shape.capsule.radius));
-        return {std::min(a.x, b.x) - radius, std::min(a.y, b.y) - radius,
-                std::max(a.x, b.x) + radius, std::max(a.y, b.y) + radius};
+        return {static_cast<int32_t>(std::min(a.x, b.x) - radius),
+                static_cast<int32_t>(std::min(a.y, b.y) - radius),
+                static_cast<int32_t>(std::max(a.x, b.x) + radius),
+                static_cast<int32_t>(std::max(a.y, b.y) + radius)};
     }
     case ARC_SHAPE_OBB: {
         const Vec center = Vec::from(shape.obb.center);
@@ -360,8 +381,7 @@ Bounds shape_bounds(const arc_shape& shape) {
             std::abs(axis_x.x) * half_x + std::abs(axis_y.x) * half_y, AxisOne);
         const int64_t extent_y = ceil_div_positive(
             std::abs(axis_x.y) * half_x + std::abs(axis_y.y) * half_y, AxisOne);
-        return {center.x - extent_x, center.y - extent_y,
-                center.x + extent_x, center.y + extent_y};
+        return bounds_from_center_half(center, {extent_x, extent_y});
     }
     case ARC_SHAPE_POLYGON: {
         const arc_polygon& polygon = *shape.polygon;
@@ -370,18 +390,19 @@ Bounds shape_bounds(const arc_shape& shape) {
             return polygon.bounds.translated(translation.x, translation.y);
         const Axis axis_x = Axis::from_angle(shape.polygon_rotation);
         const Axis axis_y = axis_x.perpendicular();
-        Vec first = transform_vertex(
+        const Vec first = transform_vertex(
             polygon.fixed_vertices[0], translation, axis_x, axis_y);
-        Bounds result{first.x, first.y, first.x, first.y};
+        int64_t min_x = first.x, min_y = first.y, max_x = first.x, max_y = first.y;
         for (size_t i = 1; i < polygon.fixed_vertices.size(); ++i) {
             const Vec vertex = transform_vertex(
                 polygon.fixed_vertices[i], translation, axis_x, axis_y);
-            result.min_x = std::min(result.min_x, vertex.x);
-            result.min_y = std::min(result.min_y, vertex.y);
-            result.max_x = std::max(result.max_x, vertex.x);
-            result.max_y = std::max(result.max_y, vertex.y);
+            min_x = std::min(min_x, vertex.x);
+            min_y = std::min(min_y, vertex.y);
+            max_x = std::max(max_x, vertex.x);
+            max_y = std::max(max_y, vertex.y);
         }
-        return result;
+        return {static_cast<int32_t>(min_x), static_cast<int32_t>(min_y),
+                static_cast<int32_t>(max_x), static_cast<int32_t>(max_y)};
     }
     default:
         throw std::out_of_range("Invalid shape kind.");

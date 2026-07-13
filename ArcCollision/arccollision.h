@@ -38,6 +38,10 @@ extern "C" {
 #define ARC_MAX_COLLIDER_COUNT 1048576
 #define ARC_MAX_ENTITY_ID 268435455
 #define ARC_COLLISION_GRID_SIZE (1.0f / 256.0f)
+/* Max |world coordinate| and |extent| accepted at the boundary. Beyond the
+   fixed-point range, this bound also keeps every broadphase AABB (position +/-
+   extent, scaled by 256) inside the int32 arc_bp_bounds storage. Raising it past
+   ~4M would risk broadphase overflow, not just fixed-point range. */
 #define ARC_MAX_COORDINATE 1953125.0f
 #define ARC_CATEGORY_DEFAULT 1u
 #define ARC_CATEGORY_ALL UINT32_MAX
@@ -85,8 +89,10 @@ typedef struct arc_dynamic_tree arc_dynamic_tree;
 typedef struct arc_static_bvh arc_static_bvh;
 
 /* Broadphase axis-aligned bounds in the 24.8 fixed-point grid (integer min/max).
+   Stored as int32 (16 bytes) to keep tree nodes cache-dense; this holds because
+   the coordinate limit keeps every bound within int32 (see ARC_MAX_COORDINATE).
    Layout matches the internal arc::Bounds so it is bit-copyable. */
-typedef struct arc_bp_bounds { int64_t min_x, min_y, max_x, max_y; } arc_bp_bounds;
+typedef struct arc_bp_bounds { int32_t min_x, min_y, max_x, max_y; } arc_bp_bounds;
 typedef struct arc_int_pair { int32_t a, b; } arc_int_pair;
 
 /* Only the member selected by kind is read. Polygon pointers are borrowed for
@@ -190,6 +196,12 @@ ARC_API int32_t ARC_CALL arc_get_sweep_algorithm(const arc_shape* mover, const a
 
 /* Collision world. Handles become stale after remove/clear/destroy. Static
    additions may be batched and finalized with arc_world_build_static.
+
+   Coordinate limit: every collider's position and extent must stay within
+   +/-ARC_MAX_COORDINATE (~1.95M world units). Besides the fixed-point range, the
+   broadphase now stores AABBs as int32 (24.8), so a position plus its extent must
+   remain inside int32; the +/-ARC_MAX_COORDINATE bound guarantees this. Inputs
+   outside the range are rejected at the boundary.
 
    The compute-pairs, query and cast-all APIs return borrowed read-only views of
    result buffers owned by the world. Consume the returned data immediately; it

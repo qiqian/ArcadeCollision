@@ -1,22 +1,23 @@
 namespace ArcCollision.Wrapper;
 
 /// <summary>
-/// Broadphase axis-aligned bounds in the 24.8 fixed-point grid (integer min/max).
-/// Drop-in equivalent of <c>ArcCollision.BpBounds</c>: the shape-derived
+/// Broadphase axis-aligned bounds in the 24.8 fixed-point grid, stored as int32
+/// min/max. Drop-in equivalent of <c>ArcCollision.BpBounds</c>: the shape-derived
 /// constructors compute their min/max in the native library so they are bit-for-bit
 /// identical to the reference backend; the pure-integer operations run in managed
-/// code. Blittable (four <see cref="long"/> fields) for by-value P/Invoke.
+/// code. Blittable (four <see cref="int"/> fields, 16 bytes) matching the native
+/// arc_bp_bounds for by-value P/Invoke. Derived spans widen to long.
 /// </summary>
 public readonly struct BpBounds
 {
-    public readonly long MinX, MinY, MaxX, MaxY;
+    public readonly int MinX, MinY, MaxX, MaxY;
 
     public BpBounds(long minX, long minY, long maxX, long maxY)
     {
-        MinX = minX;
-        MinY = minY;
-        MaxX = maxX;
-        MaxY = maxY;
+        MinX = (int)minX;
+        MinY = (int)minY;
+        MaxX = (int)maxX;
+        MaxY = (int)maxY;
     }
 
     public BpBounds(Aabb box) { this = NativeMethods.BpBoundsFromShape(new NativeShape(new Shape(box))); }
@@ -32,9 +33,9 @@ public readonly struct BpBounds
 
     public BpBounds(Shape shape) { this = NativeMethods.BpBoundsFromShape(new NativeShape(shape)); }
 
-    public long CenterX => MinX + ((MaxX - MinX) >> 1);
-    public long CenterY => MinY + ((MaxY - MinY) >> 1);
-    public long Perimeter => 2 * ((MaxX - MinX) + (MaxY - MinY));
+    public int CenterX => (int)(MinX + (((long)MaxX - MinX) >> 1));
+    public int CenterY => (int)(MinY + (((long)MaxY - MinY) >> 1));
+    public long Perimeter => 2 * (((long)MaxX - MinX) + ((long)MaxY - MinY));
 
     public bool Overlaps(in BpBounds other) =>
         MinX <= other.MaxX && other.MinX <= MaxX

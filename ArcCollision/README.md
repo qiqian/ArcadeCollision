@@ -11,13 +11,19 @@ cmake --preset windows-x64
 cmake --build --preset windows-x64
 ```
 
-Available presets are `windows-x64`, `windows-x64-static`, `linux-x64`,
-`macos-universal`, `android-arm64`, and `ios-arm64`. The two Windows presets
-also have matching test presets. Android requires `ANDROID_NDK_HOME`. iOS is
-built as a static library and linked into the application; exported entry
-points retain default visibility for the main-program export table
-(`__Internal` semantics). Other platforms load `arccollision.dll`,
-`libarccollision.so`, or `libarccollision.dylib`.
+Available presets are `windows-x64`, `windows-x64-static`, `windows-x86`,
+`windows-arm64`, `linux-x64`, `macos-universal`, `android-arm64`, and
+`ios-arm64`. The Windows x64 shared/static presets have matching test presets.
+Android requires `ANDROID_NDK_HOME`. iOS is built as a static library and linked
+into the application; exported entry points retain default visibility for the
+main-program export table (`__Internal` semantics). Other platforms load
+`arccollision.dll`, `libarccollision.so`, or `libarccollision.dylib`.
+
+PC targets require SSE4.2. ARM targets require ARM64 NEON; ARMv7 is not
+supported. SIMD is confined to private fixed-integer bounds operations and does
+not change the public C ABI or the float-to-fixed conversion boundary.
+Configure with `-DARC_BUILD_BENCHMARKS=ON` to build the optional
+`arc_integer_bounds_benchmark` scalar/SIMD comparison executable.
 
 Opaque `arc_polygon` and `arc_world` objects are reference-owned through the
 functions in the header. World pair/query/cast-all APIs return borrowed views of

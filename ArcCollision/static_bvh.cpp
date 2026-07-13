@@ -107,10 +107,10 @@ int StaticBvh::build_range(int start, int count) {
     for (int i = start + 1; i < start + count; ++i) {
         const Bounds& leaf = leaves_[static_cast<size_t>(i)].bounds;
         bounds = Bounds::unite(bounds, leaf);
-        min_x = std::min(min_x, leaf.center_x());
-        max_x = std::max(max_x, leaf.center_x());
-        min_y = std::min(min_y, leaf.center_y());
-        max_y = std::max(max_y, leaf.center_y());
+        min_x = std::min(min_x, static_cast<int64_t>(leaf.center_x()));
+        max_x = std::max(max_x, static_cast<int64_t>(leaf.center_x()));
+        min_y = std::min(min_y, static_cast<int64_t>(leaf.center_y()));
+        max_y = std::max(max_y, static_cast<int64_t>(leaf.center_y()));
     }
     int axis, split;
     find_split(start, count, min_x, max_x, min_y, max_y, axis, split);

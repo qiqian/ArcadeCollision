@@ -29,16 +29,16 @@
        game build still runs against the Release native library. -->
   <Target Name="CopyNativeArcCollisionForGame" AfterTargets="Build">
     <ItemGroup>
+      <!-- Single native source: the CMake preset output dir (build/<preset>).
+           A Debug game build falls back to the Release native library. -->
       <NativeArcCollision Include="..\ArcCollision\build\windows-x64\$(Configuration)\arccollision.dll"
                           Condition="Exists('..\ArcCollision\build\windows-x64\$(Configuration)\arccollision.dll')" />
-      <NativeArcCollision Include="..\.native-build\$(Configuration)\arccollision.dll"
-                          Condition="!Exists('..\ArcCollision\build\windows-x64\$(Configuration)\arccollision.dll') And Exists('..\.native-build\$(Configuration)\arccollision.dll')" />
-      <NativeArcCollision Include="..\.native-build\Release\arccollision.dll"
-                          Condition="'@(NativeArcCollision)' == '' And Exists('..\.native-build\Release\arccollision.dll')" />
-      <NativeArcCollision Include="..\.native-build\$(Configuration)\libarccollision.so"
-                          Condition="Exists('..\.native-build\$(Configuration)\libarccollision.so')" />
-      <NativeArcCollision Include="..\.native-build\$(Configuration)\libarccollision.dylib"
-                          Condition="Exists('..\.native-build\$(Configuration)\libarccollision.dylib')" />
+      <NativeArcCollision Include="..\ArcCollision\build\windows-x64\Release\arccollision.dll"
+                          Condition="'@(NativeArcCollision)' == '' And Exists('..\ArcCollision\build\windows-x64\Release\arccollision.dll')" />
+      <NativeArcCollision Include="..\ArcCollision\build\linux-x64\libarccollision.so"
+                          Condition="Exists('..\ArcCollision\build\linux-x64\libarccollision.so')" />
+      <NativeArcCollision Include="..\ArcCollision\build\macos-universal\libarccollision.dylib"
+                          Condition="Exists('..\ArcCollision\build\macos-universal\libarccollision.dylib')" />
     </ItemGroup>
     <Copy SourceFiles="@(NativeArcCollision)" DestinationFolder="$(TargetDir)"
           SkipUnchangedFiles="true" Condition="'@(NativeArcCollision)' != ''" />

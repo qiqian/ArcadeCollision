@@ -3,20 +3,25 @@ using System;
 namespace ArcCollision;
 
 /// <summary>
-/// Broadphase axis-aligned bounds in the 24.8 fixed-point grid (integer min/max),
-/// the currency of <see cref="DynamicAabbTree"/> and <see cref="StaticBvh"/>. Kept
-/// as exact integers so tree structure and pair enumeration are deterministic.
+/// Broadphase axis-aligned bounds in the 24.8 fixed-point grid, stored as int32
+/// min/max. int32 (16 bytes) keeps <see cref="DynamicAabbTree"/> / <see cref="StaticBvh"/>
+/// nodes cache-dense — the real broadphase win, since traversal is memory-bound.
+/// This holds because the ±<see cref="Fx.MaxInput"/> coordinate limit keeps every
+/// bound within int32 (position ± extent, ×256). Derived spans (max − min, up to
+/// ~2^31) widen to long for <see cref="Perimeter"/> / <see cref="CenterX"/> so they
+/// never overflow. Kept exact so tree structure and pair enumeration stay
+/// deterministic; mirrors the native arc_bp_bounds.
 /// </summary>
 public readonly struct BpBounds
 {
-    public readonly long MinX, MinY, MaxX, MaxY;
+    public readonly int MinX, MinY, MaxX, MaxY;
 
     public BpBounds(long minX, long minY, long maxX, long maxY)
     {
-        MinX = minX;
-        MinY = minY;
-        MaxX = maxX;
-        MaxY = maxY;
+        MinX = (int)minX;
+        MinY = (int)minY;
+        MaxX = (int)maxX;
+        MaxY = (int)maxY;
     }
 
     public BpBounds(Aabb box)
@@ -25,10 +30,10 @@ public readonly struct BpBounds
         long y = Fx.From(box.Center.Y);
         long hx = Math.Abs(Fx.From(box.HalfExtents.X));
         long hy = Math.Abs(Fx.From(box.HalfExtents.Y));
-        MinX = x - hx;
-        MinY = y - hy;
-        MaxX = x + hx;
-        MaxY = y + hy;
+        MinX = (int)(x - hx);
+        MinY = (int)(y - hy);
+        MaxX = (int)(x + hx);
+        MaxY = (int)(y + hy);
     }
 
     public BpBounds(Circle circle)
@@ -36,10 +41,10 @@ public readonly struct BpBounds
         long x = Fx.From(circle.Center.X);
         long y = Fx.From(circle.Center.Y);
         long r = Math.Abs(Fx.From(circle.Radius));
-        MinX = x - r;
-        MinY = y - r;
-        MaxX = x + r;
-        MaxY = y + r;
+        MinX = (int)(x - r);
+        MinY = (int)(y - r);
+        MaxX = (int)(x + r);
+        MaxY = (int)(y + r);
     }
 
     public BpBounds(Capsule capsule)
@@ -49,10 +54,10 @@ public readonly struct BpBounds
         long bx = Fx.From(capsule.B.X);
         long by = Fx.From(capsule.B.Y);
         long r = Math.Abs(Fx.From(capsule.Radius));
-        MinX = Math.Min(ax, bx) - r;
-        MinY = Math.Min(ay, by) - r;
-        MaxX = Math.Max(ax, bx) + r;
-        MaxY = Math.Max(ay, by) + r;
+        MinX = (int)(Math.Min(ax, bx) - r);
+        MinY = (int)(Math.Min(ay, by) - r);
+        MaxX = (int)(Math.Max(ax, bx) + r);
+        MaxY = (int)(Math.Max(ay, by) + r);
     }
 
     public BpBounds(Obb box)
@@ -67,10 +72,10 @@ public readonly struct BpBounds
             Math.Abs(axisX.X) * halfX + Math.Abs(axisY.X) * halfY, FxAxis.One);
         long extentY = Fx.CeilDivPositive(
             Math.Abs(axisX.Y) * halfX + Math.Abs(axisY.Y) * halfY, FxAxis.One);
-        MinX = x - extentX;
-        MinY = y - extentY;
-        MaxX = x + extentX;
-        MaxY = y + extentY;
+        MinX = (int)(x - extentX);
+        MinY = (int)(y - extentY);
+        MaxX = (int)(x + extentX);
+        MaxY = (int)(y + extentY);
     }
 
     public BpBounds(Polygon polygon)
@@ -84,10 +89,10 @@ public readonly struct BpBounds
         FxVec2 offset = FxVec2.From(translation);
         if (rotation.Raw == 0)
         {
-            MinX = polygon.MinXFx + offset.X;
-            MinY = polygon.MinYFx + offset.Y;
-            MaxX = polygon.MaxXFx + offset.X;
-            MaxY = polygon.MaxYFx + offset.Y;
+            MinX = (int)(polygon.MinXFx + offset.X);
+            MinY = (int)(polygon.MinYFx + offset.Y);
+            MaxX = (int)(polygon.MaxXFx + offset.X);
+            MaxY = (int)(polygon.MaxYFx + offset.Y);
             return;
         }
 
@@ -103,10 +108,10 @@ public readonly struct BpBounds
             maxX = Math.Max(maxX, vertex.X);
             maxY = Math.Max(maxY, vertex.Y);
         }
-        MinX = minX;
-        MinY = minY;
-        MaxX = maxX;
-        MaxY = maxY;
+        MinX = (int)minX;
+        MinY = (int)minY;
+        MaxX = (int)maxX;
+        MaxY = (int)maxY;
     }
 
     public BpBounds(Shape shape)
@@ -123,9 +128,10 @@ public readonly struct BpBounds
         };
     }
 
-    public long CenterX => MinX + ((MaxX - MinX) >> 1);
-    public long CenterY => MinY + ((MaxY - MinY) >> 1);
-    public long Perimeter => 2 * ((MaxX - MinX) + (MaxY - MinY));
+    // max − min can reach ~2^31, so widen before halving/summing.
+    public int CenterX => (int)(MinX + (((long)MaxX - MinX) >> 1));
+    public int CenterY => (int)(MinY + (((long)MaxY - MinY) >> 1));
+    public long Perimeter => 2 * (((long)MaxX - MinX) + ((long)MaxY - MinY));
 
     public bool Overlaps(in BpBounds other) =>
         MinX <= other.MaxX && other.MinX <= MaxX
