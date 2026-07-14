@@ -93,8 +93,9 @@ private:
             ++count;
         }
     };
-    std::vector<std::pair<int, Bounds>> source_;
-    std::vector<Leaf> leaves_;
+    // The input set doubles as the build working array: build() sorts it by id
+    // (deterministic) then partitions it in place, so no separate leaf copy.
+    std::vector<Leaf> source_;
     std::vector<Node> nodes_;
     mutable std::vector<int> query_stack_{64};
     int node_count_ = 0;

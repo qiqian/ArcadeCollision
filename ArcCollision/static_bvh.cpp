@@ -11,19 +11,19 @@ namespace arc {
 
 void StaticBvh::add_or_update(int id, const Bounds& bounds) {
     for (auto& item : source_) {
-        if (item.first == id) {
-            item.second = bounds;
+        if (item.id == id) {
+            item.bounds = bounds;
             dirty_ = true;
             return;
         }
     }
-    source_.emplace_back(id, bounds);
+    source_.push_back({id, bounds});
     dirty_ = true;
 }
 
 void StaticBvh::remove(int id) {
     const auto found = std::find_if(source_.begin(), source_.end(),
-        [id](const auto& item) { return item.first == id; });
+        [id](const Leaf& item) { return item.id == id; });
     if (found != source_.end()) {
         source_.erase(found);
         dirty_ = true;
@@ -33,8 +33,6 @@ void StaticBvh::remove(int id) {
 void StaticBvh::ensure_capacity(int leaf_capacity) {
     if (leaf_capacity < 0) throw std::out_of_range("Negative BVH capacity.");
     source_.reserve(static_cast<size_t>(leaf_capacity));
-    if (leaves_.size() < static_cast<size_t>(leaf_capacity))
-        leaves_.resize(static_cast<size_t>(leaf_capacity));
     const int required = leaf_capacity == 0 ? 0 : leaf_capacity * 2 - 1;
     if (nodes_.size() < static_cast<size_t>(required))
         nodes_.resize(static_cast<size_t>(required));
@@ -56,12 +54,11 @@ void StaticBvh::build() {
         return;
     }
     ensure_capacity(count);
+    // Sort by id so the tree is deterministic regardless of add order; the
+    // recursion then partitions source_ in place (order between builds is
+    // irrelevant, since every build re-sorts from scratch).
     std::sort(source_.begin(), source_.end(),
-        [](const auto& a, const auto& b) { return a.first < b.first; });
-    for (int i = 0; i < count; ++i)
-        leaves_[static_cast<size_t>(i)] = {
-            source_[static_cast<size_t>(i)].first,
-            source_[static_cast<size_t>(i)].second};
+        [](const Leaf& a, const Leaf& b) { return a.id < b.id; });
     const int required = count * 2 - 1;
     if (nodes_.size() < static_cast<size_t>(required))
         nodes_.resize(static_cast<size_t>(required));
@@ -96,16 +93,16 @@ void StaticBvh::query(
 int StaticBvh::build_range(int start, int count) {
     const int node_index = node_count_++;
     if (count == 1) {
-        const Leaf leaf = leaves_[static_cast<size_t>(start)];
+        const Leaf leaf = source_[static_cast<size_t>(start)];
         nodes_[static_cast<size_t>(node_index)] = {
             leaf.bounds, -1, -1, leaf.id};
         return node_index;
     }
-    Bounds bounds = leaves_[static_cast<size_t>(start)].bounds;
+    Bounds bounds = source_[static_cast<size_t>(start)].bounds;
     int64_t min_x = bounds.center_x(), max_x = min_x;
     int64_t min_y = bounds.center_y(), max_y = min_y;
     for (int i = start + 1; i < start + count; ++i) {
-        const Bounds& leaf = leaves_[static_cast<size_t>(i)].bounds;
+        const Bounds& leaf = source_[static_cast<size_t>(i)].bounds;
         bounds = Bounds::unite(bounds, leaf);
         min_x = std::min(min_x, static_cast<int64_t>(leaf.center_x()));
         max_x = std::max(max_x, static_cast<int64_t>(leaf.center_x()));
@@ -117,7 +114,7 @@ int StaticBvh::build_range(int start, int count) {
     int middle = partition(start, count, axis, split,
         axis == 0 ? min_x : min_y, axis == 0 ? max_x : max_y);
     if (middle == start || middle == start + count) {
-        std::sort(leaves_.begin() + start, leaves_.begin() + start + count,
+        std::sort(source_.begin() + start, source_.begin() + start + count,
             [axis](const Leaf& a, const Leaf& b) { return leaf_less(a, b, axis); });
         middle = start + count / 2;
     }
@@ -148,7 +145,7 @@ void StaticBvh::find_split(
         if (min == max) continue;
         bins = {};
         for (int i = start; i < start + count; ++i) {
-            const Bounds& bounds = leaves_[static_cast<size_t>(i)].bounds;
+            const Bounds& bounds = source_[static_cast<size_t>(i)].bounds;
             const int64_t center = axis == 0 ? bounds.center_x() : bounds.center_y();
             bins[static_cast<size_t>(to_bin(center, min, max))].add(bounds);
         }
@@ -201,13 +198,13 @@ int StaticBvh::partition(
     int left = start;
     int right = start + count - 1;
     while (left <= right) {
-        const Bounds& bounds = leaves_[static_cast<size_t>(left)].bounds;
+        const Bounds& bounds = source_[static_cast<size_t>(left)].bounds;
         const int64_t center = axis == 0 ? bounds.center_x() : bounds.center_y();
         if (to_bin(center, min, max) <= split) {
             ++left;
         } else {
-            std::swap(leaves_[static_cast<size_t>(left)],
-                      leaves_[static_cast<size_t>(right)]);
+            std::swap(source_[static_cast<size_t>(left)],
+                      source_[static_cast<size_t>(right)]);
             --right;
         }
     }
