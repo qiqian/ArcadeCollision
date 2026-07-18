@@ -9,6 +9,7 @@ internal sealed record BenchmarkOptions(
     int Frames,
     int Iterations,
     int WarmupIterations,
+    int MinimumSampleMilliseconds,
     float FatMargin)
 {
     public const ulong DefaultSeed = 0xA11CE5EEDUL;
@@ -17,9 +18,10 @@ internal sealed record BenchmarkOptions(
         DefaultSeed,
         StaticCount: 1500,
         DynamicCount: 750,
-        Frames: 60,
-        Iterations: 5,
-        WarmupIterations: 1,
+        Frames: 120,
+        Iterations: 9,
+        WarmupIterations: 3,
+        MinimumSampleMilliseconds: 200,
         FatMargin: 4f);
 
     public static BenchmarkOptions Parse(string[] args)
@@ -39,6 +41,7 @@ internal sealed record BenchmarkOptions(
                     Frames = 20,
                     Iterations = 3,
                     WarmupIterations = 1,
+                    MinimumSampleMilliseconds = 20,
                 };
                 continue;
             }
@@ -58,6 +61,10 @@ internal sealed record BenchmarkOptions(
                 "--frames" => options with { Frames = ParseInt(Value(), argument) },
                 "--iterations" => options with { Iterations = ParseInt(Value(), argument) },
                 "--warmup" => options with { WarmupIterations = ParseInt(Value(), argument) },
+                "--sample-ms" => options with
+                {
+                    MinimumSampleMilliseconds = ParseInt(Value(), argument),
+                },
                 "--fat-margin" => options with
                 {
                     FatMargin = float.Parse(Value(), NumberStyles.Float, CultureInfo.InvariantCulture),
@@ -71,6 +78,8 @@ internal sealed record BenchmarkOptions(
         if (options.Frames <= 0) throw new ArgumentOutOfRangeException("--frames");
         if (options.Iterations <= 0) throw new ArgumentOutOfRangeException("--iterations");
         if (options.WarmupIterations < 0) throw new ArgumentOutOfRangeException("--warmup");
+        if (options.MinimumSampleMilliseconds <= 0)
+            throw new ArgumentOutOfRangeException("--sample-ms");
         if (!float.IsFinite(options.FatMargin) || options.FatMargin < 0)
             throw new ArgumentOutOfRangeException("--fat-margin");
         const int maxColliderCount = 1 << 20;
@@ -83,9 +92,9 @@ internal sealed record BenchmarkOptions(
     public string ReproductionArguments => string.Format(
         CultureInfo.InvariantCulture,
         "--seed 0x{0:X} --static {1} --dynamic {2} --frames {3} "
-        + "--iterations {4} --warmup {5} --fat-margin {6}",
+        + "--iterations {4} --warmup {5} --sample-ms {6} --fat-margin {7}",
         Seed, StaticCount, DynamicCount, Frames,
-        Iterations, WarmupIterations, FatMargin);
+        Iterations, WarmupIterations, MinimumSampleMilliseconds, FatMargin);
 
     public static void PrintHelp()
     {
@@ -98,6 +107,7 @@ internal sealed record BenchmarkOptions(
         Console.WriteLine("  --frames <count>       Simulated frames per trial");
         Console.WriteLine("  --iterations <count>   Measured trials per backend");
         Console.WriteLine("  --warmup <count>       Untimed warmup trials per backend");
+        Console.WriteLine("  --sample-ms <ms>       Minimum duration of each query timing sample");
         Console.WriteLine("  --fat-margin <value>   Dynamic-tree fat margin");
         Console.WriteLine("  --quick                Small smoke benchmark preset");
     }

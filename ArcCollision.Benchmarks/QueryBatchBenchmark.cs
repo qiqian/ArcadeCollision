@@ -83,9 +83,9 @@ internal static class QueryBatchBenchmark
         ValidateEquivalent(refResults, refCounts, wrapperResults, wrapperCounts, mode, n);
         long totalHits = refResults.Count;
 
-        double refLoopMs = BestMedianMs(options, threadId,
+        double refLoopMs = StableMedianMs(options, threadId,
             () => refWorld.QueryBatch(refQueries, refResults, refCounts));
-        double nativeLoopMs = BestMedianMs(options, threadId, () =>
+        double nativeLoopMs = StableMedianMs(options, threadId, () =>
         {
             wrapperResults.Clear();
             for (int i = 0; i < wrapperQueries.Length; i++)
@@ -94,7 +94,7 @@ internal static class QueryBatchBenchmark
                 wrapperResults.AddRange(scratch);
             }
         });
-        double nativeBatchMs = BestMedianMs(options, threadId,
+        double nativeBatchMs = StableMedianMs(options, threadId,
             () => wrapperWorld.QueryBatch(wrapperQueries, wrapperResults, wrapperCounts));
 
         double hitsPerQuery = (double)totalHits / n;
@@ -103,20 +103,42 @@ internal static class QueryBatchBenchmark
             + $"{nativeLoopMs / nativeBatchMs,9:0.00}x  {refLoopMs / nativeBatchMs,8:0.00}x  {hitsPerQuery,10:0.00}");
     }
 
-    private static double BestMedianMs(
+    private static double StableMedianMs(
         BenchmarkOptions options, int threadId, Action action)
     {
         for (int i = 0; i < options.WarmupIterations; i++) action();
+
+        // A single small native batch can finish in tens of microseconds. Timing
+        // it once mostly measures scheduler and timer noise, so calibrate an inner
+        // repetition count that keeps every measured sample long enough to span
+        // many OS timer quanta. Calibration is untimed and also finishes tiered
+        // JIT/PInvoke warmup before samples are collected.
+        int repetitions = 1;
+        while (repetitions < 1 << 20)
+        {
+            double elapsedMs = MeasureMs(threadId, action, repetitions);
+            if (elapsedMs >= options.MinimumSampleMilliseconds) break;
+            repetitions = Math.Min(repetitions * 2, 1 << 20);
+        }
+
         var samples = new double[options.Iterations];
         for (int i = 0; i < options.Iterations; i++)
-        {
-            EnsureThread(threadId);
-            long start = Stopwatch.GetTimestamp();
-            action();
-            samples[i] = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
-        }
+            samples[i] = MeasureMs(threadId, action, repetitions) / repetitions;
         Array.Sort(samples);
-        return samples[samples.Length / 2];
+        int middle = samples.Length / 2;
+        return (samples.Length & 1) != 0
+            ? samples[middle]
+            : (samples[middle - 1] + samples[middle]) * 0.5;
+    }
+
+    private static double MeasureMs(int threadId, Action action, int repetitions)
+    {
+        EnsureThread(threadId);
+        long start = Stopwatch.GetTimestamp();
+        for (int i = 0; i < repetitions; i++) action();
+        double elapsedMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        EnsureThread(threadId);
+        return elapsedMs;
     }
 
     // Raw 24.8 centres of every collider, so dense queries can be placed on them.

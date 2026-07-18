@@ -19,6 +19,13 @@ Each measured frame performs:
 The benchmark refuses to report timings if candidate counts, collision counts,
 or hashes differ between backends.
 
+Measured trials use multiple warmups and report medians plus relative
+interquartile ranges. Query timings automatically repeat the same deterministic
+operation inside each sample until the configured minimum sample duration is
+reached, avoiding timer and scheduler noise for small query batches. Use
+`--sample-ms` to change that duration; `--quick` intentionally uses a shorter
+duration for smoke testing.
+
 Build the native Release library first, then run:
 
 ```sh

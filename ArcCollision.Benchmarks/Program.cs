@@ -38,6 +38,7 @@ internal static class Program
         Console.WriteLine($"Scene: static={options.StaticCount}, dynamic={options.DynamicCount}, "
             + $"frames={options.Frames}, fat-margin={options.FatMargin}");
         Console.WriteLine($"Trials: warmup={options.WarmupIterations}, measured={options.Iterations}");
+        Console.WriteLine($"Query timing: >= {options.MinimumSampleMilliseconds} ms/sample (auto-repeated)");
         Console.WriteLine($"Reproduce: dotnet run --project ArcCollision.Benchmarks -c Release -- {options.ReproductionArguments}");
         Console.WriteLine();
 
@@ -126,6 +127,12 @@ internal static class Program
         double updates = (double)options.DynamicCount * options.Frames;
         Console.WriteLine($"Wrapper dynamic updates/s: {updates / (wrapperSummary.SimulationMedian / 1000):N0}");
         Console.WriteLine($"Ref dynamic updates/s:     {updates / (refSummary.SimulationMedian / 1000):N0}");
+        Console.WriteLine();
+        Console.WriteLine("Measured trial relative IQR (P25-P75 / median; lower is steadier):");
+        Console.WriteLine($"ArcCollision.Ref:     build {refSummary.BuildRelativeIqr,6:0.00}%  "
+            + $"simulation {refSummary.SimulationRelativeIqr,6:0.00}%");
+        Console.WriteLine($"ArcCollision.Wrapper: build {wrapperSummary.BuildRelativeIqr,6:0.00}%  "
+            + $"simulation {wrapperSummary.SimulationRelativeIqr,6:0.00}%");
     }
 
     private static void PrintSummary(string name, Summary summary, int frames)
@@ -140,7 +147,9 @@ internal static class Program
         double BuildMedian,
         double BuildBest,
         double SimulationMedian,
-        double SimulationBest)
+        double SimulationBest,
+        double BuildRelativeIqr,
+        double SimulationRelativeIqr)
     {
         public static Summary From(TrialResult[] source)
         {
@@ -148,8 +157,15 @@ internal static class Program
             double[] simulations = source.Select(result => result.SimulationTime.TotalMilliseconds).ToArray();
             Array.Sort(builds);
             Array.Sort(simulations);
+            double buildMedian = Median(builds);
+            double simulationMedian = Median(simulations);
             return new Summary(
-                Median(builds), builds[0], Median(simulations), simulations[0]);
+                buildMedian,
+                builds[0],
+                simulationMedian,
+                simulations[0],
+                RelativeIqr(builds, buildMedian),
+                RelativeIqr(simulations, simulationMedian));
         }
 
         private static double Median(double[] sorted)
@@ -158,6 +174,22 @@ internal static class Program
             return (sorted.Length & 1) != 0
                 ? sorted[middle]
                 : (sorted[middle - 1] + sorted[middle]) * 0.5;
+        }
+
+        private static double RelativeIqr(double[] sorted, double median)
+        {
+            if (median <= 0) return 0;
+            return (Percentile(sorted, 0.75) - Percentile(sorted, 0.25))
+                / median * 100;
+        }
+
+        private static double Percentile(double[] sorted, double percentile)
+        {
+            double position = (sorted.Length - 1) * percentile;
+            int lower = (int)position;
+            int upper = Math.Min(lower + 1, sorted.Length - 1);
+            double fraction = position - lower;
+            return sorted[lower] + (sorted[upper] - sorted[lower]) * fraction;
         }
     }
 }
