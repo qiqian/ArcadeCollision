@@ -173,8 +173,8 @@ public static class Sweep
     public static SweepAlgorithm GetAlgorithm(in Shape mover, in Shape target)
     {
         NativeShape a = mover.ToNative(), b = target.ToNative();
-        var result = (SweepAlgorithm)NativeMethods.GetSweepAlgorithm(a, b);
-        GC.KeepAlive(mover.PolygonObject); GC.KeepAlive(target.PolygonObject);
-        return result;
+        // The native selector only inspects the two shape-kind tags; it never
+        // dereferences polygon geometry pointers, so no owner keep-alive is needed.
+        return (SweepAlgorithm)NativeMethods.GetSweepAlgorithm(a, b);
     }
 }

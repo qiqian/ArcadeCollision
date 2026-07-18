@@ -27,20 +27,43 @@ internal struct NativeShape
     [FieldOffset(8)] public Vec2 PolygonTranslation;
     [FieldOffset(16)] public IntPtr Polygon;
 
-    public NativeShape(in Shape shape)
+    public NativeShape(in Shape shape) => this = shape.ToNative();
+
+    public NativeShape(Circle value)
     {
         this = default;
-        Kind = (int)shape.Kind;
-        if (shape.TryGetCircle(out Circle circle)) Circle = circle;
-        else if (shape.TryGetAabb(out Aabb aabb)) Aabb = aabb;
-        else if (shape.TryGetCapsule(out Capsule capsule)) Capsule = capsule;
-        else if (shape.TryGetObb(out Obb obb)) Obb = obb;
-        else if (shape.TryGetPolygon(out Polygon? polygon, out Vec2 translation, out Angle32 rotation))
-        {
-            Polygon = polygon!.Handle.DangerousGetHandle();
-            PolygonTranslation = translation;
-            PolygonRotation = rotation.Raw;
-        }
+        Kind = (int)ShapeKind.Circle;
+        Circle = value;
+    }
+
+    public NativeShape(Aabb value)
+    {
+        this = default;
+        Kind = (int)ShapeKind.Aabb;
+        Aabb = value;
+    }
+
+    public NativeShape(Capsule value)
+    {
+        this = default;
+        Kind = (int)ShapeKind.Capsule;
+        Capsule = value;
+    }
+
+    public NativeShape(Obb value)
+    {
+        this = default;
+        Kind = (int)ShapeKind.Obb;
+        Obb = value;
+    }
+
+    public NativeShape(Polygon value, Vec2 translation, Angle32 rotation)
+    {
+        this = default;
+        Kind = (int)ShapeKind.Polygon;
+        Polygon = value.Handle.DangerousGetHandle();
+        PolygonTranslation = translation;
+        PolygonRotation = rotation.Raw;
     }
 
     public Shape ToManagedOwned()
@@ -59,43 +82,10 @@ internal struct NativeShape
 }
 
 [StructLayout(LayoutKind.Sequential)]
-internal readonly struct NativeHandle
+internal readonly struct NativeContact
 {
-    public readonly uint PackedIndex, PackedEntityId;
-    public NativeHandle(uint index, uint entity) { PackedIndex = index; PackedEntityId = entity; }
-}
-[StructLayout(LayoutKind.Sequential)] internal readonly struct NativePair
-{
-    public readonly NativeHandle A, B;
-    public NativePair(NativeHandle a, NativeHandle b) { A = a; B = b; }
-}
-[StructLayout(LayoutKind.Sequential)] internal readonly struct NativeContact { public readonly NativeHandle A, B; public readonly Manifold Manifold; }
-[StructLayout(LayoutKind.Sequential)]
-internal readonly struct NativeSweepHit
-{
-    // Keep arc_bool as its raw int32 representation. MarshalAs only applies when
-    // the marshaller owns the copy; World bulk results are read through a native
-    // pointer and therefore must be blittable byte-for-byte.
-    public readonly int Hit;
-    public readonly float Time;
-    public readonly Vec2 Normal, Point;
-    public SweepHit ToManaged() => new(Hit != 0, Time, Normal, Point);
-}
-[StructLayout(LayoutKind.Sequential)] internal readonly struct NativeCastHit { public readonly NativeHandle Handle; public readonly NativeSweepHit Hit; }
-[StructLayout(LayoutKind.Sequential)] internal readonly struct NativeOptions { public readonly float FatMargin; public readonly int ColliderCapacity, PairCapacity; public NativeOptions(in ArcWorldOptions o) { FatMargin = o.FatMargin; ColliderCapacity = o.InitialColliderCapacity; PairCapacity = o.InitialPairCapacity; } }
-[StructLayout(LayoutKind.Sequential)]
-internal readonly struct NativeTransform
-{
-    public readonly Vec2 Position;
-    public readonly uint Rotation;
-    public readonly float Scale;
-
-    public NativeTransform(in Transform transform)
-    {
-        Position = transform.Position;
-        Rotation = transform.Rotation.Raw;
-        Scale = transform.Scale;
-    }
+    public readonly CandidatePair Pair;
+    public readonly Manifold Manifold;
 }
 
 internal sealed class NativeWorldHandle : SafeHandleZeroOrMinusOneIsInvalid
@@ -243,7 +233,7 @@ internal static unsafe class NativeMethods
     [DllImport(Library, EntryPoint="arc_moving_shape_vs_shape", CallingConvention=CallingConvention.Cdecl)] internal static extern SweepHit MovingShapeShape(in NativeShape a, Vec2 m, in NativeShape b);
     [DllImport(Library, EntryPoint="arc_get_sweep_algorithm", CallingConvention=CallingConvention.Cdecl)] internal static extern int GetSweepAlgorithm(in NativeShape a, in NativeShape b);
 
-    [DllImport(Library, EntryPoint="arc_world_create", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeWorldHandle WorldCreate(in NativeOptions options);
+    [DllImport(Library, EntryPoint="arc_world_create", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeWorldHandle WorldCreate(in ArcWorldOptions options);
     [DllImport(Library, EntryPoint="arc_world_destroy", CallingConvention=CallingConvention.Cdecl)] internal static extern void WorldDestroy(IntPtr world);
     [DllImport(Library, EntryPoint="arc_world_clear", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldClear(NativeWorldHandle world);
     [DllImport(Library, EntryPoint="arc_world_ensure_capacity", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldEnsureCapacity(NativeWorldHandle world, int collider, int pairs);
@@ -253,25 +243,25 @@ internal static unsafe class NativeMethods
     [DllImport(Library, EntryPoint="arc_world_get_dynamic_count", CallingConvention=CallingConvention.Cdecl)] internal static extern int WorldDynamicCount(NativeWorldHandle world);
     [DllImport(Library, EntryPoint="arc_world_get_static_count", CallingConvention=CallingConvention.Cdecl)] internal static extern int WorldStaticCount(NativeWorldHandle world);
     [DllImport(Library, EntryPoint="arc_world_get_fat_margin", CallingConvention=CallingConvention.Cdecl)] internal static extern float WorldFatMargin(NativeWorldHandle world);
-    [DllImport(Library, EntryPoint="arc_world_add", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldAdd(NativeWorldHandle world, int entity, in NativeShape shape, CollisionFilter filter, int isStatic, int enabled, out NativeHandle handle);
-    [DllImport(Library, EntryPoint="arc_world_update_transform", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldUpdateTransform(NativeWorldHandle world, NativeHandle handle, in NativeTransform transform);
-    [DllImport(Library, EntryPoint="arc_world_update_transform_delta", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldUpdateTransformDelta(NativeWorldHandle world, NativeHandle handle, in NativeTransform delta);
-    [DllImport(Library, EntryPoint="arc_world_remove", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldRemove(NativeWorldHandle world, NativeHandle handle);
-    [DllImport(Library, EntryPoint="arc_world_is_valid", CallingConvention=CallingConvention.Cdecl)] internal static extern int WorldIsValid(NativeWorldHandle world, NativeHandle handle);
-    [DllImport(Library, EntryPoint="arc_world_get_shape", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldGetShape(NativeWorldHandle world, NativeHandle handle, out NativeShape shape);
-    [DllImport(Library, EntryPoint="arc_world_get_filter", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldGetFilter(NativeWorldHandle world, NativeHandle handle, out CollisionFilter filter);
-    [DllImport(Library, EntryPoint="arc_world_set_filter", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldSetFilter(NativeWorldHandle world, NativeHandle handle, CollisionFilter filter);
-    [DllImport(Library, EntryPoint="arc_world_get_enabled", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldGetEnabled(NativeWorldHandle world, NativeHandle handle, out int enabled);
-    [DllImport(Library, EntryPoint="arc_world_set_enabled", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldSetEnabled(NativeWorldHandle world, NativeHandle handle, int enabled);
+    [DllImport(Library, EntryPoint="arc_world_add", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldAdd(NativeWorldHandle world, int entity, in NativeShape shape, CollisionFilter filter, int isStatic, int enabled, out ArcHandle handle);
+    [DllImport(Library, EntryPoint="arc_world_update_transform", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldUpdateTransform(NativeWorldHandle world, ArcHandle handle, in Transform transform);
+    [DllImport(Library, EntryPoint="arc_world_update_transform_delta", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldUpdateTransformDelta(NativeWorldHandle world, ArcHandle handle, in Transform delta);
+    [DllImport(Library, EntryPoint="arc_world_remove", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldRemove(NativeWorldHandle world, ArcHandle handle);
+    [DllImport(Library, EntryPoint="arc_world_is_valid", CallingConvention=CallingConvention.Cdecl)] internal static extern int WorldIsValid(NativeWorldHandle world, ArcHandle handle);
+    [DllImport(Library, EntryPoint="arc_world_get_shape", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldGetShape(NativeWorldHandle world, ArcHandle handle, out NativeShape shape);
+    [DllImport(Library, EntryPoint="arc_world_get_filter", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldGetFilter(NativeWorldHandle world, ArcHandle handle, out CollisionFilter filter);
+    [DllImport(Library, EntryPoint="arc_world_set_filter", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldSetFilter(NativeWorldHandle world, ArcHandle handle, CollisionFilter filter);
+    [DllImport(Library, EntryPoint="arc_world_get_enabled", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldGetEnabled(NativeWorldHandle world, ArcHandle handle, out int enabled);
+    [DllImport(Library, EntryPoint="arc_world_set_enabled", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldSetEnabled(NativeWorldHandle world, ArcHandle handle, int enabled);
     [DllImport(Library, EntryPoint="arc_world_shift_origin", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldShiftOrigin(NativeWorldHandle world, Vec2 delta);
     [DllImport(Library, EntryPoint="arc_world_compute_pairs", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldComputePairs(NativeWorldHandle world, out IntPtr output, out int count);
     [DllImport(Library, EntryPoint="arc_world_query", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldQuery(NativeWorldHandle world, in NativeShape query, CollisionFilter* filter, out IntPtr output, out int count);
     [DllImport(Library, EntryPoint="arc_world_query_batch", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldQueryBatch(NativeWorldHandle world, NativeShape* queries, int count, CollisionFilter* filter, out IntPtr handles, out IntPtr counts, out int total);
-    [DllImport(Library, EntryPoint="arc_world_try_contact_pair", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldContactPair(NativeWorldHandle world, NativePair pair, ManifoldFields fields, out NativeContact contact, out int colliding);
-    [DllImport(Library, EntryPoint="arc_world_try_contact_shape", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldContactShape(NativeWorldHandle world, in NativeShape query, CollisionFilter* filter, NativeHandle target, ManifoldFields fields, out Manifold manifold, out int colliding);
-    [DllImport(Library, EntryPoint="arc_world_shape_cast", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldShapeCast(NativeWorldHandle world, in NativeShape mover, Vec2 motion, CollisionFilter* filter, out NativeCastHit hit, out int found);
+    [DllImport(Library, EntryPoint="arc_world_try_contact_pair", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldContactPair(NativeWorldHandle world, CandidatePair pair, ManifoldFields fields, out NativeContact contact, out int colliding);
+    [DllImport(Library, EntryPoint="arc_world_try_contact_shape", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldContactShape(NativeWorldHandle world, in NativeShape query, CollisionFilter* filter, ArcHandle target, ManifoldFields fields, out Manifold manifold, out int colliding);
+    [DllImport(Library, EntryPoint="arc_world_shape_cast", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldShapeCast(NativeWorldHandle world, in NativeShape mover, Vec2 motion, CollisionFilter* filter, out WorldCastHit hit, out int found);
     [DllImport(Library, EntryPoint="arc_world_shape_cast_all", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldShapeCastAll(NativeWorldHandle world, in NativeShape mover, Vec2 motion, CollisionFilter* filter, out IntPtr output, out int count);
-    [DllImport(Library, EntryPoint="arc_world_ray_cast", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldRayCast(NativeWorldHandle world, Vec2 origin, Vec2 motion, CollisionFilter* filter, out NativeCastHit hit, out int found);
+    [DllImport(Library, EntryPoint="arc_world_ray_cast", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldRayCast(NativeWorldHandle world, Vec2 origin, Vec2 motion, CollisionFilter* filter, out WorldCastHit hit, out int found);
     [DllImport(Library, EntryPoint="arc_world_ray_cast_all", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldRayCastAll(NativeWorldHandle world, Vec2 origin, Vec2 motion, CollisionFilter* filter, out IntPtr output, out int count);
 
     [DllImport(Library, EntryPoint="arc_bp_bounds_from_shape", CallingConvention=CallingConvention.Cdecl)] internal static extern BpBounds BpBoundsFromShape(in NativeShape shape);

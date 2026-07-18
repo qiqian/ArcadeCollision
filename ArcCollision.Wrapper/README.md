@@ -9,6 +9,11 @@ standalone broadphase build/query buffers) is held in reusable unmanaged buffers
 After capacity warmup these paths do not create temporary managed arrays; public
 `List<T>` results and Polygon vertex storage remain managed by design.
 
+Wrapper `Shape` caches the exact 24-byte native ABI representation in its first
+24 bytes and stores only the managed Polygon owner in its final 8 bytes. Calls
+copy the cached representation instead of rediscovering and converting the active
+union member each time.
+
 Switch implementations by changing the namespace import:
 
 ```csharp

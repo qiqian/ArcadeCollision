@@ -552,9 +552,8 @@ public sealed class ArcWorld : IDisposable
     public void ComputePairs(List<CandidatePair> results)
     {
         ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(results);
-        if (TrackContacts) AdvanceContactFrame();
         results.Clear();
+        if (TrackContacts) AdvanceContactFrame();
         _broadphase.ComputePairs(_broadphasePairs);
         for (int i = 0; i < _broadphasePairs.Count; i++)
         {
@@ -590,13 +589,30 @@ public sealed class ArcWorld : IDisposable
     /// the number of handles belonging to queries[k] (its slice follows the sum of
     /// the earlier counts). This reference backend simply loops over the queries.
     /// </summary>
+    /// <param name="queries">Query shapes in input order.</param>
+    /// <param name="results">Cleared, then filled with every query's handles concatenated in input order.</param>
+    /// <param name="counts">
+    /// Cleared, then filled with one value per query. <c>counts[i]</c> is the
+    /// number of handles produced by <c>queries[i]</c>; its slice in
+    /// <paramref name="results"/> starts after the sum of
+    /// <c>counts[0]</c> through <c>counts[i - 1]</c> (zero when <c>i == 0</c>).
+    /// </param>
     public void QueryBatch(
         ReadOnlySpan<Shape> queries, List<ArcHandle> results, List<int> counts)
     {
         QueryBatchCore(queries, default, applyFilter: false, results, counts);
     }
 
-    /// <summary>Mutually filtered batch query; see the unfiltered overload.</summary>
+    /// <summary>Mutually filtered batch query; result grouping matches the unfiltered overload.</summary>
+    /// <param name="queries">Query shapes in input order.</param>
+    /// <param name="filter">Filter applied mutually between every query and candidate collider.</param>
+    /// <param name="results">Cleared, then filled with every query's handles concatenated in input order.</param>
+    /// <param name="counts">
+    /// Cleared, then filled with one value per query. <c>counts[i]</c> is the
+    /// number of handles produced by <c>queries[i]</c>; its slice in
+    /// <paramref name="results"/> starts after the sum of
+    /// <c>counts[0]</c> through <c>counts[i - 1]</c> (zero when <c>i == 0</c>).
+    /// </param>
     public void QueryBatch(
         ReadOnlySpan<Shape> queries,
         in CollisionFilter filter,
@@ -616,7 +632,6 @@ public sealed class ArcWorld : IDisposable
         List<int> counts)
     {
         ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(results);
         ArgumentNullException.ThrowIfNull(counts);
         results.Clear();
         counts.Clear();
@@ -694,7 +709,6 @@ public sealed class ArcWorld : IDisposable
         List<ArcHandle> results)
     {
         ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(results);
         results.Clear();
         BpBounds bounds = new(query);
 
@@ -736,7 +750,6 @@ public sealed class ArcWorld : IDisposable
         List<WorldCastHit> results)
     {
         ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(results);
         results.Clear();
         BpBounds bounds = SweptBounds(mover, motion);
 

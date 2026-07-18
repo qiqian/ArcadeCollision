@@ -219,41 +219,44 @@ public enum ShapeKind { Circle, Aabb, Capsule, Obb, Polygon }
 [StructLayout(LayoutKind.Explicit, Size = 32)]
 public readonly struct Shape
 {
-    [FieldOffset(0)] private readonly Circle _circle;
-    [FieldOffset(0)] private readonly Aabb _aabb;
-    [FieldOffset(0)] private readonly Capsule _capsule;
-    [FieldOffset(0)] private readonly Obb _obb;
-    [FieldOffset(0)] private readonly Vec2 _polygonTranslation;
-    [FieldOffset(8)] private readonly Angle32 _polygonRotation;
-    [FieldOffset(20)] public readonly ShapeKind Kind;
+    // The first 24 bytes are the exact blittable C ABI representation. Kind
+    // overlaps NativeShape.Kind so the public field stays API-compatible with
+    // ArcCollision.Ref without duplicating the tag. The final reference owns a
+    // polygon handle's managed lifetime and is never passed across P/Invoke.
+    [FieldOffset(0)] private readonly NativeShape _native;
+    [FieldOffset(0)] public readonly ShapeKind Kind;
     [FieldOffset(24)] private readonly Polygon? _polygon;
-    public Shape(Circle value) { this = default; Kind = ShapeKind.Circle; _circle = value; }
-    public Shape(Aabb value) { this = default; Kind = ShapeKind.Aabb; _aabb = value; }
-    public Shape(Capsule value) { this = default; Kind = ShapeKind.Capsule; _capsule = value; }
-    public Shape(Obb value) { this = default; Kind = ShapeKind.Obb; _obb = value; }
+    public Shape(Circle value) { this = default; _native = new NativeShape(value); }
+    public Shape(Aabb value) { this = default; _native = new NativeShape(value); }
+    public Shape(Capsule value) { this = default; _native = new NativeShape(value); }
+    public Shape(Obb value) { this = default; _native = new NativeShape(value); }
     public Shape(Polygon value) : this(value, Vec2.Zero, new Angle32(0)) { }
     public Shape(Polygon value, Vec2 translation, Angle32 rotation)
-    { ArgumentNullException.ThrowIfNull(value); this = default; Kind = ShapeKind.Polygon; _polygon = value; _polygonTranslation = translation; _polygonRotation = rotation; }
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        this = default;
+        _native = new NativeShape(value, translation, rotation);
+        _polygon = value;
+    }
     public Shape(Polygon value, Vec2 translation, float rotation) : this(value, translation, Angle32.FromRadians(rotation)) { }
-    public Aabb Bounds => Kind switch { ShapeKind.Circle => _circle.Bounds, ShapeKind.Aabb => _aabb, ShapeKind.Capsule => _capsule.Bounds, ShapeKind.Obb => _obb.Bounds, ShapeKind.Polygon => NativeBounds(), _ => throw new InvalidOperationException() };
-    public Shape Moved(Vec2 delta) => Kind switch { ShapeKind.Circle => _circle.Moved(delta), ShapeKind.Aabb => _aabb.Moved(delta), ShapeKind.Capsule => _capsule.Moved(delta), ShapeKind.Obb => _obb.Moved(delta), ShapeKind.Polygon => new Shape(_polygon!, _polygonTranslation + delta, _polygonRotation), _ => throw new InvalidOperationException() };
+    public Aabb Bounds => Kind switch { ShapeKind.Circle => _native.Circle.Bounds, ShapeKind.Aabb => _native.Aabb, ShapeKind.Capsule => _native.Capsule.Bounds, ShapeKind.Obb => _native.Obb.Bounds, ShapeKind.Polygon => NativeBounds(), _ => throw new InvalidOperationException() };
+    public Shape Moved(Vec2 delta) => Kind switch { ShapeKind.Circle => _native.Circle.Moved(delta), ShapeKind.Aabb => _native.Aabb.Moved(delta), ShapeKind.Capsule => _native.Capsule.Moved(delta), ShapeKind.Obb => _native.Obb.Moved(delta), ShapeKind.Polygon => new Shape(_polygon!, _native.PolygonTranslation + delta, new Angle32(_native.PolygonRotation)), _ => throw new InvalidOperationException() };
     public Shape WithPolygonTransform(Vec2 translation, Angle32 rotation) => Kind == ShapeKind.Polygon ? new Shape(_polygon!, translation, rotation) : throw new InvalidOperationException();
-    public Vec2 PolygonTranslation => Kind == ShapeKind.Polygon ? _polygonTranslation : throw new InvalidOperationException();
-    public Angle32 PolygonRotation => Kind == ShapeKind.Polygon ? _polygonRotation : throw new InvalidOperationException();
-    public bool TryGetCircle(out Circle value) { value = Kind == ShapeKind.Circle ? _circle : default; return Kind == ShapeKind.Circle; }
-    public bool TryGetAabb(out Aabb value) { value = Kind == ShapeKind.Aabb ? _aabb : default; return Kind == ShapeKind.Aabb; }
-    public bool TryGetCapsule(out Capsule value) { value = Kind == ShapeKind.Capsule ? _capsule : default; return Kind == ShapeKind.Capsule; }
-    public bool TryGetObb(out Obb value) { value = Kind == ShapeKind.Obb ? _obb : default; return Kind == ShapeKind.Obb; }
-    public bool TryGetPolygon(out Polygon? geometry, out Vec2 translation, out Angle32 rotation) { bool yes = Kind == ShapeKind.Polygon; geometry = yes ? _polygon : null; translation = yes ? _polygonTranslation : default; rotation = yes ? _polygonRotation : default; return yes; }
+    public Vec2 PolygonTranslation => Kind == ShapeKind.Polygon ? _native.PolygonTranslation : throw new InvalidOperationException();
+    public Angle32 PolygonRotation => Kind == ShapeKind.Polygon ? new Angle32(_native.PolygonRotation) : throw new InvalidOperationException();
+    public bool TryGetCircle(out Circle value) { value = Kind == ShapeKind.Circle ? _native.Circle : default; return Kind == ShapeKind.Circle; }
+    public bool TryGetAabb(out Aabb value) { value = Kind == ShapeKind.Aabb ? _native.Aabb : default; return Kind == ShapeKind.Aabb; }
+    public bool TryGetCapsule(out Capsule value) { value = Kind == ShapeKind.Capsule ? _native.Capsule : default; return Kind == ShapeKind.Capsule; }
+    public bool TryGetObb(out Obb value) { value = Kind == ShapeKind.Obb ? _native.Obb : default; return Kind == ShapeKind.Obb; }
+    public bool TryGetPolygon(out Polygon? geometry, out Vec2 translation, out Angle32 rotation) { bool yes = Kind == ShapeKind.Polygon; geometry = yes ? _polygon : null; translation = yes ? _native.PolygonTranslation : default; rotation = yes ? new Angle32(_native.PolygonRotation) : default; return yes; }
     internal Polygon? PolygonObject => _polygon;
-    internal NativeShape ToNative() => new(this);
+    internal NativeShape ToNative() => _native;
     private Aabb NativeBounds()
     {
-        if (_polygonRotation.Raw == 0)
-            return _polygon!.Bounds.Moved(_polygonTranslation);
-        NativeShape native = ToNative();
+        if (_native.PolygonRotation == 0)
+            return _polygon!.Bounds.Moved(_native.PolygonTranslation);
         FixedValidation.PolygonTransform(this);
-        Aabb result = NativeMethods.ShapeBounds(native);
+        Aabb result = NativeMethods.ShapeBounds(_native);
         GC.KeepAlive(_polygon);
         return result;
     }

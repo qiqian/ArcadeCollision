@@ -1382,8 +1382,14 @@ arc_status ARC_CALL arc_world_query_batch(
 arc_status ARC_CALL arc_world_try_contact_pair(
     arc_world* world, arc_candidate_pair pair, arc_manifold_fields fields,
     arc_contact_pair* output, arc_bool* colliding) {
-    if (!world || !output || !colliding || fields > ARC_MANIFOLD_ALL)
+    if (!world || !output || !colliding) {
+        arc::set_error("World and contact outputs are required.");
         return ARC_STATUS_INVALID_ARGUMENT;
+    }
+    if (fields > ARC_MANIFOLD_ALL) {
+        arc::set_error("Manifold fields are outside the supported range.");
+        return ARC_STATUS_OUT_OF_RANGE;
+    }
     *output = {};
     *colliding = 0;
     Slot* a = get_slot(world, pair.a);
@@ -1413,8 +1419,14 @@ arc_status ARC_CALL arc_world_try_contact_shape(
     const arc_collision_filter* filter, arc_handle target,
     arc_manifold_fields fields, arc_manifold* output, arc_bool* colliding) {
     if (!world || !query || !output || !colliding
-        || fields > ARC_MANIFOLD_ALL || !arc::validate_shape(*query))
+        || !arc::validate_shape(*query)) {
+        arc::set_error("World, a valid query shape, and contact outputs are required.");
         return ARC_STATUS_INVALID_ARGUMENT;
+    }
+    if (fields > ARC_MANIFOLD_ALL) {
+        arc::set_error("Manifold fields are outside the supported range.");
+        return ARC_STATUS_OUT_OF_RANGE;
+    }
     *output = {};
     *colliding = 0;
     Slot* slot = get_slot(world, target);

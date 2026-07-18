@@ -55,6 +55,66 @@ public class WrapperParityTests
     }
 
     [Fact]
+    public void WrapperShapeCachesTheNativeAbiPrefix()
+    {
+        Assert.Equal(32, System.Runtime.CompilerServices.Unsafe.SizeOf<Native.Shape>());
+        Assert.Equal(0, Marshal.OffsetOf<Native.Shape>("_native").ToInt32());
+        Assert.Equal(0, Marshal.OffsetOf<Native.Shape>(nameof(Native.Shape.Kind)).ToInt32());
+        Assert.Equal(24, Marshal.OffsetOf<Native.Shape>("_polygon").ToInt32());
+
+        Type nativeShape = typeof(Native.Shape).Assembly.GetType(
+            "ArcCollision.Wrapper.NativeShape", throwOnError: true)!;
+        Assert.Equal(24, Marshal.SizeOf(nativeShape));
+        Assert.Equal(0, Marshal.OffsetOf(nativeShape, "Kind").ToInt32());
+        Assert.Equal(4, Marshal.OffsetOf(nativeShape, "Circle").ToInt32());
+        Assert.Equal(16, Marshal.OffsetOf(nativeShape, "Polygon").ToInt32());
+    }
+
+    [Fact]
+    public void WrapperHandleIsTheNativeAbiHandle()
+    {
+        Assert.Equal(8, System.Runtime.CompilerServices.Unsafe.SizeOf<Native.ArcHandle>());
+        Assert.Equal(0, Marshal.OffsetOf<Native.ArcHandle>("_packedIndex").ToInt32());
+        Assert.Equal(4, Marshal.OffsetOf<Native.ArcHandle>("_packedEntityId").ToInt32());
+        Assert.Null(typeof(Native.ArcHandle).Assembly.GetType("ArcCollision.Wrapper.NativeHandle"));
+    }
+
+    [Fact]
+    public void WrapperPublicStructsReuseTheNativeAbiLayouts()
+    {
+        Assert.Equal(16, System.Runtime.CompilerServices.Unsafe.SizeOf<Native.CandidatePair>());
+        Assert.Equal(8, Marshal.OffsetOf<Native.CandidatePair>(nameof(Native.CandidatePair.B)).ToInt32());
+
+        Assert.Equal(12, System.Runtime.CompilerServices.Unsafe.SizeOf<Native.ArcWorldOptions>());
+        Assert.Equal(4, Marshal.OffsetOf<Native.ArcWorldOptions>(nameof(Native.ArcWorldOptions.InitialColliderCapacity)).ToInt32());
+        Assert.Equal(8, Marshal.OffsetOf<Native.ArcWorldOptions>(nameof(Native.ArcWorldOptions.InitialPairCapacity)).ToInt32());
+
+        Assert.Equal(16, System.Runtime.CompilerServices.Unsafe.SizeOf<Native.Transform>());
+        Assert.Equal(8, Marshal.OffsetOf<Native.Transform>(nameof(Native.Transform.Rotation)).ToInt32());
+        Assert.Equal(12, Marshal.OffsetOf<Native.Transform>(nameof(Native.Transform.Scale)).ToInt32());
+
+        Assert.Equal(24, System.Runtime.CompilerServices.Unsafe.SizeOf<Native.Manifold>());
+        Assert.Equal(24, System.Runtime.CompilerServices.Unsafe.SizeOf<Native.SweepHit>());
+        Assert.Equal(4, Marshal.OffsetOf<Native.SweepHit>(nameof(Native.SweepHit.Time)).ToInt32());
+        Assert.Equal(32, System.Runtime.CompilerServices.Unsafe.SizeOf<Native.WorldCastHit>());
+        Assert.Equal(8, Marshal.OffsetOf<Native.WorldCastHit>(nameof(Native.WorldCastHit.Hit)).ToInt32());
+
+        Assembly wrapper = typeof(Native.ArcHandle).Assembly;
+        Assert.Null(wrapper.GetType("ArcCollision.Wrapper.NativePair"));
+        Assert.Null(wrapper.GetType("ArcCollision.Wrapper.NativeOptions"));
+        Assert.Null(wrapper.GetType("ArcCollision.Wrapper.NativeTransform"));
+        Assert.Null(wrapper.GetType("ArcCollision.Wrapper.NativeSweepHit"));
+        Assert.Null(wrapper.GetType("ArcCollision.Wrapper.NativeCastHit"));
+
+        // ContactPair has a managed-only Frame suffix, so its 40-byte C prefix
+        // remains the one justified native transport structure.
+        Type nativeContact = wrapper.GetType(
+            "ArcCollision.Wrapper.NativeContact", throwOnError: true)!;
+        Assert.Equal(40, Marshal.SizeOf(nativeContact));
+        Assert.Equal(44, System.Runtime.CompilerServices.Unsafe.SizeOf<Native.ContactPair>());
+    }
+
+    [Fact]
     public void PrimitiveNarrowphaseMatchesReference()
     {
         Ref.Circle refCircle = new(new Ref.Vec2(0, 0), 2);
@@ -443,6 +503,27 @@ public class WrapperParityTests
             refShape, refShape, (Ref.ManifoldFields)3));
         Assert.Throws<ArgumentOutOfRangeException>(() => Native.Collide.ShapeVsShape(
             nativeShape, nativeShape, (Native.ManifoldFields)3));
+    }
+
+    [Fact]
+    public void NativeWorldValidatesManifoldFieldsInTheNativeLayer()
+    {
+        using var world = new Native.ArcWorld(2f);
+        Native.ArcHandle first = world.Add(
+            1, new Native.Circle(Native.Vec2.Zero, 1f));
+        world.Add(2, new Native.Circle(new Native.Vec2(1f, 0f), 1f));
+        var pairs = new List<Native.CandidatePair>();
+        world.ComputePairs(pairs);
+        Native.ManifoldFields invalid = (Native.ManifoldFields)3;
+
+        ArgumentOutOfRangeException pairError = Assert.Throws<ArgumentOutOfRangeException>(
+            () => world.TryComputeContact(pairs[0], out _, invalid));
+        Assert.Equal("fields", pairError.ParamName);
+
+        var query = new Native.Shape(new Native.Circle(Native.Vec2.Zero, 1f));
+        ArgumentOutOfRangeException shapeError = Assert.Throws<ArgumentOutOfRangeException>(
+            () => world.TryComputeContact(query, first, out _, invalid));
+        Assert.Equal("fields", shapeError.ParamName);
     }
 
     [Fact]

@@ -10,7 +10,6 @@ public readonly struct ArcHandle : IEquatable<ArcHandle>
     public const int MaxGeneration = (1 << GenerationBits) - 1;
     public const int MaxEntityId = (1 << 28) - 1;
     private readonly uint _packedIndex, _packedEntityId;
-    internal ArcHandle(NativeHandle h) { _packedIndex = h.PackedIndex; _packedEntityId = h.PackedEntityId; }
     internal ArcHandle(int index, uint generation, uint worldId, int entityId)
     {
         if ((uint)index > MaxIndex || generation is 0 or > MaxGeneration
@@ -20,7 +19,6 @@ public readonly struct ArcHandle : IEquatable<ArcHandle>
         _packedIndex = (generation << IndexBits) | (uint)index;
         _packedEntityId = (worldId << 28) | (uint)entityId;
     }
-    internal NativeHandle Native => new(_packedIndex, _packedEntityId);
     internal int Index => (int)(_packedIndex & MaxIndex);
     internal uint Generation => _packedIndex >> IndexBits;
     internal uint WorldId => _packedEntityId >> 28;
@@ -54,8 +52,6 @@ public readonly struct ArcHandle : IEquatable<ArcHandle>
 public readonly struct CandidatePair
 {
     public readonly ArcHandle A, B;
-    internal CandidatePair(NativePair pair) { A = new(pair.A); B = new(pair.B); }
-    internal NativePair Native => new(A.Native, B.Native);
 
     /// <summary>Stable per-pair identity; see <see cref="ArcHandle.PairId"/>.</summary>
     public ulong Id => ArcHandle.PairId(A, B);
@@ -73,7 +69,7 @@ public readonly struct ContactPair
     /// <see cref="ArcWorld.TrackContacts"/> is enabled on the world.
     /// </summary>
     public readonly int Frame;
-    internal ContactPair(NativeContact value, int frame) { A = new(value.A); B = new(value.B); Manifold = value.Manifold; Frame = frame; }
+    internal ContactPair(NativeContact value, int frame) { A = value.Pair.A; B = value.Pair.B; Manifold = value.Manifold; Frame = frame; }
 
     /// <summary>
     /// Stable per-pair identity, the same across frames while both colliders live,
@@ -86,7 +82,6 @@ public readonly struct WorldCastHit
 {
     public readonly ArcHandle Handle;
     public readonly SweepHit Hit;
-    internal WorldCastHit(NativeCastHit value) { Handle = new(value.Handle); Hit = value.Hit.ToManaged(); }
 }
 
 public sealed unsafe class ArcWorld : IDisposable
@@ -103,8 +98,7 @@ public sealed unsafe class ArcWorld : IDisposable
     {
         _ = FixedValidation.From(options.FatMargin);
         if (NativeMethods.GetAbiVersion() != 5) throw new InvalidOperationException("ArcCollision native ABI version mismatch.");
-        NativeOptions native = new(options);
-        _handle = NativeMethods.WorldCreate(native);
+        _handle = NativeMethods.WorldCreate(options);
         if (_handle.IsInvalid)
             NativeMethods.ThrowLastOperationError("Native world creation failed.");
     }
@@ -128,11 +122,10 @@ public sealed unsafe class ArcWorld : IDisposable
         if ((uint)entityId > ArcHandle.MaxEntityId)
             throw new ArgumentOutOfRangeException(nameof(entityId), entityId,
                 $"Entity id must be between 0 and {ArcHandle.MaxEntityId}.");
-        FixedValidation.Shape(shape);
         NativeShape native = shape.ToNative();
-        NativeMethods.Check(NativeMethods.WorldAdd(Handle, entityId, native, filter, isStatic ? 1 : 0, enabled ? 1 : 0, out NativeHandle result), nameof(entityId));
+        NativeMethods.Check(NativeMethods.WorldAdd(Handle, entityId, native, filter, isStatic ? 1 : 0, enabled ? 1 : 0, out ArcHandle result), nameof(entityId));
         GC.KeepAlive(shape.PolygonObject);
-        return new ArcHandle(result);
+        return result;
     }
 
     public void EnsureCapacity(int colliderCapacity, int pairCapacity = 0)
@@ -160,9 +153,8 @@ public sealed unsafe class ArcWorld : IDisposable
             throw new ArgumentException(
                 "Handle is stale or does not belong to this world.", nameof(handle));
         FixedValidation.Vec2(transform.Position);
-        NativeTransform native = new(transform);
         NativeMethods.Check(
-            NativeMethods.WorldUpdateTransform(Handle, handle.Native, native),
+            NativeMethods.WorldUpdateTransform(Handle, handle, transform),
             nameof(transform));
     }
 
@@ -175,16 +167,15 @@ public sealed unsafe class ArcWorld : IDisposable
             throw new ArgumentException(
                 "Handle is stale or does not belong to this world.", nameof(handle));
         FixedValidation.Vec2(delta.Position);
-        NativeTransform native = new(delta);
         NativeMethods.Check(
-            NativeMethods.WorldUpdateTransformDelta(Handle, handle.Native, native),
+            NativeMethods.WorldUpdateTransformDelta(Handle, handle, delta),
             nameof(delta));
     }
-    public void Remove(ArcHandle handle) => NativeMethods.Check(NativeMethods.WorldRemove(Handle, handle.Native), nameof(handle));
-    public bool IsValid(ArcHandle handle) => NativeMethods.WorldIsValid(Handle, handle.Native) != 0;
+    public void Remove(ArcHandle handle) => NativeMethods.Check(NativeMethods.WorldRemove(Handle, handle), nameof(handle));
+    public bool IsValid(ArcHandle handle) => NativeMethods.WorldIsValid(Handle, handle) != 0;
     public Shape GetShape(ArcHandle handle)
     {
-        NativeMethods.Check(NativeMethods.WorldGetShape(Handle, handle.Native, out NativeShape shape), nameof(handle));
+        NativeMethods.Check(NativeMethods.WorldGetShape(Handle, handle, out NativeShape shape), nameof(handle));
         return shape.ToManagedOwned();
     }
     public bool TryGetShape(ArcHandle handle, out Shape shape)
@@ -192,7 +183,7 @@ public sealed unsafe class ArcWorld : IDisposable
         if (!IsValid(handle)) { shape = default; return false; }
         shape = GetShape(handle); return true;
     }
-    public CollisionFilter GetFilter(ArcHandle handle) { NativeMethods.Check(NativeMethods.WorldGetFilter(Handle, handle.Native, out CollisionFilter filter), nameof(handle)); return filter; }
+    public CollisionFilter GetFilter(ArcHandle handle) { NativeMethods.Check(NativeMethods.WorldGetFilter(Handle, handle, out CollisionFilter filter), nameof(handle)); return filter; }
     public bool TryGetFilter(ArcHandle handle, out CollisionFilter filter)
     {
         if (!IsValid(handle)) { filter = default; return false; }
@@ -203,9 +194,9 @@ public sealed unsafe class ArcWorld : IDisposable
         if (!IsValid(handle)) throw new ArgumentException("Handle is stale or belongs to another world.", nameof(handle));
         return handle.EntityId;
     }
-    public void SetFilter(ArcHandle handle, in CollisionFilter filter) => NativeMethods.Check(NativeMethods.WorldSetFilter(Handle, handle.Native, filter), nameof(handle));
-    public bool IsEnabled(ArcHandle handle) { NativeMethods.Check(NativeMethods.WorldGetEnabled(Handle, handle.Native, out int enabled), nameof(handle)); return enabled != 0; }
-    public void SetEnabled(ArcHandle handle, bool enabled) => NativeMethods.Check(NativeMethods.WorldSetEnabled(Handle, handle.Native, enabled ? 1 : 0), nameof(handle));
+    public void SetFilter(ArcHandle handle, in CollisionFilter filter) => NativeMethods.Check(NativeMethods.WorldSetFilter(Handle, handle, filter), nameof(handle));
+    public bool IsEnabled(ArcHandle handle) { NativeMethods.Check(NativeMethods.WorldGetEnabled(Handle, handle, out int enabled), nameof(handle)); return enabled != 0; }
+    public void SetEnabled(ArcHandle handle, bool enabled) => NativeMethods.Check(NativeMethods.WorldSetEnabled(Handle, handle, enabled ? 1 : 0), nameof(handle));
     public void Clear()
     {
         NativeMethods.Check(NativeMethods.WorldClear(Handle));
@@ -232,11 +223,11 @@ public sealed unsafe class ArcWorld : IDisposable
 
     public void ComputePairs(List<CandidatePair> results)
     {
-        ArgumentNullException.ThrowIfNull(results); results.Clear();
+        results.Clear();
         if (TrackContacts) AdvanceContactFrame();
         NativeMethods.Check(NativeMethods.WorldComputePairs(Handle, out IntPtr data, out int count));
-        NativePair* source = (NativePair*)data;
-        for (int i = 0; i < count; i++) results.Add(new CandidatePair(source[i]));
+        CandidatePair* source = (CandidatePair*)data;
+        for (int i = 0; i < count; i++) results.Add(source[i]);
     }
 
     private void AdvanceContactFrame()
@@ -270,41 +261,63 @@ public sealed unsafe class ArcWorld : IDisposable
     private void QueryCore(in Shape query, CollisionFilter* filter, List<ArcHandle> results)
     {
         _ = Handle;
-        ArgumentNullException.ThrowIfNull(results);
         results.Clear();
-        FixedValidation.Shape(query);
         NativeShape native = query.ToNative();
         NativeMethods.Check(NativeMethods.WorldQuery(Handle, native, filter, out IntPtr data, out int count));
-        NativeHandle* source = (NativeHandle*)data;
-        for (int i = 0; i < count; i++) results.Add(new ArcHandle(source[i]));
+        ArcHandle* source = (ArcHandle*)data;
+        for (int i = 0; i < count; i++) results.Add(source[i]);
         GC.KeepAlive(query.PolygonObject);
     }
 
+    /// <summary>Queries several shapes in one native call.</summary>
+    /// <param name="queries">Query shapes in input order.</param>
+    /// <param name="results">Cleared, then filled with every query's handles concatenated in input order.</param>
+    /// <param name="counts">
+    /// Cleared, then filled with one value per query. <c>counts[i]</c> is the
+    /// number of handles produced by <c>queries[i]</c>; its slice in
+    /// <paramref name="results"/> starts after the sum of
+    /// <c>counts[0]</c> through <c>counts[i - 1]</c> (zero when <c>i == 0</c>).
+    /// </param>
     public void QueryBatch(ReadOnlySpan<Shape> queries, List<ArcHandle> results, List<int> counts) => QueryBatchCore(queries, null, results, counts);
+
+    /// <summary>Mutually filtered batch query; result grouping matches the unfiltered overload.</summary>
+    /// <param name="queries">Query shapes in input order.</param>
+    /// <param name="filter">Filter applied mutually between every query and candidate collider.</param>
+    /// <param name="results">Cleared, then filled with every query's handles concatenated in input order.</param>
+    /// <param name="counts">
+    /// Cleared, then filled with one value per query. <c>counts[i]</c> is the
+    /// number of handles produced by <c>queries[i]</c>; its slice in
+    /// <paramref name="results"/> starts after the sum of
+    /// <c>counts[0]</c> through <c>counts[i - 1]</c> (zero when <c>i == 0</c>).
+    /// </param>
     public void QueryBatch(ReadOnlySpan<Shape> queries, in CollisionFilter filter, List<ArcHandle> results, List<int> counts) { CollisionFilter copy = filter; QueryBatchCore(queries, &copy, results, counts); }
     private void QueryBatchCore(ReadOnlySpan<Shape> queries, CollisionFilter* filter, List<ArcHandle> results, List<int> counts)
     {
         _ = Handle;
-        ArgumentNullException.ThrowIfNull(results);
-        ArgumentNullException.ThrowIfNull(counts);
         results.Clear();
         counts.Clear();
         int n = queries.Length;
         if (n == 0) return;
         NativeShape* native = (_queryBatchNative ??= new()).EnsureCapacity(n);
+        bool hasPolygons = false;
         for (int i = 0; i < n; i++)
         {
-            FixedValidation.Shape(queries[i]);
             native[i] = queries[i].ToNative();
+            hasPolygons |= queries[i].Kind == ShapeKind.Polygon;
         }
         NativeMethods.Check(NativeMethods.WorldQueryBatch(
             Handle, native, n, filter,
             out IntPtr handleData, out IntPtr countData, out int total));
-        NativeHandle* handleSource = (NativeHandle*)handleData;
-        for (int i = 0; i < total; i++) results.Add(new ArcHandle(handleSource[i]));
+        ArcHandle* handleSource = (ArcHandle*)handleData;
+        for (int i = 0; i < total; i++) results.Add(handleSource[i]);
         int* countSource = (int*)countData;
         for (int k = 0; k < n; k++) counts.Add(countSource[k]);
-        for (int i = 0; i < n; i++) GC.KeepAlive(queries[i].PolygonObject);
+        // Primitive-only batches contain no managed objects referenced solely by
+        // the native scratch array, so avoid another full O(N) scan. Polygon
+        // batches keep every geometry handle owner alive through the C call.
+        if (hasPolygons)
+            for (int i = 0; i < n; i++)
+                GC.KeepAlive(queries[i].PolygonObject);
     }
 
     public bool TryComputeContact(
@@ -312,11 +325,10 @@ public sealed unsafe class ArcWorld : IDisposable
         out ContactPair contact,
         ManifoldFields fields = ManifoldFields.All)
     {
-        FixedValidation.ManifoldMode(fields);
         NativeStatus status = NativeMethods.WorldContactPair(
-            Handle, pair.Native, fields, out NativeContact native, out int colliding);
+            Handle, pair, fields, out NativeContact native, out int colliding);
         if (status == NativeStatus.InvalidHandle) { contact = default; return false; }
-        NativeMethods.Check(status);
+        NativeMethods.Check(status, nameof(fields));
         if (colliding == 0) { contact = default; return false; }
         int frame = TrackContacts ? RecordContactFrame(ArcHandle.PairId(pair.A, pair.B)) : 0;
         contact = new ContactPair(native, frame);
@@ -337,12 +349,10 @@ public sealed unsafe class ArcWorld : IDisposable
         in Shape query, CollisionFilter* filter, ArcHandle target,
         out Manifold manifold, ManifoldFields fields)
     {
-        FixedValidation.ManifoldMode(fields);
         _ = Handle;
-        FixedValidation.Shape(query);
         NativeShape native = query.ToNative();
         NativeStatus status = NativeMethods.WorldContactShape(
-            Handle, native, filter, target.Native, fields,
+            Handle, native, filter, target, fields,
             out manifold, out int colliding);
         GC.KeepAlive(query.PolygonObject);
         if (status == NativeStatus.InvalidHandle)
@@ -350,7 +360,7 @@ public sealed unsafe class ArcWorld : IDisposable
             manifold = Manifold.None;
             return false;
         }
-        NativeMethods.Check(status);
+        NativeMethods.Check(status, nameof(fields));
         return colliding != 0;
     }
 
@@ -359,24 +369,21 @@ public sealed unsafe class ArcWorld : IDisposable
     private bool ShapeCastCore(in Shape mover, Vec2 motion, CollisionFilter* filter, out WorldCastHit closest)
     {
         _ = Handle;
-        FixedValidation.Shape(mover);
         FixedValidation.Vec2(motion);
-        NativeShape native = mover.ToNative(); NativeMethods.Check(NativeMethods.WorldShapeCast(Handle, native, motion, filter, out NativeCastHit hit, out int found));
-        GC.KeepAlive(mover.PolygonObject); closest = found != 0 ? new WorldCastHit(hit) : default; return found != 0;
+        NativeShape native = mover.ToNative(); NativeMethods.Check(NativeMethods.WorldShapeCast(Handle, native, motion, filter, out WorldCastHit hit, out int found));
+        GC.KeepAlive(mover.PolygonObject); closest = found != 0 ? hit : default; return found != 0;
     }
     public void ShapeCastAll(in Shape mover, Vec2 motion, List<WorldCastHit> results) => ShapeCastAllCore(mover, motion, null, results);
     public void ShapeCastAll(in Shape mover, Vec2 motion, in CollisionFilter filter, List<WorldCastHit> results) { CollisionFilter copy = filter; ShapeCastAllCore(mover, motion, &copy, results); }
     private void ShapeCastAllCore(in Shape mover, Vec2 motion, CollisionFilter* filter, List<WorldCastHit> results)
     {
         _ = Handle;
-        ArgumentNullException.ThrowIfNull(results);
         results.Clear();
-        FixedValidation.Shape(mover);
         FixedValidation.Vec2(motion);
         NativeShape native = mover.ToNative();
         NativeMethods.Check(NativeMethods.WorldShapeCastAll(Handle, native, motion, filter, out IntPtr data, out int count));
-        NativeCastHit* source = (NativeCastHit*)data;
-        for (int i = 0; i < count; i++) results.Add(new WorldCastHit(source[i]));
+        WorldCastHit* source = (WorldCastHit*)data;
+        for (int i = 0; i < count; i++) results.Add(source[i]);
         GC.KeepAlive(mover.PolygonObject);
     }
     public bool RayCast(Vec2 origin, Vec2 motion, out WorldCastHit closest) => RayCastCore(origin, motion, null, out closest);
@@ -386,8 +393,8 @@ public sealed unsafe class ArcWorld : IDisposable
         _ = Handle;
         FixedValidation.Vec2(origin);
         FixedValidation.Vec2(motion);
-        NativeMethods.Check(NativeMethods.WorldRayCast(Handle, origin, motion, filter, out NativeCastHit hit, out int found));
-        closest = found != 0 ? new WorldCastHit(hit) : default;
+        NativeMethods.Check(NativeMethods.WorldRayCast(Handle, origin, motion, filter, out WorldCastHit hit, out int found));
+        closest = found != 0 ? hit : default;
         return found != 0;
     }
     public void RayCastAll(Vec2 origin, Vec2 motion, List<WorldCastHit> results) => RayCastAllCore(origin, motion, null, results);
@@ -395,13 +402,12 @@ public sealed unsafe class ArcWorld : IDisposable
     private void RayCastAllCore(Vec2 origin, Vec2 motion, CollisionFilter* filter, List<WorldCastHit> results)
     {
         _ = Handle;
-        ArgumentNullException.ThrowIfNull(results);
         results.Clear();
         FixedValidation.Vec2(origin);
         FixedValidation.Vec2(motion);
         NativeMethods.Check(NativeMethods.WorldRayCastAll(Handle, origin, motion, filter, out IntPtr data, out int count));
-        NativeCastHit* source = (NativeCastHit*)data;
-        for (int i = 0; i < count; i++) results.Add(new WorldCastHit(source[i]));
+        WorldCastHit* source = (WorldCastHit*)data;
+        for (int i = 0; i < count; i++) results.Add(source[i]);
     }
 
     public void Dispose()
