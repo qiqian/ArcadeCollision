@@ -122,6 +122,25 @@ int check_fixed_core() {
     for (int64_t value : sqrt_cases)
         if (arc::sqrt_i64(value) != scalar_sqrt(value)) return 30;
 
+    // Newton starts from a power-of-two upper bound. Values immediately around
+    // perfect squares pin both its convergence condition and floor semantics,
+    // including the largest root whose square fits in a signed int64.
+    const int64_t sqrt_roots[] = {
+        0, 1, 2, 3, 15, 16, 17, 255, 256, 257,
+        32767, 65535, INT64_C(1048576), INT64_C(16777216),
+        INT64_C(3037000499),
+    };
+    for (int64_t root : sqrt_roots) {
+        const int64_t square = root * root;
+        const int64_t first = square == 0 ? 0 : square - 1;
+        const int64_t last = square == std::numeric_limits<int64_t>::max()
+            ? square : square + 1;
+        for (int64_t value = first;; ++value) {
+            if (arc::sqrt_i64(value) != scalar_sqrt(value)) return 38;
+            if (value == last) break;
+        }
+    }
+
     const int64_t division_cases[] = {
         -INT64_C(4000000000000000000), -arc::AxisOne - 1,
         -arc::AxisOne, -1, 0, 1, arc::AxisOne - 1, arc::AxisOne,

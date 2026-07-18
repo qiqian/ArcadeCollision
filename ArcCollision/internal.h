@@ -76,7 +76,7 @@ int64_t ratio_t(int64_t numerator, int64_t denominator);          // num/den as 
 int product_shift(int64_t a, int64_t b, int64_t c);
 int product_shift(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e);
 int64_t scale_product_operand(int64_t value, int shift);
-int64_t sqrt_i64(int64_t value);          // floor integer square root (restoring method)
+int64_t sqrt_i64(int64_t value);          // exact floor integer square root (integer Newton)
 
 // A 2D point/vector in 24.8 fixed point. dot()/length_sq() return values at the
 // squared 2^16 scale; length() takes the integer sqrt back to 24.8.

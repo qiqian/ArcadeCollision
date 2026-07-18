@@ -217,6 +217,22 @@ ARC_NOINLINE uint64_t optimized_div_pass(const FixedScene& scene, int repeats) {
     return result;
 }
 
+ARC_NOINLINE uint64_t scalar_sqrt_pass(const FixedScene& scene, int repeats) {
+    uint64_t result = 0;
+    for (int repeat = 0; repeat < repeats; ++repeat)
+        for (int64_t value : scene.values)
+            result += static_cast<uint64_t>(scalar_sqrt(value));
+    return result;
+}
+
+ARC_NOINLINE uint64_t optimized_sqrt_pass(const FixedScene& scene, int repeats) {
+    uint64_t result = 0;
+    for (int repeat = 0; repeat < repeats; ++repeat)
+        for (int64_t value : scene.values)
+            result += static_cast<uint64_t>(arc::sqrt_i64(value));
+    return result;
+}
+
 ARC_NOINLINE uint64_t scalar_overlap_pass(const Scene& scene, int repeats) {
     uint64_t result = 0;
     for (int repeat = 0; repeat < repeats; ++repeat) {
@@ -349,7 +365,8 @@ int main() {
 
     if (scalar_axis_pass(fixed, 1) != simd_axis_pass(fixed, 1)
         || scalar_shift_pass(fixed, 1) != optimized_shift_pass(fixed, 1)
-        || scalar_div_pass(fixed, 1) != optimized_div_pass(fixed, 1)) {
+        || scalar_div_pass(fixed, 1) != optimized_div_pass(fixed, 1)
+        || scalar_sqrt_pass(fixed, 1) != optimized_sqrt_pass(fixed, 1)) {
         std::cout << "fixed-core optimization mismatch!\n";
         return 3;
     }
@@ -362,5 +379,8 @@ int main() {
     print_comparison("axis division (idiv vs shift)",
         best_milliseconds([&] { return scalar_div_pass(fixed, FixedRepeats); }),
         best_milliseconds([&] { return optimized_div_pass(fixed, FixedRepeats); }));
+    print_comparison("integer sqrt (restoring vs Newton)",
+        best_milliseconds([&] { return scalar_sqrt_pass(fixed, FixedRepeats); }),
+        best_milliseconds([&] { return optimized_sqrt_pass(fixed, FixedRepeats); }));
     return benchmark_sink == UINT64_C(0xffffffffffffffff) ? 1 : 0;
 }

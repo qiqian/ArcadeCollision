@@ -1,5 +1,5 @@
 // Fixed-point core: float<->fixed conversion, rounding-controlled integer
-// division, the restoring integer square root, adaptive product scaling for
+// division, the exact integer square root, adaptive product scaling for
 // degree-four discriminants, and the Q1.30 axis math (bit-serial division plus a
 // CORDIC angle->unit-vector). Everything here is exact integer arithmetic so the
 // managed reference and this native backend agree; see ArcCollision.Ref/Fixed.cs.
@@ -241,24 +241,20 @@ int64_t scale_product_operand(int64_t value, int shift) {
     return shift == 0 ? value : value >> shift;
 }
 
-// Floor integer square root by the restoring (digit-by-digit) method: exact,
-// branch-simple, and identical across platforms. Returns floor(sqrt(value)).
+// Exact floor integer square root. BSR/CLZ supplies a power-of-two upper bound,
+// then integer Newton iteration monotonically tightens it. Starting above the
+// root means the first non-decreasing step is exactly floor(sqrt(value)); all
+// operations are integer-only and therefore bit-identical across platforms.
 int64_t sqrt_i64(int64_t value) {
     if (value <= 0) return 0;
-    uint64_t x = static_cast<uint64_t>(value);
-    uint64_t result = 0;
-    uint64_t bit = uint64_t{1} << 62;
-    while (bit > x) bit >>= 2;
-    while (bit != 0) {
-        if (x >= result + bit) {
-            x -= result + bit;
-            result = (result >> 1) + bit;
-        } else {
-            result >>= 1;
-        }
-        bit >>= 2;
+    const uint64_t input = static_cast<uint64_t>(value);
+    const int bits = bit_width_u64(input);
+    uint64_t estimate = uint64_t{1} << ((bits + 1) >> 1);
+    for (;;) {
+        const uint64_t next = (estimate + input / estimate) >> 1;
+        if (next >= estimate) return static_cast<int64_t>(estimate);
+        estimate = next;
     }
-    return static_cast<int64_t>(result);
 }
 
 Axis Axis::from_vector(const Vec& value, const Axis& fallback) {
