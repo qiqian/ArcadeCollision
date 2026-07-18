@@ -211,6 +211,36 @@ public static partial class Collide
         FxVec2 b1 = FxVec2.From(b.B);
         long radiusA = Math.Abs(Fx.From(a.Radius));
         long radiusB = Math.Abs(Fx.From(b.Radius));
+
+        // The common shallow-contact case has disjoint spines and reduces
+        // exactly to two circles at their closest points. Keep intersecting,
+        // touching and fixed-grid ambiguous spines on the Minkowski SAT path:
+        // closest-point reduction cannot produce their correct MTV.
+        if (!SpinesIntersect(a0, a1, b0, b1))
+        {
+            long spineDistanceSq = Distance.ClosestPointsSegmentSegmentFx(
+                a0, a1, b0, b1, out FxVec2 closestA, out FxVec2 closestB);
+            if (spineDistanceSq != 0)
+            {
+                FxManifold reduced = CircleVsCircleFx(
+                    new FxCircle(closestA, radiusA),
+                    new FxCircle(closestB, radiusB),
+                    computeContact: false);
+                if (!reduced.Colliding) return Manifold.None;
+                FxVec2 reducedContact = computeContact
+                    ? ClampContact(
+                        SupportFeatureContact(
+                            new ConvexProxy(a0, a1, radiusA),
+                            new ConvexProxy(b0, b1, radiusB),
+                            reduced.Normal),
+                        SegmentBounds(a0, a1, radiusA),
+                        SegmentBounds(b0, b1, radiusB))
+                    : FxVec2.Zero;
+                return new FxManifold(
+                    true, reduced.Normal, reduced.Depth, reducedContact).ToManifold();
+            }
+        }
+
         var difference = new ConvexProxy(
             a0 - b0, a1 - b0, a1 - b1, a0 - b1, radiusA + radiusB);
         // This intermediate manifold contributes only its normal/depth.
@@ -229,6 +259,30 @@ public static partial class Collide
             : FxVec2.Zero;
         return new FxManifold(true, normal, configuration.Depth, contact).ToManifold();
     }
+
+    private static bool SpinesIntersect(FxVec2 a, FxVec2 b, FxVec2 c, FxVec2 d)
+    {
+        long abC = Cross(a, b, c);
+        long abD = Cross(a, b, d);
+        long cdA = Cross(c, d, a);
+        long cdB = Cross(c, d, b);
+        if (abC == 0 && OnSegment(a, b, c)) return true;
+        if (abD == 0 && OnSegment(a, b, d)) return true;
+        if (cdA == 0 && OnSegment(c, d, a)) return true;
+        if (cdB == 0 && OnSegment(c, d, b)) return true;
+        return (abC < 0) != (abD < 0) && (cdA < 0) != (cdB < 0);
+    }
+
+    private static long Cross(FxVec2 a, FxVec2 b, FxVec2 c)
+    {
+        FxVec2 ab = b - a;
+        FxVec2 ac = c - a;
+        return ab.X * ac.Y - ab.Y * ac.X;
+    }
+
+    private static bool OnSegment(FxVec2 a, FxVec2 b, FxVec2 point) =>
+        point.X >= Math.Min(a.X, b.X) && point.X <= Math.Max(a.X, b.X)
+        && point.Y >= Math.Min(a.Y, b.Y) && point.Y <= Math.Max(a.Y, b.Y);
 
     public static Manifold CapsuleVsAabb(Capsule cap, Aabb box)
         => CapsuleVsBox(cap, CreateBox(box));

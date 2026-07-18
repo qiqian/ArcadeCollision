@@ -24,6 +24,29 @@ bool canonical_before(Axis candidate, Axis current) {
         || (candidate.x == current.x && candidate.y < current.y);
 }
 
+int64_t segment_cross(Vec a, Vec b, Vec point) {
+    const Vec ab = b - a;
+    const Vec ap = point - a;
+    return ab.x * ap.y - ab.y * ap.x;
+}
+
+bool point_on_segment(Vec a, Vec b, Vec point) {
+    return point.x >= std::min(a.x, b.x) && point.x <= std::max(a.x, b.x)
+        && point.y >= std::min(a.y, b.y) && point.y <= std::max(a.y, b.y);
+}
+
+bool spines_intersect(Vec a, Vec b, Vec c, Vec d) {
+    const int64_t ab_c = segment_cross(a, b, c);
+    const int64_t ab_d = segment_cross(a, b, d);
+    const int64_t cd_a = segment_cross(c, d, a);
+    const int64_t cd_b = segment_cross(c, d, b);
+    if (ab_c == 0 && point_on_segment(a, b, c)) return true;
+    if (ab_d == 0 && point_on_segment(a, b, d)) return true;
+    if (cd_a == 0 && point_on_segment(c, d, a)) return true;
+    if (cd_b == 0 && point_on_segment(c, d, b)) return true;
+    return (ab_c < 0) != (ab_d < 0) && (cd_a < 0) != (cd_b < 0);
+}
+
 // Point the separating axis from A toward B: choose the sign that gives the
 // smaller ejection, falling back to the centre delta when they tie.
 Axis orient_axis(
@@ -648,6 +671,32 @@ FxManifold capsule_capsule(
     const Vec b0 = Vec::from(second.a), b1 = Vec::from(second.b);
     const int64_t radius_a = std::abs(from_float(first.radius));
     const int64_t radius_b = std::abs(from_float(second.radius));
+
+    // Disjoint spines reduce to circles at their unique closest points. Exact
+    // integer segment intersection keeps crossing/touching spines on the full
+    // Minkowski path even when 16.16 closest-point parameters round apart.
+    if (!spines_intersect(a0, a1, b0, b1)) {
+        Vec closest_a;
+        Vec closest_b;
+        const int64_t spine_distance_sq = closest_segments(
+            a0, a1, b0, b1, closest_a, closest_b);
+        if (spine_distance_sq != 0) {
+            const FxManifold reduced = circle_circle(
+                {closest_a, radius_a}, {closest_b, radius_b}, false);
+            if (!reduced.colliding) return {};
+            const Vec reduced_contact = compute_contact
+                ? clamp_contact(
+                    support_feature_contact(
+                        capsule_contact_proxy(a0, a1, radius_a),
+                        capsule_contact_proxy(b0, b1, radius_b),
+                        reduced.normal),
+                    segment_bounds(a0, a1, radius_a),
+                    segment_bounds(b0, b1, radius_b))
+                : Vec{};
+            return {true, reduced.normal, reduced.depth, reduced_contact};
+        }
+    }
+
     Proxy difference;
     difference.count = 4;
     difference.inline_vertices = {a0 - b0, a1 - b0, a1 - b1, a0 - b1};

@@ -264,6 +264,19 @@ public class WrapperParityTests
         Native.Manifold reverseActual = Native.Collide.ShapeVsShape(
             new Native.Shape(nativeB), new Native.Shape(nativeA));
 
+        _ = Ref.Distance.ClosestPointsSegmentSegment(
+            refA.A, refA.B, refB.A, refB.B,
+            out Ref.Vec2 refClosestA, out Ref.Vec2 refClosestB);
+        _ = Native.Distance.ClosestPointsSegmentSegment(
+            nativeA.A, nativeA.B, nativeB.A, nativeB.B,
+            out Native.Vec2 nativeClosestA, out Native.Vec2 nativeClosestB);
+        Ref.Manifold refReduced = Ref.Collide.CircleVsCircle(
+            new Ref.Circle(refClosestA, refA.Radius),
+            new Ref.Circle(refClosestB, refB.Radius));
+        Native.Manifold nativeReduced = Native.Collide.CircleVsCircle(
+            new Native.Circle(nativeClosestA, nativeA.Radius),
+            new Native.Circle(nativeClosestB, nativeB.Radius));
+
         Assert.True(expected.Colliding && actual.Colliding);
         Assert.InRange(expected.Contact.X, 591f, 593f);
         Assert.InRange(expected.Contact.Y, 362f, 365f);
@@ -275,10 +288,45 @@ public class WrapperParityTests
         AssertFloatBits(actual.Contact.X, genericActual.Contact.X);
         AssertFloatBits(actual.Contact.Y, genericActual.Contact.Y);
 
+        // Disjoint capsule spines use the closest-points circle reduction for
+        // normal/depth, with exactly the same fixed-point rounding in each backend.
+        AssertFloatBits(refReduced.Depth, expected.Depth);
+        AssertFloatBits(refReduced.Normal.X, expected.Normal.X);
+        AssertFloatBits(refReduced.Normal.Y, expected.Normal.Y);
+        AssertFloatBits(nativeReduced.Depth, actual.Depth);
+        AssertFloatBits(nativeReduced.Normal.X, actual.Normal.X);
+        AssertFloatBits(nativeReduced.Normal.Y, actual.Normal.Y);
+
         Assert.True(reverseExpected.Colliding && reverseActual.Colliding);
         AssertFloatBits(expected.Contact.X, reverseExpected.Contact.X);
         AssertFloatBits(expected.Contact.Y, reverseExpected.Contact.Y);
         AssertVecBits(reverseExpected.Contact, reverseActual.Contact);
+    }
+
+    [Fact]
+    public void CrossingCapsuleSpinesKeepTheMinkowskiMtv()
+    {
+        var refHorizontal = new Ref.Capsule(
+            new Ref.Vec2(-5, 0), new Ref.Vec2(5, 0), 1);
+        var refVertical = new Ref.Capsule(
+            new Ref.Vec2(0, -5), new Ref.Vec2(0, 5), 1);
+        var nativeHorizontal = new Native.Capsule(
+            new Native.Vec2(-5, 0), new Native.Vec2(5, 0), 1);
+        var nativeVertical = new Native.Capsule(
+            new Native.Vec2(0, -5), new Native.Vec2(0, 5), 1);
+
+        Ref.Manifold expected = Ref.Collide.CapsuleVsCapsule(
+            refHorizontal, refVertical);
+        Native.Manifold actual = Native.Collide.CapsuleVsCapsule(
+            nativeHorizontal, nativeVertical);
+
+        Assert.True(expected.Colliding && actual.Colliding);
+        // A closest-point circle reduction would report depth 2 here. Depth 7
+        // proves that intersecting spines stayed on the full Minkowski SAT path.
+        Assert.Equal(7f, expected.Depth, 2f / 256f);
+        AssertFloatBits(expected.Depth, actual.Depth);
+        AssertVecBits(expected.Normal, actual.Normal);
+        AssertVecBits(expected.Contact, actual.Contact);
     }
 
     [Fact]
