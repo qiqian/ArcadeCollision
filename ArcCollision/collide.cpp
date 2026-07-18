@@ -103,12 +103,11 @@ int64_t projection_midpoint(int64_t a, int64_t b) {
     return a + ((b - a) >> 1);
 }
 
-// A capsule side is an entire support feature, not one arbitrary endpoint.
-// Fixed closest-point and unit-normal rounding can otherwise make geometrically
-// tied spine endpoints differ by a few projection cells and send the contact to
-// the far cap. Select the middle of the support features' tangential overlap, or
-// the nearest feature endpoints when a capsule meets a polygon corner.
-Vec capsule_feature_contact(const Proxy& a, const Proxy& b, Axis normal) {
+// A face or capsule side is an entire support feature, not one arbitrary vertex.
+// Select the middle of both extreme features' tangential overlap, or the nearest
+// endpoints for a corner contact. Besides correct face/vertex box contacts, this
+// prevents tiny fixed-point projection differences from selecting a far cap.
+Vec support_feature_contact(const Proxy& a, const Proxy& b, Axis normal) {
     const Axis tangent = normal.perpendicular();
     const SupportFeature feature_a =
         find_support_feature(a, normal, tangent, true);
@@ -406,6 +405,8 @@ FxAabb box_bounds(const BoxProxy& box) {
              std::abs(x.y) + std::abs(y.y)}};
 }
 
+Proxy box_contact_proxy(const BoxProxy& box);
+
 bool test_box_axis(
     const Axis& test, const BoxProxy& a, const BoxProxy& b,
     int64_t& best_overlap, int64_t& best_depth, Axis& best_axis) {
@@ -428,7 +429,7 @@ bool test_box_axis(
 }
 
 // AABB/OBB/OBB SAT: four axes (each box's two edge normals) suffice for boxes.
-// Contact is the clamped midpoint of the two support points along the min axis.
+// Contact comes from the local overlap of the two support features on the min axis.
 FxManifold box_box(
     const BoxProxy& a, const BoxProxy& b, bool compute_contact) {
     int64_t overlap = std::numeric_limits<int64_t>::max();
@@ -440,8 +441,8 @@ FxManifold box_box(
         || !test_box_axis(b.axis_y, a, b, overlap, depth, axis))
         return {};
     const Vec contact = compute_contact
-        ? clamp_contact(midpoint(
-            box_support(a, axis), box_support(b, -axis)),
+        ? clamp_contact(support_feature_contact(
+            box_contact_proxy(a), box_contact_proxy(b), axis),
             box_bounds(a), box_bounds(b))
         : Vec{};
     return {true, axis, depth, contact};
@@ -576,7 +577,7 @@ FxManifold capsule_box(
             return {};
     }
     const Vec contact = compute_contact
-        ? clamp_contact(capsule_feature_contact(
+        ? clamp_contact(support_feature_contact(
             capsule_contact_proxy(a, b, radius), box_contact_proxy(box), axis),
             segment_bounds(a, b, radius), box_bounds(box))
         : Vec{};
@@ -895,7 +896,7 @@ FxManifold collide_proxy(
     Vec contact;
     if (compute_contact) {
         contact = is_capsule_proxy(a) || is_capsule_proxy(b)
-            ? capsule_feature_contact(a, b, state.axis)
+            ? support_feature_contact(a, b, state.axis)
             : midpoint(support(a, state.axis), support(b, -state.axis));
         contact = clamp_contact(contact, proxy_bounds(a), proxy_bounds(b));
     }

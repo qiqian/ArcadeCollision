@@ -1,0 +1,39 @@
+{
+  "Version": 1,
+  "SavedAtUtc": "2026-07-18T10:45:55.471811+00:00",
+  "GenericSweep": false,
+  "Scene": "AabbObb",
+  "SweepMover": "Circle",
+  "SweepTarget": "Circle",
+  "ShowContacts": true,
+  "CanvasWidth": 940,
+  "CanvasHeight": 860,
+  "ResultText": "Scene: AabbObb\n\nCOLLIDING\n\ndepth  :    0.74\nnormal : ( 1.00,  0.00)\ncontact: (517.6, 471.1)",
+  "Handles": [
+    {
+      "Name": "A.c",
+      "X": 438,
+      "Y": 425
+    },
+    {
+      "Name": "A.e",
+      "X": 518,
+      "Y": 515
+    },
+    {
+      "Name": "B.c",
+      "X": 627,
+      "Y": 430
+    },
+    {
+      "Name": "B.x",
+      "X": 710.37036,
+      "Y": 384.4546
+    },
+    {
+      "Name": "B.y",
+      "X": 653.3684,
+      "Y": 478.26703
+    }
+  ]
+}

@@ -154,6 +154,46 @@ public class WrapperParityTests
     }
 
     [Fact]
+    public void AabbObbContactUsesTheLocalBoxSupportFeatures()
+    {
+        // Regression for test/aabb-vs-obb.arc-case.json. The OBB's leftmost
+        // vertex grazes the AABB's right face. Choosing the AABB's arbitrary
+        // right-bottom support corner reported y=471.1 instead of the local
+        // feature intersection near y=427.3.
+        var refAabb = new Ref.Aabb(
+            new Ref.Vec2(438, 425), new Ref.Vec2(80, 90));
+        var nativeAabb = new Native.Aabb(
+            new Native.Vec2(438, 425), new Native.Vec2(80, 90));
+        var refObb = new Ref.Obb(
+            new Ref.Vec2(627, 430), new Ref.Vec2(95, 55), -0.5f);
+        var nativeObb = new Native.Obb(
+            new Native.Vec2(627, 430), new Native.Vec2(95, 55), -0.5f);
+
+        Ref.Manifold expected = Ref.Collide.ShapeVsShape(
+            new Ref.Shape(refAabb), new Ref.Shape(refObb));
+        Native.Manifold actual = Native.Collide.ShapeVsShape(
+            new Native.Shape(nativeAabb), new Native.Shape(nativeObb));
+        Ref.Manifold reverseExpected = Ref.Collide.ShapeVsShape(
+            new Ref.Shape(refObb), new Ref.Shape(refAabb));
+        Native.Manifold reverseActual = Native.Collide.ShapeVsShape(
+            new Native.Shape(nativeObb), new Native.Shape(nativeAabb));
+
+        Assert.True(expected.Colliding && actual.Colliding);
+        Assert.InRange(expected.Contact.X, 517f, 519f);
+        Assert.InRange(expected.Contact.Y, 426f, 429f);
+        AssertFloatBits(expected.Depth, actual.Depth);
+        AssertVecBits(expected.Normal, actual.Normal);
+        AssertVecBits(expected.Contact, actual.Contact);
+
+        Assert.True(reverseExpected.Colliding && reverseActual.Colliding);
+        AssertFloatBits(reverseExpected.Depth, reverseActual.Depth);
+        AssertVecBits(reverseExpected.Normal, reverseActual.Normal);
+        AssertVecBits(reverseExpected.Contact, reverseActual.Contact);
+        AssertFloatBits(expected.Contact.X, reverseExpected.Contact.X);
+        AssertFloatBits(expected.Contact.Y, reverseExpected.Contact.Y);
+    }
+
+    [Fact]
     public void ManifoldFieldsSelectTheSameWorkAndResultsInBothBackends()
     {
         foreach (var a in CreateShapes())

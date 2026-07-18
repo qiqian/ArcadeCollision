@@ -570,7 +570,14 @@ public static partial class Collide
         FxAxis normalAxis = axis;
         FxVec2 contact = computeContact
             ? ClampContact(
-                Midpoint(BoxSupport(a, normalAxis), BoxSupport(b, -normalAxis)),
+                SupportFeatureContact(
+                    new ConvexProxy(
+                        BoxVertex(a, 0), BoxVertex(a, 1),
+                        BoxVertex(a, 2), BoxVertex(a, 3)),
+                    new ConvexProxy(
+                        BoxVertex(b, 0), BoxVertex(b, 1),
+                        BoxVertex(b, 2), BoxVertex(b, 3)),
+                    normalAxis),
                 BoxBounds(a), BoxBounds(b))
             : FxVec2.Zero;
         return new FxManifold(true, normalAxis, depth, contact).ToManifold();
@@ -663,7 +670,7 @@ public static partial class Collide
         FxAxis normalAxis = axis;
         FxVec2 contact = computeContact
             ? ClampContact(
-                CapsuleFeatureContact(
+                SupportFeatureContact(
                     new ConvexProxy(a, b, radius),
                     new ConvexProxy(
                         BoxVertex(box, 0), BoxVertex(box, 1),
@@ -1006,7 +1013,7 @@ public static partial class Collide
         if (computeContact)
         {
             contact = IsCapsuleProxy(a) || IsCapsuleProxy(b)
-                ? CapsuleFeatureContact(a, b, normalAxis)
+            ? SupportFeatureContact(a, b, normalAxis)
                 : Midpoint(Support(a, normalAxis), Support(b, -normalAxis));
             contact = ClampContact(contact, ProxyBounds(a), ProxyBounds(b));
         }
@@ -1212,14 +1219,12 @@ public static partial class Collide
     private static bool IsCapsuleProxy(in ConvexProxy proxy) =>
         proxy.Count == 2 && proxy.Radius != 0;
 
-    // A capsule side is an entire support feature, not one arbitrary endpoint.
-    // Q24.8 closest-point and Q1.30 normal rounding can make the two endpoint
-    // projections differ by a few grid cells even when the selected SAT axis is
-    // geometrically perpendicular to the spine. Build both shapes' support
-    // features and choose the middle of their tangential overlap (or the nearest
-    // feature endpoints for a corner contact) so that tiny projection noise cannot
-    // move the reported contact to the far capsule cap.
-    private static FxVec2 CapsuleFeatureContact(
+    // A face or capsule side is an entire support feature, not one arbitrary
+    // vertex. Build both shapes' extreme features and choose the middle of their
+    // tangential overlap (or the nearest feature endpoints for a corner contact).
+    // This handles face/vertex box contacts and also prevents tiny Q1.30 capsule
+    // projection noise from moving the contact to the far cap.
+    private static FxVec2 SupportFeatureContact(
         in ConvexProxy a, in ConvexProxy b, FxAxis normal)
     {
         FxAxis tangent = normal.Perpendicular;
