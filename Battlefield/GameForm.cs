@@ -53,6 +53,22 @@ public sealed class GameForm : Form
     private readonly Image? _hudPlayerBase, _hudPlayerUnder, _hudPlayerProgress, _hudHeart;
     private readonly Image? _hudEnemyBase, _hudEnemyUnder, _hudEnemyProgress, _hudEnemyHeart;
     private readonly Image? _profileChad, _profileSarge, _profileTaxman;
+    private readonly Image? _poisonTile;
+    private readonly List<PoisonPoolVisual> _poisonPoolVisuals = new();
+
+    private sealed class PoisonPoolVisual : IDisposable
+    {
+        public readonly Bitmap Image;
+        public readonly RectangleF Destination;
+
+        public PoisonPoolVisual(Bitmap image, RectangleF destination)
+        {
+            Image = image;
+            Destination = destination;
+        }
+
+        public void Dispose() => Image.Dispose();
+    }
 
     public GameForm()
     {
@@ -94,6 +110,8 @@ public sealed class GameForm : Form
         _profileChad = TryLoad(Path.Combine(assets, "characters", "playable", "chad", "resources", "sprites", "chad_profile.png"));
         _profileSarge = TryLoad(Path.Combine(assets, "characters", "enemies", "sargent", "resources", "sprites", "health_bar_revised_all_sarge.png"));
         _profileTaxman = TryLoad(Path.Combine(assets, "characters", "enemies", "tax_man", "resources", "sprites", "health_bar_revised_all_tax_man.png"));
+        _poisonTile = TryLoad(Path.Combine(assets, "effects", "poison", "poison_sludge_tile.png"));
+        BuildPoisonPoolVisuals();
 
         _lastTicks = _clock.ElapsedTicks;
         _timer.Interval = 8;
@@ -102,6 +120,61 @@ public sealed class GameForm : Form
     }
 
     private static Image? TryLoad(string p) => File.Exists(p) ? Image.FromFile(p) : null;
+
+    private void BuildPoisonPoolVisuals()
+    {
+        const float padding = 8f;
+        foreach (PoisonPool pool in _game.PoisonPools)
+        {
+            Vec2 min = pool.Bounds.Min;
+            Vec2 max = pool.Bounds.Max;
+            int width = Math.Max(1, (int)MathF.Ceiling(max.X - min.X + padding * 2f));
+            int height = Math.Max(1, (int)MathF.Ceiling(max.Y - min.Y + padding * 2f));
+            var image = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
+
+            using (Graphics graphics = Graphics.FromImage(image))
+            using (var path = new GraphicsPath())
+            {
+                graphics.Clear(Color.Transparent);
+                graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+                PointF[] points = new PointF[pool.Vertices.Length];
+                for (int i = 0; i < points.Length; i++)
+                {
+                    points[i] = new PointF(
+                        pool.Vertices[i].X - min.X + padding,
+                        pool.Vertices[i].Y - min.Y + padding);
+                }
+                path.AddPolygon(points);
+
+                using (var baseFill = new SolidBrush(Color.FromArgb(255, 22, 71, 28)))
+                    graphics.FillPath(baseFill, path);
+                if (_poisonTile != null)
+                {
+                    using var texture = new TextureBrush(_poisonTile, WrapMode.Tile);
+                    using var transform = new Matrix();
+                    transform.Scale(.22f, .22f);
+                    transform.Translate(
+                        pool.VisualPhase * 31f,
+                        pool.VisualPhase * 19f,
+                        MatrixOrder.Append);
+                    texture.Transform = transform;
+                    graphics.FillPath(texture, path);
+                }
+                using (var sheen = new SolidBrush(Color.FromArgb(42, 196, 255, 38)))
+                    graphics.FillPath(sheen, path);
+                using (var darkEdge = new Pen(Color.FromArgb(235, 12, 49, 24), 7f)
+                       { LineJoin = LineJoin.Round })
+                    graphics.DrawPath(darkEdge, path);
+                using (var glowEdge = new Pen(Color.FromArgb(225, 168, 244, 51), 2.2f)
+                       { LineJoin = LineJoin.Round })
+                    graphics.DrawPath(glowEdge, path);
+            }
+
+            _poisonPoolVisuals.Add(new PoisonPoolVisual(image,
+                new RectangleF(min.X - padding, min.Y - padding, width, height)));
+        }
+    }
 
     protected override void OnHandleCreated(EventArgs e)
     {
@@ -271,6 +344,7 @@ public sealed class GameForm : Form
             g.Transform = matrix;
 
         _stageRenderer.DrawBackground(g, camX, zoom);
+        DrawPoisonPools(g, camX, camY, zoom);
         DrawSeatedTaxman(g);
 
         GraphicsState combatSpace = g.Save();
@@ -289,6 +363,7 @@ public sealed class GameForm : Form
                     f.Facing, f.Def.RenderScale);
             else if (!(f.Def.SpriteSet == "taxman" && f.State == FState.Dead))
                 DrawFighter(g, f);
+            DrawPoisonAura(g, f);
             DrawTaxVfx(g, f, behindBody: false);
         }
         DrawTaxDeath(g);
@@ -309,6 +384,7 @@ public sealed class GameForm : Form
     private static readonly Color BodyColliderColor = Color.FromArgb(230, 30, 205, 255);
     private static readonly Color HurtColliderColor = Color.FromArgb(230, 80, 255, 110);
     private static readonly Color AttackColliderColor = Color.FromArgb(240, 255, 65, 65);
+    private static readonly Color PoisonColliderColor = Color.FromArgb(240, 205, 255, 45);
 
     private void DrawCollisionShapes(Graphics g)
     {
@@ -317,6 +393,9 @@ public sealed class GameForm : Form
 
         // Draw the less urgent layers first so active attacks remain visible
         // where several colliders overlap.
+        foreach (PoisonPool pool in _game.PoisonPools)
+            DrawPolygon(g, pool.Vertices, PoisonColliderColor, lineWidth);
+
         foreach (Fighter fighter in _game.Fighters)
             if (_game.HasBodyCollider(fighter))
                 DrawCapsule(g, fighter.Body, BodyColliderColor, lineWidth);
@@ -462,6 +541,18 @@ public sealed class GameForm : Form
         FillAndOutline(g, path, color, lineWidth);
     }
 
+    private static void DrawPolygon(
+        Graphics g, ReadOnlySpan<Vec2> vertices, Color color, float lineWidth)
+    {
+        if (vertices.Length < 3) return;
+        PointF[] points = new PointF[vertices.Length];
+        for (int i = 0; i < vertices.Length; i++)
+            points[i] = Point(vertices[i]);
+        using var path = new GraphicsPath();
+        path.AddPolygon(points);
+        FillAndOutline(g, path, color, lineWidth);
+    }
+
     private static void FillAndOutline(
         Graphics g, GraphicsPath path, Color color, float lineWidth)
     {
@@ -478,12 +569,13 @@ public sealed class GameForm : Form
         const float x = 16f;
         const float y = 680f;
         using var background = new SolidBrush(Color.FromArgb(175, 10, 10, 14));
-        g.FillRectangle(background, x - 7f, y - 5f, 355f, 27f);
+        g.FillRectangle(background, x - 7f, y - 5f, 475f, 27f);
         DrawLegendItem(g, "BODY", x, y, BodyColliderColor);
         DrawLegendItem(g, "HURT", x + 100f, y, HurtColliderColor);
         DrawLegendItem(g, "ATTACK", x + 200f, y, AttackColliderColor);
+        DrawLegendItem(g, "POISON", x + 310f, y, PoisonColliderColor);
         using var hint = new SolidBrush(Color.FromArgb(210, 235, 235, 240));
-        g.DrawString("[C]", _fCollisionDebug, hint, x + 303f, y - 1f);
+        g.DrawString("[C]", _fCollisionDebug, hint, x + 425f, y - 1f);
     }
 
     private void DrawLegendItem(Graphics g, string text, float x, float y, Color color)
@@ -657,11 +749,93 @@ public sealed class GameForm : Form
         else
             DrawImageAlpha(g, bmp, dest, alpha);
 
-        // white hit flash
+        // Poison tint sits below the white hit flash, so combat feedback keeps
+        // priority when both effects are active.
+        if (f.PoisonEffectTime > 0f)
+        {
+            float pulse = .28f + .08f * MathF.Sin(f.StateTime * 9f);
+            DrawImagePoison(g, bmp, dest, pulse);
+        }
         if (f.HurtFlash > 0f)
             DrawImageWhite(g, bmp, dest, Math.Clamp(f.HurtFlash / 0.14f, 0f, 1f) * 0.75f);
 
         g.Restore(st);
+    }
+
+    private void DrawPoisonPools(Graphics g, float camX, float camY, float zoom)
+    {
+        GraphicsState state = g.Save();
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        float visibleRight = camX + VW / MathF.Max(.1f, zoom);
+        float visibleBottom = camY + VH / MathF.Max(.1f, zoom);
+        using var bubble = new SolidBrush(Color.FromArgb(190, 198, 255, 65));
+        using var rim = new Pen(Color.FromArgb(220, 31, 87, 22), 1.4f);
+
+        for (int poolIndex = 0; poolIndex < _game.PoisonPools.Count; poolIndex++)
+        {
+            PoisonPool pool = _game.PoisonPools[poolIndex];
+            Vec2 min = pool.Bounds.Min;
+            Vec2 max = pool.Bounds.Max;
+            if (max.X < camX || min.X > visibleRight
+                || max.Y < camY || min.Y > visibleBottom)
+                continue;
+
+            PoisonPoolVisual visual = _poisonPoolVisuals[poolIndex];
+            g.DrawImage(visual.Image, visual.Destination);
+
+            // Deterministic surface bubbles: no RNG means screenshots and the
+            // fixed-step presentation are reproducible between runs.
+            for (int i = 0; i < 6; i++)
+            {
+                Vec2 edge = pool.Vertices[(i * 3 + 1) % pool.Vertices.Length];
+                float mix = .28f + .08f * (i % 3);
+                Vec2 anchor = pool.Center + (edge - pool.Center) * mix;
+                float wave = _presentationTime * (1.7f + i * .13f)
+                    + pool.VisualPhase + i * 1.41f;
+                float radius = 2.8f + 1.8f * (.5f + .5f * MathF.Sin(wave));
+                float x = anchor.X + MathF.Sin(wave * .73f) * 5f;
+                float y = anchor.Y + MathF.Cos(wave) * 3f;
+                g.FillEllipse(bubble, x - radius, y - radius, radius * 2f, radius * 2f);
+                g.DrawEllipse(rim, x - radius, y - radius, radius * 2f, radius * 2f);
+            }
+        }
+
+        g.Restore(state);
+    }
+
+    private void DrawPoisonAura(Graphics g, Fighter fighter)
+    {
+        if (fighter.PoisonEffectTime <= 0f || fighter.Dead) return;
+
+        float fade = Math.Clamp(
+            fighter.PoisonEffectTime / Game.PoisonEffectDuration, 0f, 1f);
+        GraphicsState state = g.Save();
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using var fill = new SolidBrush(Color.Transparent);
+        using var rim = new Pen(Color.Transparent, 1.6f);
+        using var shine = new SolidBrush(Color.Transparent);
+        for (int i = 0; i < 7; i++)
+        {
+            float cycle = _presentationTime * (.72f + i * .035f) + i * .137f;
+            float unit = cycle - MathF.Floor(cycle);
+            float phase = i * 2.399f;
+            float x = fighter.Pos.X + MathF.Sin(phase + _presentationTime * 2.4f)
+                * (18f + i * 3.5f);
+            float y = fighter.Pos.Y - fighter.SkinY - 20f - unit * 105f;
+            float radius = (3.5f + (i % 3) * 1.4f) * (1f - unit * .35f);
+            int alpha = (int)(fade * (155f - unit * 75f));
+            fill.Color = Color.FromArgb(
+                Math.Clamp(alpha, 0, 180), 166, 255, 48);
+            rim.Color = Color.FromArgb(
+                Math.Clamp(alpha + 35, 0, 220), 28, 84, 20);
+            g.FillEllipse(fill, x - radius, y - radius, radius * 2f, radius * 2f);
+            g.DrawEllipse(rim, x - radius, y - radius, radius * 2f, radius * 2f);
+            shine.Color = Color.FromArgb(
+                Math.Clamp(alpha, 0, 190), 238, 255, 185);
+            g.FillEllipse(shine, x - radius * .35f, y - radius * .45f,
+                radius * .45f, radius * .45f);
+        }
+        g.Restore(state);
     }
 
     private void DrawSeatedTaxman(Graphics g)
@@ -801,6 +975,23 @@ public sealed class GameForm : Form
         g.DrawImage(bmp, Rect(dest), 0, 0, bmp.Width, bmp.Height, GraphicsUnit.Pixel, ia);
     }
 
+    private static void DrawImagePoison(Graphics g, Bitmap bmp, RectangleF dest, float a)
+    {
+        // Keep the sprite silhouette/alpha while laying an acidic green color
+        // over it. This is intentionally presentation-only gameplay feedback.
+        var cm = new ColorMatrix(new float[][]
+        {
+            new float[] {0,0,0,0,0},
+            new float[] {0,0,0,0,0},
+            new float[] {0,0,0,0,0},
+            new float[] {0,0,0,a,0},
+            new float[] {.30f,1f,.12f,0,1},
+        });
+        using var ia = new ImageAttributes();
+        ia.SetColorMatrix(cm);
+        g.DrawImage(bmp, Rect(dest), 0, 0, bmp.Width, bmp.Height, GraphicsUnit.Pixel, ia);
+    }
+
     private static Rectangle Rect(RectangleF r) =>
         new((int)MathF.Round(r.X), (int)MathF.Round(r.Y), (int)MathF.Round(r.Width), (int)MathF.Round(r.Height));
 
@@ -884,10 +1075,12 @@ public sealed class GameForm : Form
             _fEndTitle.Dispose();
             _fEndHint.Dispose();
             _fCollisionDebug.Dispose();
+            foreach (PoisonPoolVisual visual in _poisonPoolVisuals)
+                visual.Dispose();
             foreach (Image? image in new[] {
                 _hudPlayerBase, _hudPlayerUnder, _hudPlayerProgress, _hudHeart,
                 _hudEnemyBase, _hudEnemyUnder, _hudEnemyProgress, _hudEnemyHeart,
-                _profileChad, _profileSarge, _profileTaxman })
+                _profileChad, _profileSarge, _profileTaxman, _poisonTile })
                 image?.Dispose();
             _game.Dispose();
         }

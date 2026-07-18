@@ -38,6 +38,12 @@ internal sealed class Fighter
     public float Invuln;                     // compatibility timer; source animation flags are separate
     public bool HasSuperArmor;
     public float HurtFlash;
+    // Refreshed while touching poison and allowed to linger briefly after the
+    // player leaves, so the tint/bubbles do not disappear on a single frame.
+    public float PoisonEffectTime;
+    // Per-fighter fractional damage accumulation keeps poison DPS independent
+    // when several characters occupy one or more pools simultaneously.
+    public float PoisonDamageAccumulator;
     public bool HurtHigh;
     public bool CombatActive = true;
 

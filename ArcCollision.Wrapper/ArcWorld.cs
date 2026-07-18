@@ -31,6 +31,24 @@ public readonly struct ArcHandle : IEquatable<ArcHandle>
         (int)(_packedIndex & MaxIndex), _packedIndex >> IndexBits, _packedEntityId >> 28);
     public static bool operator ==(ArcHandle left, ArcHandle right) => left.Equals(right);
     public static bool operator !=(ArcHandle left, ArcHandle right) => !left.Equals(right);
+
+    /// <summary>
+    /// A stable, order-independent 64-bit identity for the pair of colliders
+    /// <paramref name="a"/> and <paramref name="b"/>, built from their slot index
+    /// and generation. It is the same every frame as long as both colliders remain
+    /// in the world -- moving them (UpdateTransform) does not change it -- so a
+    /// caller can tell that a contact this frame is the same pair as last frame.
+    /// Removing and re-adding a collider yields a new identity. Two colliders that
+    /// share an EntityId still get distinct ids (identity is per collider, not per
+    /// entity).
+    /// </summary>
+    public static ulong PairId(ArcHandle a, ArcHandle b)
+    {
+        uint keyA = a._packedIndex;
+        uint keyB = b._packedIndex;
+        (uint lo, uint hi) = keyA <= keyB ? (keyA, keyB) : (keyB, keyA);
+        return ((ulong)lo << 32) | hi;
+    }
 }
 
 public readonly struct CandidatePair
@@ -38,12 +56,31 @@ public readonly struct CandidatePair
     public readonly ArcHandle A, B;
     internal CandidatePair(NativePair pair) { A = new(pair.A); B = new(pair.B); }
     internal NativePair Native => new(A.Native, B.Native);
+
+    /// <summary>Stable per-pair identity; see <see cref="ArcHandle.PairId"/>.</summary>
+    public ulong Id => ArcHandle.PairId(A, B);
 }
 public readonly struct ContactPair
 {
     public readonly ArcHandle A, B;
     public readonly Manifold Manifold;
-    internal ContactPair(NativeContact value) { A = new(value.A); B = new(value.B); Manifold = value.Manifold; }
+    /// <summary>
+    /// How many consecutive frames this contact has been colliding, counting this
+    /// one: 1 on the first frame of a contact (so <c>Frame == 1</c> means "new
+    /// collision this frame"), incrementing while it persists, and starting over at
+    /// 1 if the pair separates and touches again. A "frame" is one
+    /// <see cref="ArcWorld.ComputePairs"/> call. It is 0 unless
+    /// <see cref="ArcWorld.TrackContacts"/> is enabled on the world.
+    /// </summary>
+    public readonly int Frame;
+    internal ContactPair(NativeContact value, int frame) { A = new(value.A); B = new(value.B); Manifold = value.Manifold; Frame = frame; }
+
+    /// <summary>
+    /// Stable per-pair identity, the same across frames while both colliders live,
+    /// so this manifold can be matched to the same contact next frame. See
+    /// <see cref="ArcHandle.PairId"/>.
+    /// </summary>
+    public ulong Id => ArcHandle.PairId(A, B);
 }
 public readonly struct WorldCastHit
 {
@@ -166,14 +203,63 @@ public sealed unsafe class ArcWorld : IDisposable
     public void SetFilter(ArcHandle handle, in CollisionFilter filter) => NativeMethods.Check(NativeMethods.WorldSetFilter(Handle, handle.Native, filter), nameof(handle));
     public bool IsEnabled(ArcHandle handle) { NativeMethods.Check(NativeMethods.WorldGetEnabled(Handle, handle.Native, out int enabled), nameof(handle)); return enabled != 0; }
     public void SetEnabled(ArcHandle handle, bool enabled) => NativeMethods.Check(NativeMethods.WorldSetEnabled(Handle, handle.Native, enabled ? 1 : 0), nameof(handle));
-    public void Clear() => NativeMethods.Check(NativeMethods.WorldClear(Handle));
+    public void Clear()
+    {
+        NativeMethods.Check(NativeMethods.WorldClear(Handle));
+        _contactFrames.Clear();
+        _contactTick = 0;
+    }
+
+    // Opt-in per-contact frame counting (see TrackContacts), tracked in managed
+    // over the native narrowphase so the native ABI stays pure geometry. Keyed by
+    // pair id; each ComputePairs call is one frame.
+    private long _contactTick;
+    private readonly Dictionary<ulong, (long LastTick, int Frame)> _contactFrames = new();
+    private readonly List<ulong> _staleContacts = new();
+
+    /// <summary>
+    /// When enabled, each contact returned by <see cref="TryComputeContact(in
+    /// CandidatePair, out ContactPair, ManifoldFields)"/> carries a
+    /// <see cref="ContactPair.Frame"/> count: 1 the first frame a pair collides,
+    /// incrementing while it keeps colliding, restarting at 1 after it separates.
+    /// A frame boundary is one <see cref="ComputePairs"/> call. Off by default;
+    /// while off, <c>Frame</c> is 0 and no per-contact state is kept.
+    /// </summary>
+    public bool TrackContacts { get; set; }
 
     public void ComputePairs(List<CandidatePair> results)
     {
         ArgumentNullException.ThrowIfNull(results); results.Clear();
+        if (TrackContacts) AdvanceContactFrame();
         NativeMethods.Check(NativeMethods.WorldComputePairs(Handle, out IntPtr data, out int count));
         NativePair* source = (NativePair*)data;
         for (int i = 0; i < count; i++) results.Add(new CandidatePair(source[i]));
+    }
+
+    private void AdvanceContactFrame()
+    {
+        if (_contactFrames.Count != 0)
+        {
+            _staleContacts.Clear();
+            foreach (KeyValuePair<ulong, (long LastTick, int Frame)> entry in _contactFrames)
+                if (entry.Value.LastTick < _contactTick)
+                    _staleContacts.Add(entry.Key);
+            for (int i = 0; i < _staleContacts.Count; i++)
+                _contactFrames.Remove(_staleContacts[i]);
+        }
+        _contactTick++;
+    }
+
+    private int RecordContactFrame(ulong id)
+    {
+        int frame = 1;
+        if (_contactFrames.TryGetValue(id, out (long LastTick, int Frame) record))
+        {
+            if (record.LastTick == _contactTick) frame = record.Frame;
+            else if (record.LastTick == _contactTick - 1) frame = record.Frame + 1;
+        }
+        _contactFrames[id] = (_contactTick, frame);
+        return frame;
     }
 
     public void Query(in Shape query, List<ArcHandle> results) => QueryCore(query, null, results);
@@ -224,7 +310,11 @@ public sealed unsafe class ArcWorld : IDisposable
         NativeStatus status = NativeMethods.WorldContactPair(
             Handle, pair.Native, fields, out NativeContact native, out int colliding);
         if (status == NativeStatus.InvalidHandle) { contact = default; return false; }
-        NativeMethods.Check(status); contact = colliding != 0 ? new ContactPair(native) : default; return colliding != 0;
+        NativeMethods.Check(status);
+        if (colliding == 0) { contact = default; return false; }
+        int frame = TrackContacts ? RecordContactFrame(ArcHandle.PairId(pair.A, pair.B)) : 0;
+        contact = new ContactPair(native, frame);
+        return true;
     }
     public bool TryComputeContact(
         in Shape query, ArcHandle target, out Manifold manifold,

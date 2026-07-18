@@ -32,8 +32,11 @@ internal sealed class Game : IDisposable
     private const float HitLane = 60f * WorldScale;
     private const float HitFreeze = 3f / 60f;
     private const float ArriveRange = 10f * WorldScale;
+    private const float PoisonDamagePerSecond = 4f;
+    internal const float PoisonEffectDuration = .75f;
 
     public readonly List<Fighter> Fighters = new();
+    public readonly List<PoisonPool> PoisonPools = new();
     internal readonly List<CollisionManifoldDebug> DebugManifolds = new();
     public Fighter Player = null!;
 
@@ -74,6 +77,10 @@ internal sealed class Game : IDisposable
     private readonly ArcWorld _world = new(128f);
     private readonly List<CandidatePair> _bodyPairs = new();
     private readonly List<ArcHandle> _hitCandidates = new();
+    private readonly List<ArcHandle> _poisonCandidates = new();
+    private readonly List<int> _poisonCandidateCounts = new();
+    private Shape[] _poisonStandingQueries = new Shape[16];
+    private Fighter?[] _poisonQueryFighters = new Fighter?[16];
     private Fighter?[] _entitiesById = new Fighter?[32];
     private Vec2[] _bodyCorrections = new Vec2[32];
     private int _nextEntityId;
@@ -101,8 +108,12 @@ internal sealed class Game : IDisposable
     {
         Fighters.Clear();
         _world.Clear();
+        PoisonPools.Clear();
         _bodyPairs.Clear();
         _hitCandidates.Clear();
+        _poisonCandidates.Clear();
+        _poisonCandidateCounts.Clear();
+        Array.Clear(_poisonQueryFighters);
         DebugManifolds.Clear();
         Array.Clear(_entitiesById);
         Array.Clear(_bodyCorrections);
@@ -120,6 +131,7 @@ internal sealed class Game : IDisposable
         CameraZoom = 1f;
 
         BuildStage();
+        BuildPoisonPools();
         Player = new Fighter
         {
             Def = CharacterDef.Chad,
@@ -243,6 +255,37 @@ internal sealed class Game : IDisposable
         });
     }
 
+    private void BuildPoisonPools()
+    {
+        // Source-space coordinates follow stage_01 (1920x1080 authored scale).
+        // Pools alternate between the upper and lower walking lanes, so each is
+        // a meaningful hazard without ever sealing the route through a room.
+        AddPoisonPool(
+            P(3110, 950), P(3160, 872), P(3315, 820), P(3555, 842),
+            P(3715, 918), P(3650, 1005), P(3450, 1038), P(3240, 1012));
+        AddPoisonPool(
+            P(6990, 755), P(7095, 690), P(7310, 672), P(7500, 715),
+            P(7550, 790), P(7390, 850), P(7160, 830), P(7020, 805));
+        AddPoisonPool(
+            P(10290, 968), P(10370, 900), P(10605, 838), P(10905, 875),
+            P(11048, 965), P(10835, 1055), P(10510, 1042), P(10335, 1010));
+        AddPoisonPool(
+            P(13660, 775), P(13730, 700), P(14010, 654), P(14285, 690),
+            P(14415, 775), P(14220, 855), P(13885, 846), P(13705, 815));
+
+        // All pools are immutable for the life of the stage, allowing the
+        // native backend to build one compact static BVH.
+        _world.BuildStatic();
+    }
+
+    private void AddPoisonPool(params Vec2[] vertices)
+    {
+        int id = PoisonPools.Count;
+        var pool = new PoisonPool(vertices, id * 1.731f);
+        PoisonPools.Add(pool);
+        _world.AddStatic(id, pool.Collider, BattlefieldCollisionFilters.PoisonPool);
+    }
+
     public void SetInput(Vec2 move, bool attack, bool jump)
     {
         _move = move;
@@ -278,6 +321,7 @@ internal sealed class Game : IDisposable
         Integrate(dt);
         ResolveBodies();
         ClampArena();
+        UpdatePoison(dt);
         ResolveHits();
         Cleanup();
         StageUpdate(dt);
@@ -661,6 +705,8 @@ internal sealed class Game : IDisposable
                 fighter.Invuln = MathF.Max(0f, fighter.Invuln - dt);
             if (fighter.HurtFlash > 0f)
                 fighter.HurtFlash = MathF.Max(0f, fighter.HurtFlash - dt);
+            if (fighter.PoisonEffectTime > 0f)
+                fighter.PoisonEffectTime = MathF.Max(0f, fighter.PoisonEffectTime - dt);
             if (fighter.TurnTimer > 0f)
                 fighter.TurnTimer = MathF.Max(0f, fighter.TurnTimer - dt);
 
@@ -1182,6 +1228,94 @@ internal sealed class Game : IDisposable
         float cameraMax = MathF.Max(CameraLeft, CameraRight - visibleWidth);
         float left = Math.Clamp(Player.Pos.X - visibleWidth * .5f, CameraLeft, cameraMax);
         return (left, left + visibleWidth);
+    }
+
+    private void UpdatePoison(float dt)
+    {
+        // A jump lifts the fighter skin away from the ground-plane liquid.
+        // The body is still queried as a Capsule while grounded so the trigger
+        // matches the same footprint used by body collision.
+        CollisionFilter poisonProbe =
+            BattlefieldCollisionFilters.PoisonStandingProbe;
+        int queryCount = 0;
+        for (int fighterIndex = 0; fighterIndex < Fighters.Count; fighterIndex++)
+        {
+            Fighter fighter = Fighters[fighterIndex];
+            if (fighter.Dead || !fighter.CombatActive
+                || fighter.SkinY > 8f * WorldScale)
+            {
+                fighter.PoisonDamageAccumulator = 0f;
+                continue;
+            }
+
+            // Body is the horizontal Capsule at the fighter's feet used for
+            // standing/body separation. CurrentHurtShape is intentionally not
+            // involved: tall sprite hurtboxes must not trigger ground liquid.
+            if (queryCount == _poisonStandingQueries.Length)
+            {
+                int capacity = _poisonStandingQueries.Length * 2;
+                Array.Resize(ref _poisonStandingQueries, capacity);
+                Array.Resize(ref _poisonQueryFighters, capacity);
+            }
+            _poisonStandingQueries[queryCount] = fighter.Body;
+            _poisonQueryFighters[queryCount] = fighter;
+            queryCount++;
+        }
+
+        if (queryCount == 0)
+        {
+            _poisonCandidates.Clear();
+            _poisonCandidateCounts.Clear();
+            return;
+        }
+
+        // One native call performs the static-BVH broadphase for every active
+        // fighter. Results are flattened; counts maps each contiguous range
+        // back to its standing collider.
+        _world.QueryBatch(
+            _poisonStandingQueries.AsSpan(0, queryCount), poisonProbe,
+            _poisonCandidates, _poisonCandidateCounts);
+
+        int candidateOffset = 0;
+        for (int queryIndex = 0; queryIndex < queryCount; queryIndex++)
+        {
+            Fighter fighter = _poisonQueryFighters[queryIndex]!;
+            _poisonQueryFighters[queryIndex] = null;
+            Shape standingCollider = _poisonStandingQueries[queryIndex];
+            int candidateCount = _poisonCandidateCounts[queryIndex];
+            bool touching = false;
+            int candidateEnd = candidateOffset + candidateCount;
+            for (int candidateIndex = candidateOffset;
+                 candidateIndex < candidateEnd;
+                 candidateIndex++)
+            {
+                if (_world.TryComputeContact(
+                        standingCollider, poisonProbe,
+                        _poisonCandidates[candidateIndex],
+                        out _, ManifoldFields.None))
+                {
+                    touching = true;
+                    break;
+                }
+            }
+            candidateOffset = candidateEnd;
+
+            if (!touching)
+            {
+                fighter.PoisonDamageAccumulator = 0f;
+                continue;
+            }
+
+            fighter.PoisonEffectTime = PoisonEffectDuration;
+            fighter.PoisonDamageAccumulator += PoisonDamagePerSecond * dt;
+            int damage = (int)fighter.PoisonDamageAccumulator;
+            if (damage <= 0) continue;
+
+            fighter.PoisonDamageAccumulator -= damage;
+            fighter.Health = Math.Max(0, fighter.Health - damage);
+            if (!fighter.Alive)
+                EnterDeath(fighter);
+        }
     }
 
     // ------------------------------------------------------------------ hits

@@ -48,6 +48,24 @@ public readonly struct ArcHandle : IEquatable<ArcHandle>
         DeterministicHash.Combine(Index, Generation, WorldId);
     public static bool operator ==(ArcHandle left, ArcHandle right) => left.Equals(right);
     public static bool operator !=(ArcHandle left, ArcHandle right) => !left.Equals(right);
+
+    /// <summary>
+    /// A stable, order-independent 64-bit identity for the pair of colliders
+    /// <paramref name="a"/> and <paramref name="b"/>, built from their slot index
+    /// and generation. It is the same every frame as long as both colliders remain
+    /// in the world -- moving them (UpdateTransform) does not change it -- so a
+    /// caller can tell that a contact this frame is the same pair as last frame.
+    /// Removing and re-adding a collider yields a new identity. Two colliders that
+    /// share an EntityId still get distinct ids (identity is per collider, not per
+    /// entity).
+    /// </summary>
+    public static ulong PairId(ArcHandle a, ArcHandle b)
+    {
+        uint keyA = (uint)a._packedIndex;
+        uint keyB = (uint)b._packedIndex;
+        (uint lo, uint hi) = keyA <= keyB ? (keyA, keyB) : (keyB, keyA);
+        return ((ulong)lo << 32) | hi;
+    }
 }
 
 /// <summary>A broadphase-only pair. No narrowphase work has been performed.</summary>
@@ -61,6 +79,9 @@ public readonly struct CandidatePair
         A = a;
         B = b;
     }
+
+    /// <summary>Stable per-pair identity; see <see cref="ArcHandle.PairId"/>.</summary>
+    public ulong Id => ArcHandle.PairId(A, B);
 }
 
 /// <summary>A candidate pair whose narrowphase produced a manifold.</summary>
@@ -69,13 +90,30 @@ public readonly struct ContactPair
     public readonly ArcHandle A;
     public readonly ArcHandle B;
     public readonly Manifold Manifold;
+    /// <summary>
+    /// How many consecutive frames this contact has been colliding, counting this
+    /// one: 1 on the first frame of a contact (so <c>Frame == 1</c> means "new
+    /// collision this frame"), incrementing while it persists, and starting over at
+    /// 1 if the pair separates and touches again. A "frame" is one
+    /// <see cref="ArcWorld.ComputePairs"/> call. It is 0 unless
+    /// <see cref="ArcWorld.TrackContacts"/> is enabled on the world.
+    /// </summary>
+    public readonly int Frame;
 
-    internal ContactPair(ArcHandle a, ArcHandle b, Manifold manifold)
+    internal ContactPair(ArcHandle a, ArcHandle b, Manifold manifold, int frame)
     {
         A = a;
         B = b;
         Manifold = manifold;
+        Frame = frame;
     }
+
+    /// <summary>
+    /// Stable per-pair identity, the same across frames while both colliders live,
+    /// so this manifold can be matched to the same contact next frame. See
+    /// <see cref="ArcHandle.PairId"/>.
+    /// </summary>
+    public ulong Id => ArcHandle.PairId(A, B);
 }
 
 /// <summary>A world collider hit by a ray or translating shape cast.</summary>
@@ -181,6 +219,23 @@ public sealed class ArcWorld : IDisposable
     private int _dynamicCount;
     private int _disposed;
     private ushort[] _generationTable;
+
+    // Opt-in per-contact frame counting (see TrackContacts). Keyed by pair id;
+    // each ComputePairs call is one frame. Off by default so the common
+    // ComputePairs/TryComputeContact path pays nothing.
+    private long _contactTick;
+    private readonly Dictionary<ulong, (long LastTick, int Frame)> _contactFrames = new();
+    private readonly List<ulong> _staleContacts = new();
+
+    /// <summary>
+    /// When enabled, each contact returned by <see cref="TryComputeContact(in
+    /// CandidatePair, out ContactPair, ManifoldFields)"/> carries a
+    /// <see cref="ContactPair.Frame"/> count: 1 the first frame a pair collides,
+    /// incrementing while it keeps colliding, restarting at 1 after it separates.
+    /// A frame boundary is one <see cref="ComputePairs"/> call. Off by default;
+    /// while off, <c>Frame</c> is 0 and no per-contact state is kept.
+    /// </summary>
+    public bool TrackContacts { get; set; }
 
     public ArcWorld(float fatMargin = 16f)
         : this(new ArcWorldOptions(fatMargin))
@@ -470,6 +525,8 @@ public sealed class ArcWorld : IDisposable
         _broadphase.Clear();
         _candidates.Clear();
         _broadphasePairs.Clear();
+        _contactFrames.Clear();
+        _contactTick = 0;
         _activeCount = _enabledCount = _dynamicCount = 0;
 
         _freeList = _slotCount == 0 ? -1 : 0;
@@ -496,6 +553,7 @@ public sealed class ArcWorld : IDisposable
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(results);
+        if (TrackContacts) AdvanceContactFrame();
         results.Clear();
         _broadphase.ComputePairs(_broadphasePairs);
         for (int i = 0; i < _broadphasePairs.Count; i++)
@@ -777,8 +835,39 @@ public sealed class ArcWorld : IDisposable
             return false;
         }
 
-        contact = new ContactPair(pair.A, pair.B, manifold);
+        int frame = TrackContacts ? RecordContactFrame(ArcHandle.PairId(pair.A, pair.B)) : 0;
+        contact = new ContactPair(pair.A, pair.B, manifold, frame);
         return true;
+    }
+
+    // Begin a new contact-tracking frame: drop contacts that were not resolved in
+    // the frame that just ended, then advance the tick.
+    private void AdvanceContactFrame()
+    {
+        if (_contactFrames.Count != 0)
+        {
+            _staleContacts.Clear();
+            foreach (KeyValuePair<ulong, (long LastTick, int Frame)> entry in _contactFrames)
+                if (entry.Value.LastTick < _contactTick)
+                    _staleContacts.Add(entry.Key);
+            for (int i = 0; i < _staleContacts.Count; i++)
+                _contactFrames.Remove(_staleContacts[i]);
+        }
+        _contactTick++;
+    }
+
+    // Frame count for a pair colliding this frame: continue the count if it also
+    // collided last frame, otherwise start a new contact at 1.
+    private int RecordContactFrame(ulong id)
+    {
+        int frame = 1;
+        if (_contactFrames.TryGetValue(id, out (long LastTick, int Frame) record))
+        {
+            if (record.LastTick == _contactTick) frame = record.Frame;
+            else if (record.LastTick == _contactTick - 1) frame = record.Frame + 1;
+        }
+        _contactFrames[id] = (_contactTick, frame);
+        return frame;
     }
 
     /// <summary>
