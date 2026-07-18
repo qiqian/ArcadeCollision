@@ -15,8 +15,8 @@ public class TransformUpdateTests
 {
     private static bool BoundsHit(ArcWorld world, ArcHandle handle, Vec2 point)
     {
-        ReadOnlySpan<ArcHandle> results = world.Query(
-            new Aabb(point, new Vec2(0.01f, 0.01f)));
+        var results = new List<ArcHandle>();
+        world.Query(new Aabb(point, new Vec2(0.01f, 0.01f)), results);
         return results.Contains(handle);
     }
 

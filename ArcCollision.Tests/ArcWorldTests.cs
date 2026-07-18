@@ -243,10 +243,10 @@ public class ArcWorldTests
         ArcHandle b = world.Add(202, new Circle(new Vec2(1.5f, 0), 1f));
         world.Add(303, new Circle(new Vec2(20, 0), 1f));
 
-        ReadOnlySpan<CandidatePair> candidates = world.ComputePairs();
+        var candidates = new List<CandidatePair>();
+        world.ComputePairs(candidates);
 
-        Assert.Equal(1, candidates.Length);
-        CandidatePair pair = candidates[0];
+        CandidatePair pair = Assert.Single(candidates);
         Assert.Equal(101, pair.A.EntityId);
         Assert.Equal(202, pair.B.EntityId);
         Assert.True(world.TryComputeContact(pair, out ContactPair contact));
@@ -261,9 +261,9 @@ public class ArcWorldTests
         using var world = new ArcWorld(2f);
         ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 1f));
         ArcHandle second = world.Add(2, new Circle(new Vec2(1.5f, 0), 1f));
-        ReadOnlySpan<CandidatePair> candidates = world.ComputePairs();
-        Assert.Equal(1, candidates.Length);
-        CandidatePair pair = candidates[0];
+        var candidates = new List<CandidatePair>();
+        world.ComputePairs(candidates);
+        CandidatePair pair = Assert.Single(candidates);
 
         Assert.True(world.TryComputeContact(
             pair, out ContactPair all, ManifoldFields.All));
@@ -303,9 +303,11 @@ public class ArcWorldTests
         using var world = new ArcWorld();
         world.Add(1, new Circle(Vec2.Zero, 1));
         world.Add(2, new Circle(new Vec2(1, 0), 1));
-        ReadOnlySpan<CandidatePair> candidates = world.ComputePairs();
+        var candidates = new List<CandidatePair>();
 
-        Assert.Equal(1, candidates.Length);
+        world.ComputePairs(candidates);
+
+        Assert.Single(candidates);
     }
 
     [Fact]
@@ -318,14 +320,16 @@ public class ArcWorldTests
             new CollisionFilter(attack, hurtbox));
         ArcHandle target = world.Add(2, new Circle(new Vec2(1, 0), 1),
             new CollisionFilter(hurtbox, 0));
+        var candidates = new List<CandidatePair>();
+
         Assert.Equal(new CollisionFilter(hurtbox, 0), world.GetFilter(target));
 
-        ReadOnlySpan<CandidatePair> candidates = world.ComputePairs();
-        Assert.Equal(0, candidates.Length);
+        world.ComputePairs(candidates);
+        Assert.Empty(candidates);
 
         world.SetFilter(target, new CollisionFilter(hurtbox, attack));
-        candidates = world.ComputePairs();
-        Assert.Equal(1, candidates.Length);
+        world.ComputePairs(candidates);
+        Assert.Single(candidates);
     }
 
     [Fact]
@@ -334,9 +338,9 @@ public class ArcWorldTests
         using var world = new ArcWorld();
         ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 1));
         world.Add(2, new Circle(new Vec2(1, 0), 1));
-        ReadOnlySpan<CandidatePair> candidates = world.ComputePairs();
-        Assert.Equal(1, candidates.Length);
-        CandidatePair pair = candidates[0];
+        var candidates = new List<CandidatePair>();
+        world.ComputePairs(candidates);
+        CandidatePair pair = Assert.Single(candidates);
 
         world.SetFilter(first, CollisionFilter.Default);
 
@@ -349,16 +353,16 @@ public class ArcWorldTests
         using var world = new ArcWorld();
         ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 1));
         world.Add(2, new Circle(new Vec2(1, 0), 1));
-        ReadOnlySpan<CandidatePair> candidates = world.ComputePairs();
-        Assert.Equal(1, candidates.Length);
-        CandidatePair stale = candidates[0];
+        var candidates = new List<CandidatePair>();
+        world.ComputePairs(candidates);
+        CandidatePair stale = Assert.Single(candidates);
 
         world.SetFilter(first, new CollisionFilter(
             CollisionCategories.Default, collidesWith: 0));
 
         Assert.False(world.TryComputeContact(stale, out _));
-        candidates = world.ComputePairs();
-        Assert.Equal(0, candidates.Length);
+        world.ComputePairs(candidates);
+        Assert.Empty(candidates);
     }
 
     [Fact]
@@ -374,15 +378,14 @@ public class ArcWorldTests
             new CollisionFilter(scenery, CollisionCategories.All));
         world.BuildStatic();
         Shape query = new Circle(Vec2.Zero, 2);
+        var results = new List<ArcHandle>();
 
-        ReadOnlySpan<ArcHandle> results = world.Query(
-            query, new CollisionFilter(attack, hurtbox));
+        world.Query(query, new CollisionFilter(attack, hurtbox), results);
 
-        Assert.Equal(1, results.Length);
-        Assert.Equal(10, results[0].EntityId);
+        Assert.Equal(10, Assert.Single(results).EntityId);
 
-        results = world.Query(query);
-        Assert.Equal(2, results.Length);
+        world.Query(query, results);
+        Assert.Equal(2, results.Count);
     }
 
     [Fact]
@@ -392,15 +395,15 @@ public class ArcWorldTests
         var half = new Vec2(1, 1);
         world.Add(1, new Aabb(Vec2.Zero, half));
         ArcHandle moving = world.Add(2, new Aabb(new Vec2(1, 0), half));
-        ReadOnlySpan<CandidatePair> candidates = world.ComputePairs();
-        Assert.Equal(1, candidates.Length);
-        CandidatePair stale = candidates[0];
+        var candidates = new List<CandidatePair>();
+        world.ComputePairs(candidates);
+        CandidatePair stale = Assert.Single(candidates);
 
         world.UpdateTransform(moving, new Transform(new Vec2(20, 0)));
 
         Assert.False(world.TryComputeContact(stale, out _));
-        candidates = world.ComputePairs();
-        Assert.Equal(0, candidates.Length);
+        world.ComputePairs(candidates);
+        Assert.Empty(candidates);
     }
 
     [Fact]
@@ -440,11 +443,13 @@ public class ArcWorldTests
         world.AddStatic(2, new Aabb(Vec2.Zero, new Vec2(2, 2)));
         world.Add(3, new Circle(Vec2.Zero, 1));
         world.BuildStatic();
-        ReadOnlySpan<CandidatePair> candidates = world.ComputePairs();
+        var candidates = new List<CandidatePair>();
 
-        Assert.Equal(2, candidates.Length);
-        foreach (CandidatePair pair in candidates)
-            Assert.True(pair.A.EntityId == 3 || pair.B.EntityId == 3);
+        world.ComputePairs(candidates);
+
+        Assert.Equal(2, candidates.Count);
+        Assert.All(candidates, pair =>
+            Assert.True(pair.A.EntityId == 3 || pair.B.EntityId == 3));
     }
 
     [Fact]
@@ -456,10 +461,9 @@ public class ArcWorldTests
         world.BuildStatic();
         world.BuildStatic();
 
-        ReadOnlySpan<ArcHandle> candidates = world.Query(
-            new Circle(Vec2.Zero, 1));
-        Assert.Equal(1, candidates.Length);
-        Assert.Equal(42, candidates[0].EntityId);
+        var candidates = new List<ArcHandle>();
+        world.Query(new Circle(Vec2.Zero, 1), candidates);
+        Assert.Equal(42, Assert.Single(candidates).EntityId);
     }
 
     [Fact]
@@ -487,7 +491,8 @@ public class ArcWorldTests
         }
         world.BuildStatic();
 
-        ReadOnlySpan<CandidatePair> actualPairs = world.ComputePairs();
+        var actualPairs = new List<CandidatePair>();
+        world.ComputePairs(actualPairs);
         var actual = new HashSet<(int, int)>();
         foreach (CandidatePair pair in actualPairs)
             actual.Add(pair.A.EntityId < pair.B.EntityId
@@ -506,7 +511,7 @@ public class ArcWorldTests
         }
 
         Assert.True(expected.SetEquals(actual));
-        Assert.Equal(actual.Count, actualPairs.Length);
+        Assert.Equal(actual.Count, actualPairs.Count);
     }
 
     [Fact]
@@ -517,11 +522,11 @@ public class ArcWorldTests
         world.Add(20, new Circle(new Vec2(10, 0), 1));
         world.BuildStatic();
         Shape probe = new Circle(new Vec2(1, 0), 1.5f);
+        var candidates = new List<ArcHandle>();
 
-        ReadOnlySpan<ArcHandle> candidates = world.Query(probe);
+        world.Query(probe, candidates);
 
-        Assert.Equal(1, candidates.Length);
-        ArcHandle target = candidates[0];
+        ArcHandle target = Assert.Single(candidates);
         Assert.Equal(10, target.EntityId);
         Assert.True(world.TryComputeContact(probe, target, out Manifold manifold));
         Assert.True(manifold.Colliding);

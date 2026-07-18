@@ -214,10 +214,10 @@ public class Box2DLargeWorldParityTests
         world.BuildStatic();
 
         Shape overlap = new Circle(basePosition, 0.1f);
-        ReadOnlySpan<ArcHandle> handles = world.Query(overlap);
-        int overlapCount = 0;
-        foreach (ArcHandle handle in handles)
-            if (world.TryComputeContact(overlap, handle, out _)) overlapCount++;
+        var handles = new List<ArcHandle>();
+        world.Query(overlap, handles);
+        int overlapCount = handles.Count(handle =>
+            world.TryComputeContact(overlap, handle, out _));
 
         var castCircle = new Circle(basePosition + new Vec2(-5, 0), 0.1f);
         SweepHit cast = Sweep.MovingCircleVsAabb(castCircle, new Vec2(10, 0), box);
@@ -302,11 +302,12 @@ public class Box2DDeterminismParityTests
         world.BuildStatic();
 
         uint hash = 2166136261u;
-        ReadOnlySpan<ArcHandle> query = world.Query(
-            new Aabb(Vec2.Zero, new Vec2(20, 20)));
+        var query = new List<ArcHandle>();
+        world.Query(new Aabb(Vec2.Zero, new Vec2(20, 20)), query);
         foreach (ArcHandle handle in query) hash = Add(hash, unchecked((uint)handle.EntityId));
 
-        ReadOnlySpan<CandidatePair> pairs = world.ComputePairs();
+        var pairs = new List<CandidatePair>();
+        world.ComputePairs(pairs);
         foreach (CandidatePair pair in pairs)
         {
             hash = Add(hash, unchecked((uint)pair.A.EntityId));

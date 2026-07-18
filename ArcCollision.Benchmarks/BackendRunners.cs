@@ -23,6 +23,7 @@ internal static class BackendRunners
         EnsureThread(expectedThreadId);
         int pairCapacity = PairCapacity(options);
         var dynamicHandles = new Ref.ArcHandle[options.DynamicCount];
+        var pairs = new List<Ref.CandidatePair>(pairCapacity);
 
         long allocatedStart = GC.GetAllocatedBytesForCurrentThread();
         long buildStart = Stopwatch.GetTimestamp();
@@ -51,11 +52,11 @@ internal static class BackendRunners
                 world.UpdateTransform(
                     dynamicHandles[i], scene.DynamicFrameTransforms[shapeOffset + i]);
 
-            ReadOnlySpan<Ref.CandidatePair> pairs = world.ComputePairs();
-            candidateCount += pairs.Length;
+            world.ComputePairs(pairs);
+            candidateCount += pairs.Count;
             checksum = Add(checksum, unchecked((uint)frame));
-            checksum = Add(checksum, unchecked((uint)pairs.Length));
-            for (int i = 0; i < pairs.Length; i++)
+            checksum = Add(checksum, unchecked((uint)pairs.Count));
+            for (int i = 0; i < pairs.Count; i++)
             {
                 Ref.CandidatePair pair = pairs[i];
                 checksum = Add(checksum, unchecked((uint)pair.A.EntityId));
@@ -84,6 +85,7 @@ internal static class BackendRunners
         EnsureThread(expectedThreadId);
         int pairCapacity = PairCapacity(options);
         var dynamicHandles = new Wrapper.ArcHandle[options.DynamicCount];
+        var pairs = new List<Wrapper.CandidatePair>(pairCapacity);
 
         long allocatedStart = GC.GetAllocatedBytesForCurrentThread();
         long buildStart = Stopwatch.GetTimestamp();
@@ -112,11 +114,11 @@ internal static class BackendRunners
                 world.UpdateTransform(
                     dynamicHandles[i], scene.DynamicFrameTransforms[shapeOffset + i]);
 
-            ReadOnlySpan<Wrapper.CandidatePair> pairs = world.ComputePairs();
-            candidateCount += pairs.Length;
+            world.ComputePairs(pairs);
+            candidateCount += pairs.Count;
             checksum = Add(checksum, unchecked((uint)frame));
-            checksum = Add(checksum, unchecked((uint)pairs.Length));
-            for (int i = 0; i < pairs.Length; i++)
+            checksum = Add(checksum, unchecked((uint)pairs.Count));
+            for (int i = 0; i < pairs.Count; i++)
             {
                 Wrapper.CandidatePair pair = pairs[i];
                 checksum = Add(checksum, unchecked((uint)pair.A.EntityId));

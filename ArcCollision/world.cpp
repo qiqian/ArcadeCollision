@@ -3,9 +3,8 @@
 // arc_handle), the hybrid broadphase, and reusable scratch buffers. Handles carry a
 // world id so a stale handle from another world is rejected. This file also hosts
 // the standalone broadphase C API (arc_dynamic_tree / arc_static_bvh) at the end.
-// World bulk operations publish borrowed views of reusable result vectors. Query
-// results are thread-local; the other bulk results are world-owned. Standalone
-// broadphase arrays retain the two-call output/capacity protocol.
+// World bulk operations publish borrowed views of world-owned result vectors;
+// standalone broadphase arrays retain the two-call output/capacity protocol.
 #include "broadphase.h"
 
 #include <cstring>
@@ -187,10 +186,6 @@ struct Slot {
 std::mutex world_id_mutex;
 bool world_ids[ARC_MAX_WORLD_COUNT + 1]{};
 std::vector<uint16_t> generation_tables[ARC_MAX_WORLD_COUNT + 1];
-// A single-query result is consumed immediately by managed ReadOnlySpan callers.
-// Sharing this scratch per thread avoids one result allocation per world while
-// allowing independent queries on different threads.
-thread_local std::vector<arc_handle> thread_query_values;
 
 } // namespace
 
@@ -604,12 +599,11 @@ FixedTransform compose_transform(
 
 void append_query(
     arc_world* world, const arc::Bounds& bounds,
-    const arc_collision_filter* filter,
-    std::vector<arc_handle>& results) {
+    const arc_collision_filter* filter) {
     for (int index : world->candidates) {
         const Slot& slot = world->slots[static_cast<size_t>(index)];
         if (query_slot(slot, filter) && slot.bounds.overlaps(bounds))
-            results.push_back(
+            world->query_values.push_back(
                 make_handle(world, static_cast<size_t>(index)));
     }
 }
@@ -623,10 +617,10 @@ int32_t append_scalar_batch_query(
     const size_t start = world->query_values.size();
     world->candidates.clear();
     world->broadphase.query_dynamic(bounds, world->candidates);
-    append_query(world, bounds, filter, world->query_values);
+    append_query(world, bounds, filter);
     world->candidates.clear();
     world->broadphase.query_static(bounds, world->candidates);
-    append_query(world, bounds, filter, world->query_values);
+    append_query(world, bounds, filter);
     std::sort(
         world->query_values.begin() + static_cast<ptrdiff_t>(start),
         world->query_values.end(), handle_less);
@@ -884,7 +878,7 @@ arc_status ARC_CALL arc_world_add(
     }
     if (!arc::validate_shape(*shape)) {
         arc::set_error("Invalid shape.");
-        return ARC_STATUS_OUT_OF_RANGE;
+        return ARC_STATUS_INVALID_ARGUMENT;
     }
     if (entity_id < 0 || entity_id > ARC_MAX_ENTITY_ID) {
         arc::set_error("Entity id is outside the supported range.");
@@ -1214,15 +1208,15 @@ arc_status ARC_CALL arc_world_query(
     }
     try {
         const arc::Bounds bounds = arc::shape_bounds(*query);
-        thread_query_values.clear();
+        world->query_values.clear();
         world->candidates.clear();
         world->broadphase.query_dynamic(bounds, world->candidates);
-        append_query(world, bounds, filter, thread_query_values);
+        append_query(world, bounds, filter);
         world->candidates.clear();
         world->broadphase.query_static(bounds, world->candidates);
-        append_query(world, bounds, filter, thread_query_values);
-        std::sort(thread_query_values.begin(), thread_query_values.end(), handle_less);
-        return publish_world_results(thread_query_values, output, count);
+        append_query(world, bounds, filter);
+        std::sort(world->query_values.begin(), world->query_values.end(), handle_less);
+        return publish_world_results(world->query_values, output, count);
     } catch (...) {
         arc::set_error("Query failed.");
         return ARC_STATUS_INTERNAL_ERROR;

@@ -71,30 +71,31 @@ internal static class QueryBatchBenchmark
         (Ref.Shape[] refQueries, Wrapper.Shape[] wrapperQueries) =
             BuildQueries(centers, mode, half, n);
 
+        var refResults = new List<Ref.ArcHandle>(n * 4);
+        var refCounts = new List<int>(n);
         var wrapperResults = new List<Wrapper.ArcHandle>(n * 4);
+        var wrapperCounts = new List<int>(n);
+        var scratch = new List<Wrapper.ArcHandle>(64);
 
         // Warm all three paths and confirm the backends agree before timing.
-        Ref.QueryBatchResult refBatch = refWorld.QueryBatch(refQueries);
-        Wrapper.QueryBatchResult wrapperBatch = wrapperWorld.QueryBatch(wrapperQueries);
-        ValidateEquivalent(
-            refBatch.Handles, refBatch.Counts,
-            wrapperBatch.Handles, wrapperBatch.Counts, mode, n);
-        long totalHits = refBatch.Handles.Length;
+        refWorld.QueryBatch(refQueries, refResults, refCounts);
+        wrapperWorld.QueryBatch(wrapperQueries, wrapperResults, wrapperCounts);
+        ValidateEquivalent(refResults, refCounts, wrapperResults, wrapperCounts, mode, n);
+        long totalHits = refResults.Count;
 
         TimingSummary refLoop = StableTiming(options, threadId,
-            () => refWorld.QueryBatch(refQueries));
+            () => refWorld.QueryBatch(refQueries, refResults, refCounts));
         TimingSummary nativeLoop = StableTiming(options, threadId, () =>
         {
             wrapperResults.Clear();
             for (int i = 0; i < wrapperQueries.Length; i++)
             {
-                ReadOnlySpan<Wrapper.ArcHandle> hits =
-                    wrapperWorld.Query(wrapperQueries[i]);
-                foreach (Wrapper.ArcHandle hit in hits) wrapperResults.Add(hit);
+                wrapperWorld.Query(wrapperQueries[i], scratch);
+                wrapperResults.AddRange(scratch);
             }
         });
         TimingSummary nativeBatch = StableTiming(options, threadId,
-            () => wrapperWorld.QueryBatch(wrapperQueries));
+            () => wrapperWorld.QueryBatch(wrapperQueries, wrapperResults, wrapperCounts));
 
         double hitsPerQuery = (double)totalHits / n;
         Console.WriteLine($"{mode,-8}  {n,-7}  "
@@ -246,23 +247,22 @@ internal static class QueryBatchBenchmark
     }
 
     private static void ValidateEquivalent(
-        ReadOnlySpan<Ref.ArcHandle> refResults, ReadOnlySpan<int> refCounts,
-        ReadOnlySpan<Wrapper.ArcHandle> wrapperResults,
-        ReadOnlySpan<int> wrapperCounts,
+        List<Ref.ArcHandle> refResults, List<int> refCounts,
+        List<Wrapper.ArcHandle> wrapperResults, List<int> wrapperCounts,
         QueryMode mode, int n)
     {
-        bool ok = refResults.Length == wrapperResults.Length
-            && refCounts.Length == wrapperCounts.Length;
-        for (int i = 0; ok && i < refCounts.Length; i++)
+        bool ok = refResults.Count == wrapperResults.Count
+            && refCounts.Count == wrapperCounts.Count;
+        for (int i = 0; ok && i < refCounts.Count; i++)
             ok = refCounts[i] == wrapperCounts[i];
-        for (int i = 0; ok && i < refResults.Length; i++)
+        for (int i = 0; ok && i < refResults.Count; i++)
             ok = refResults[i].EntityId == wrapperResults[i].EntityId;
         if (!ok)
         {
             throw new InvalidOperationException(
                 $"Batch query backends disagree (mode={mode}, N={n}): "
-                + $"Ref {refResults.Length} handles / {refCounts.Length} counts, "
-                + $"Native {wrapperResults.Length} handles / {wrapperCounts.Length} counts.");
+                + $"Ref {refResults.Count} handles / {refCounts.Count} counts, "
+                + $"Native {wrapperResults.Count} handles / {wrapperCounts.Count} counts.");
         }
     }
 

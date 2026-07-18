@@ -84,25 +84,6 @@ public readonly struct WorldCastHit
     public readonly SweepHit Hit;
 }
 
-/// <summary>
-/// Borrowed zero-copy views returned by <see cref="ArcWorld.QueryBatch(ReadOnlySpan{Shape})"/>.
-/// Handles for query <c>i</c> occupy <c>Counts[i]</c> entries after all earlier
-/// queries' entries. Consume both spans before the next QueryBatch, Clear,
-/// EnsureCapacity, or disposal of this world.
-/// </summary>
-public readonly ref struct QueryBatchResult
-{
-    public readonly ReadOnlySpan<ArcHandle> Handles;
-    public readonly ReadOnlySpan<int> Counts;
-
-    internal QueryBatchResult(
-        ReadOnlySpan<ArcHandle> handles, ReadOnlySpan<int> counts)
-    {
-        Handles = handles;
-        Counts = counts;
-    }
-}
-
 public sealed unsafe class ArcWorld : IDisposable
 {
     public const int MaxWorldCount = 15;
@@ -142,7 +123,7 @@ public sealed unsafe class ArcWorld : IDisposable
             throw new ArgumentOutOfRangeException(nameof(entityId), entityId,
                 $"Entity id must be between 0 and {ArcHandle.MaxEntityId}.");
         NativeShape native = shape.ToNative();
-        NativeMethods.Check(NativeMethods.WorldAdd(Handle, entityId, native, filter, isStatic ? 1 : 0, enabled ? 1 : 0, out ArcHandle result), nameof(shape));
+        NativeMethods.Check(NativeMethods.WorldAdd(Handle, entityId, native, filter, isStatic ? 1 : 0, enabled ? 1 : 0, out ArcHandle result), nameof(entityId));
         GC.KeepAlive(shape.PolygonObject);
         return result;
     }
@@ -240,20 +221,13 @@ public sealed unsafe class ArcWorld : IDisposable
     /// </summary>
     public bool TrackContacts { get; set; }
 
-    /// <summary>
-    /// Returns broadphase candidates as a borrowed zero-copy view over native
-    /// world-owned storage. Consume the span before the next
-    /// <c>ComputePairs</c>, <c>Clear</c>, <c>EnsureCapacity</c>, or disposal of
-    /// this world; do not retain it.
-    /// </summary>
-    public ReadOnlySpan<CandidatePair> ComputePairs()
+    public void ComputePairs(List<CandidatePair> results)
     {
-        _ = Handle;
+        results.Clear();
         if (TrackContacts) AdvanceContactFrame();
         NativeMethods.Check(NativeMethods.WorldComputePairs(Handle, out IntPtr data, out int count));
-        return count == 0
-            ? ReadOnlySpan<CandidatePair>.Empty
-            : new ReadOnlySpan<CandidatePair>((void*)data, count);
+        CandidatePair* source = (CandidatePair*)data;
+        for (int i = 0; i < count; i++) results.Add(source[i]);
     }
 
     private void AdvanceContactFrame()
@@ -282,61 +256,48 @@ public sealed unsafe class ArcWorld : IDisposable
         return frame;
     }
 
-    /// <summary>
-    /// Returns broadphase handles in borrowed thread-local storage. Consume the
-    /// span before the next <c>Query</c> call on the same thread; do not retain it.
-    /// </summary>
-    public ReadOnlySpan<ArcHandle> Query(in Shape query) => QueryCore(query, null);
-
-    /// <summary>
-    /// Returns mutually filtered broadphase handles in borrowed thread-local
-    /// storage. Consume the span before the next <c>Query</c> call on the same
-    /// thread; do not retain it.
-    /// </summary>
-    public ReadOnlySpan<ArcHandle> Query(in Shape query, in CollisionFilter filter)
-    {
-        CollisionFilter copy = filter;
-        return QueryCore(query, &copy);
-    }
-
-    private ReadOnlySpan<ArcHandle> QueryCore(in Shape query, CollisionFilter* filter)
+    public void Query(in Shape query, List<ArcHandle> results) => QueryCore(query, null, results);
+    public void Query(in Shape query, in CollisionFilter filter, List<ArcHandle> results) { CollisionFilter copy = filter; QueryCore(query, &copy, results); }
+    private void QueryCore(in Shape query, CollisionFilter* filter, List<ArcHandle> results)
     {
         _ = Handle;
+        results.Clear();
         NativeShape native = query.ToNative();
         NativeMethods.Check(NativeMethods.WorldQuery(Handle, native, filter, out IntPtr data, out int count));
+        ArcHandle* source = (ArcHandle*)data;
+        for (int i = 0; i < count; i++) results.Add(source[i]);
         GC.KeepAlive(query.PolygonObject);
-        return count == 0
-            ? ReadOnlySpan<ArcHandle>.Empty
-            : new ReadOnlySpan<ArcHandle>((void*)data, count);
     }
 
-    /// <summary>
-    /// Queries several shapes in one native call and returns borrowed zero-copy
-    /// views. Consume the result within the lifetime documented by
-    /// <see cref="QueryBatchResult"/>.
-    /// </summary>
-    public QueryBatchResult QueryBatch(ReadOnlySpan<Shape> queries) =>
-        QueryBatchCore(queries, null);
+    /// <summary>Queries several shapes in one native call.</summary>
+    /// <param name="queries">Query shapes in input order.</param>
+    /// <param name="results">Cleared, then filled with every query's handles concatenated in input order.</param>
+    /// <param name="counts">
+    /// Cleared, then filled with one value per query. <c>counts[i]</c> is the
+    /// number of handles produced by <c>queries[i]</c>; its slice in
+    /// <paramref name="results"/> starts after the sum of
+    /// <c>counts[0]</c> through <c>counts[i - 1]</c> (zero when <c>i == 0</c>).
+    /// </param>
+    public void QueryBatch(ReadOnlySpan<Shape> queries, List<ArcHandle> results, List<int> counts) => QueryBatchCore(queries, null, results, counts);
 
-    /// <summary>
-    /// Mutually filtered batch query returning borrowed zero-copy views. Consume
-    /// the result within the lifetime documented by <see cref="QueryBatchResult"/>.
-    /// </summary>
-    public QueryBatchResult QueryBatch(
-        ReadOnlySpan<Shape> queries, in CollisionFilter filter)
-    {
-        CollisionFilter copy = filter;
-        return QueryBatchCore(queries, &copy);
-    }
-
-    private QueryBatchResult QueryBatchCore(
-        ReadOnlySpan<Shape> queries, CollisionFilter* filter)
+    /// <summary>Mutually filtered batch query; result grouping matches the unfiltered overload.</summary>
+    /// <param name="queries">Query shapes in input order.</param>
+    /// <param name="filter">Filter applied mutually between every query and candidate collider.</param>
+    /// <param name="results">Cleared, then filled with every query's handles concatenated in input order.</param>
+    /// <param name="counts">
+    /// Cleared, then filled with one value per query. <c>counts[i]</c> is the
+    /// number of handles produced by <c>queries[i]</c>; its slice in
+    /// <paramref name="results"/> starts after the sum of
+    /// <c>counts[0]</c> through <c>counts[i - 1]</c> (zero when <c>i == 0</c>).
+    /// </param>
+    public void QueryBatch(ReadOnlySpan<Shape> queries, in CollisionFilter filter, List<ArcHandle> results, List<int> counts) { CollisionFilter copy = filter; QueryBatchCore(queries, &copy, results, counts); }
+    private void QueryBatchCore(ReadOnlySpan<Shape> queries, CollisionFilter* filter, List<ArcHandle> results, List<int> counts)
     {
         _ = Handle;
+        results.Clear();
+        counts.Clear();
         int n = queries.Length;
-        if (n == 0)
-            return new QueryBatchResult(
-                ReadOnlySpan<ArcHandle>.Empty, ReadOnlySpan<int>.Empty);
+        if (n == 0) return;
         NativeShape* native = (_queryBatchNative ??= new()).EnsureCapacity(n);
         bool hasPolygons = false;
         for (int i = 0; i < n; i++)
@@ -347,18 +308,16 @@ public sealed unsafe class ArcWorld : IDisposable
         NativeMethods.Check(NativeMethods.WorldQueryBatch(
             Handle, native, n, filter,
             out IntPtr handleData, out IntPtr countData, out int total));
-        GC.KeepAlive(_queryBatchNative);
+        ArcHandle* handleSource = (ArcHandle*)handleData;
+        for (int i = 0; i < total; i++) results.Add(handleSource[i]);
+        int* countSource = (int*)countData;
+        for (int k = 0; k < n; k++) counts.Add(countSource[k]);
         // Primitive-only batches contain no managed objects referenced solely by
         // the native scratch array, so avoid another full O(N) scan. Polygon
         // batches keep every geometry handle owner alive through the C call.
         if (hasPolygons)
             for (int i = 0; i < n; i++)
                 GC.KeepAlive(queries[i].PolygonObject);
-        ReadOnlySpan<ArcHandle> handles = total == 0
-            ? ReadOnlySpan<ArcHandle>.Empty
-            : new ReadOnlySpan<ArcHandle>((void*)handleData, total);
-        ReadOnlySpan<int> counts = new((void*)countData, n);
-        return new QueryBatchResult(handles, counts);
     }
 
     public bool TryComputeContact(

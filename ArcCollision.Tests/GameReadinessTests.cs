@@ -12,9 +12,9 @@ public class GameReadinessTests
         world.Add(1, new Circle(Vec2.Zero, 2));
         world.Add(2, new Circle(new Vec2(1, 0), 2));
         ArcHandle unrelated = world.Add(3, new Circle(new Vec2(100, 0), 1));
-        ReadOnlySpan<CandidatePair> pairs = world.ComputePairs();
-        Assert.Equal(1, pairs.Length);
-        CandidatePair pair = pairs[0];
+        var pairs = new List<CandidatePair>();
+        world.ComputePairs(pairs);
+        CandidatePair pair = Assert.Single(pairs);
 
         world.UpdateTransform(unrelated, new Transform(new Vec2(200, 0)));
 
@@ -27,9 +27,9 @@ public class GameReadinessTests
         using var world = new ArcWorld();
         ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 2));
         world.Add(2, new Circle(new Vec2(1, 0), 2));
-        ReadOnlySpan<CandidatePair> pairs = world.ComputePairs();
-        Assert.Equal(1, pairs.Length);
-        CandidatePair oldPair = pairs[0];
+        var pairs = new List<CandidatePair>();
+        world.ComputePairs(pairs);
+        CandidatePair oldPair = Assert.Single(pairs);
 
         world.SetEnabled(first, false);
 
@@ -38,15 +38,15 @@ public class GameReadinessTests
         Assert.Equal(2, world.Count);
         Assert.Equal(1, world.EnabledCount);
         Assert.False(world.TryComputeContact(oldPair, out _));
-        pairs = world.ComputePairs();
-        Assert.Equal(0, pairs.Length);
+        world.ComputePairs(pairs);
+        Assert.Empty(pairs);
 
         world.UpdateTransform(first, new Transform(new Vec2(1, 0)));
         world.SetEnabled(first, true);
 
         Assert.Equal(2, world.EnabledCount);
-        pairs = world.ComputePairs();
-        Assert.Equal(1, pairs.Length);
+        world.ComputePairs(pairs);
+        Assert.Single(pairs);
     }
 
     [Fact]
@@ -55,11 +55,13 @@ public class GameReadinessTests
         using var world = new ArcWorld();
         ArcHandle handle = world.Add(1, new Circle(Vec2.Zero, 1),
             CollisionFilter.Default, enabled: false);
-        ReadOnlySpan<ArcHandle> hits = world.Query(new Circle(Vec2.Zero, 2));
+        var hits = new List<ArcHandle>();
+
+        world.Query(new Circle(Vec2.Zero, 2), hits);
 
         Assert.True(world.IsValid(handle));
         Assert.False(world.IsEnabled(handle));
-        Assert.Equal(0, hits.Length);
+        Assert.Empty(hits);
     }
 
     [Fact]
@@ -124,15 +126,16 @@ public class GameReadinessTests
         ArcHandle dynamic = world.Add(1, new Circle(new Vec2(1001, 500), 2), filter);
         ArcHandle stationary = world.AddStatic(
             2, new Circle(new Vec2(1002, 500), 2), filter);
+        var pairs = new List<CandidatePair>();
+
         world.ShiftOrigin(new Vec2(1000, 500));
-        ReadOnlySpan<CandidatePair> pairs = world.ComputePairs();
+        world.ComputePairs(pairs);
 
         Assert.True(world.IsValid(dynamic));
         Assert.True(world.IsValid(stationary));
         Assert.Equal(filter, world.GetFilter(dynamic));
         Assert.Equal(new Vec2(1, 0), world.GetShape(dynamic).Bounds.Center);
-        Assert.Equal(1, pairs.Length);
-        Assert.True(world.TryComputeContact(pairs[0], out _));
+        Assert.True(world.TryComputeContact(Assert.Single(pairs), out _));
     }
 
     [Fact]
@@ -174,6 +177,9 @@ public class GameReadinessTests
         for (int i = 0; i < handles.Length; i++)
             handles[i] = world.Add(i,
                 new Circle(new Vec2(i * 1.5f, 0), 1));
+        var pairs = new List<CandidatePair>(256);
+        var query = new List<ArcHandle>(32);
+
         RunFrame(0);
         long before = GC.GetAllocatedBytesForCurrentThread();
         for (int frame = 1; frame <= 20; frame++) RunFrame(frame);
@@ -186,8 +192,8 @@ public class GameReadinessTests
             for (int i = 0; i < handles.Length; i++)
                 world.UpdateTransform(handles[i],
                     new Transform(new Vec2(i * 1.5f, frame & 1)));
-            world.ComputePairs();
-            world.Query(new Aabb(new Vec2(24, 0), new Vec2(30, 4)));
+            world.ComputePairs(pairs);
+            world.Query(new Aabb(new Vec2(24, 0), new Vec2(30, 4)), query);
         }
     }
 

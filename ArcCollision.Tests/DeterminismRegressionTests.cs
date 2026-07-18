@@ -85,15 +85,12 @@ public class DeterminismRegressionTests
         }
         world.BuildStatic();
 
-        ReadOnlySpan<ArcHandle> query = world.Query(
-            new Aabb(Vec2.Zero, new Vec2(20, 20)));
-        var queryIds = new int[query.Length];
-        for (int i = 0; i < query.Length; i++) queryIds[i] = query[i].EntityId;
-        ReadOnlySpan<CandidatePair> pairs = world.ComputePairs();
-        var pairIds = new (int A, int B)[pairs.Length];
-        for (int i = 0; i < pairs.Length; i++)
-            pairIds[i] = (pairs[i].A.EntityId, pairs[i].B.EntityId);
-        return (queryIds, pairIds);
+        var query = new List<ArcHandle>();
+        world.Query(new Aabb(Vec2.Zero, new Vec2(20, 20)), query);
+        var pairs = new List<CandidatePair>();
+        world.ComputePairs(pairs);
+        return (query.Select(handle => handle.EntityId).ToArray(),
+            pairs.Select(pair => (pair.A.EntityId, pair.B.EntityId)).ToArray());
     }
 
     private static int[] QueryBvh(Dictionary<int, BpBounds> source)

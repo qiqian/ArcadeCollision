@@ -133,11 +133,11 @@ public class BroadphaseScaleTests
         _ => t.P!.Bounds.Center,
     };
 
-    private static HashSet<(int, int)> WorldPairs(ArcWorld world)
+    private static HashSet<(int, int)> WorldPairs(ArcWorld world, List<CandidatePair> scratch)
     {
-        ReadOnlySpan<CandidatePair> pairs = world.ComputePairs();
+        world.ComputePairs(scratch);
         var set = new HashSet<(int, int)>();
-        foreach (CandidatePair pair in pairs)
+        foreach (CandidatePair pair in scratch)
         {
             (int, int) key = Key(pair.A.EntityId, pair.B.EntityId);
             Assert.True(set.Add(key), $"duplicate candidate pair {key}");
@@ -182,7 +182,7 @@ public class BroadphaseScaleTests
         world.BuildStatic();
 
         HashSet<(int, int)> expected = BruteForcePairs(entities);
-        HashSet<(int, int)> actual = WorldPairs(world);
+        HashSet<(int, int)> actual = WorldPairs(world, new List<CandidatePair>());
 
         Assert.True(expected.Count > 500,
             $"world too sparse ({expected.Count} pairs) — clustering broken?");
@@ -219,6 +219,8 @@ public class BroadphaseScaleTests
         var rng = new Random(4242);
         var world = new ArcWorld(12f);
         var entities = new List<Tracked>();
+        var scratch = new List<CandidatePair>();
+        var queryResults = new List<ArcHandle>();
         int nextId = 0;
 
         Vec2 RandomPos() => new(
@@ -268,7 +270,7 @@ public class BroadphaseScaleTests
             // else: no structural op this frame.
 
             HashSet<(int, int)> expected = BruteForcePairs(entities);
-            HashSet<(int, int)> actual = WorldPairs(world);
+            HashSet<(int, int)> actual = WorldPairs(world, scratch);
             AssertSetsEqual(expected, actual, $"frame {frame}");
 
             // Query equivalence for a random transient shape.
@@ -276,7 +278,7 @@ public class BroadphaseScaleTests
             {
                 Tracked probe = MakeTracked(rng, -1, RandomPos(), 20000f);
                 var probeBounds = probe.Bounds();
-                ReadOnlySpan<ArcHandle> queryResults = world.Query(probe.AsShape());
+                world.Query(probe.AsShape(), queryResults);
                 var actualIds = new HashSet<int>();
                 foreach (ArcHandle h in queryResults)
                     Assert.True(actualIds.Add(h.EntityId), "duplicate query result");
@@ -324,7 +326,7 @@ public class BroadphaseScaleTests
                 world.UpdateTransformDelta(t.Handle, new Transform(delta));
                 entities[entities.IndexOf(t)] = moved;
             }
-            return WorldPairs(world);
+            return WorldPairs(world, new List<CandidatePair>());
         }
 
         HashSet<(int, int)> first = Run();
@@ -338,9 +340,9 @@ public class BroadphaseScaleTests
         var world = new ArcWorld(8f);
         ArcHandle a = world.Add(1, new Circle(new Vec2(0, 0), 5f));
         world.Add(2, new Circle(new Vec2(4, 0), 5f));
-        ReadOnlySpan<CandidatePair> pairs = world.ComputePairs();
-        Assert.Equal(1, pairs.Length);
-        CandidatePair pair = pairs[0];
+        var pairs = new List<CandidatePair>();
+        world.ComputePairs(pairs);
+        CandidatePair pair = Assert.Single(pairs);
         Assert.True(world.TryComputeContact(pair, out _));
 
         // Candidates are broadphase hints. Current handle, filter and shape state
