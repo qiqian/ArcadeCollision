@@ -35,6 +35,20 @@ constexpr int64_t TOne = int64_t{1} << TShift;      // 65536: parameter 1.0
 constexpr int AxisShift = 30;
 constexpr int64_t AxisOne = int64_t{1} << AxisShift; // unit direction magnitude
 
+// Hot fixed-denominator conversions between Q1.30 projections and Q24.8
+// distances. Keeping these inline lets x64/ARM64 emit add+shift directly at SAT
+// call sites instead of paying for a generic integer division and function call.
+inline int64_t round_axis(int64_t value) {
+    constexpr int64_t half = AxisOne >> 1;
+    return value >= 0
+        ? (value + half) >> AxisShift
+        : -((-value + half) >> AxisShift);
+}
+
+inline int64_t ceil_axis_positive(int64_t value) {
+    return value == 0 ? 0 : 1 + ((value - 1) >> AxisShift);
+}
+
 // Per-thread last-error string, surfaced through arc_get_last_error.
 extern thread_local std::string error_text;
 void set_error(const char* text);

@@ -75,7 +75,8 @@ install(FILES arccollision.h DESTINATION include)
 include(CTest)
 if(ARC_BUILD_BENCHMARKS AND NOT CMAKE_CROSSCOMPILING)
     add_executable(arc_integer_bounds_benchmark
-        benchmarks/integer_bounds_benchmark.cpp)
+        benchmarks/integer_bounds_benchmark.cpp
+        fixed.cpp)
     target_include_directories(arc_integer_bounds_benchmark PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_features(arc_integer_bounds_benchmark PRIVATE cxx_std_17)
@@ -88,7 +89,11 @@ if(BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
     target_include_directories(arc_c_api_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     add_test(NAME arc_c_api_smoke COMMAND arc_c_api_smoke)
 
-    add_executable(arc_simd_integer_tests tests/simd_integer_tests.cpp)
+    # Compile the fixed core directly into this private test executable. Its C++
+    # symbols intentionally remain hidden from the shared library's C-only ABI.
+    add_executable(arc_simd_integer_tests
+        tests/simd_integer_tests.cpp
+        fixed.cpp)
     target_link_libraries(arc_simd_integer_tests PRIVATE ArcCollision)
     target_include_directories(arc_simd_integer_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_features(arc_simd_integer_tests PRIVATE cxx_std_17)

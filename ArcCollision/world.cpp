@@ -374,6 +374,9 @@ FixedTransform fixed_transform_from_public(const arc_transform& value) {
 
 int64_t mul_scale(int64_t value, int64_t scale16) {
     if (scale16 < 0) throw std::out_of_range("Scale must be non-negative.");
+    // Translation-only updates dominate typical game worlds. Preserve the
+    // already-quantized local value instead of entering the wide multiply path.
+    if (scale16 == arc::TOne) return value;
     const uint64_t magnitude = arc::magnitude(value);
     const uint64_t whole = static_cast<uint64_t>(scale16) >> arc::TShift;
     const uint64_t fraction = static_cast<uint64_t>(scale16) & (arc::TOne - 1);
@@ -392,6 +395,9 @@ int64_t mul_scale(int64_t value, int64_t scale16) {
 
 int64_t mul_scales(int64_t a, int64_t b) {
     if (a < 0 || b < 0) throw std::out_of_range("Scale must be non-negative.");
+    // In particular, make a translation/rotation-only delta free of scale math.
+    if (b == arc::TOne) return a;
+    if (a == arc::TOne) return b;
     const uint64_t whole = static_cast<uint64_t>(b) >> arc::TShift;
     const uint64_t fraction = static_cast<uint64_t>(b) & (arc::TOne - 1);
     if (whole != 0 && static_cast<uint64_t>(a) > UINT64_C(0x7fffffffffffffff) / whole)
@@ -406,15 +412,10 @@ int64_t mul_scales(int64_t a, int64_t b) {
 }
 
 arc::Vec scale_vec(const arc::Vec& value, int64_t scale16) {
+    // Check once for the whole vector so the identity path performs no
+    // per-component multiply, rounding, or overflow bookkeeping.
+    if (scale16 == arc::TOne) return value;
     return {mul_scale(value.x, scale16), mul_scale(value.y, scale16)};
-}
-
-arc::Vec rotate_scale(const arc::Vec& value, const FixedTransform& transform) {
-    const arc::Vec scaled = scale_vec(value, transform.scale16);
-    if (transform.rotation == 0) return scaled;
-    const arc::Axis axis_x = arc::Axis::from_angle(transform.rotation);
-    const arc::Axis axis_y = axis_x.perpendicular();
-    return axis_x.scale(scaled.x) + axis_y.scale(scaled.y);
 }
 
 LocalShape to_local(const arc_shape& shape, FixedTransform& initial) {
@@ -514,14 +515,23 @@ MaterializedShape materialize(const LocalShape& local, const FixedTransform& t) 
         const arc::Vec half = scale_vec(local.payload.obb.half, t.scale16);
         const uint32_t angle = local.payload.obb.base_angle + t.rotation;
         result.shape.obb = {position, half.to_public(), angle};
+        if (angle == 0) {
+            // The final angle matters here: an identity transform must not erase
+            // an OBB's authored base angle.
+            result.bounds = {static_cast<int32_t>(t.position.x - half.x),
+                             static_cast<int32_t>(t.position.y - half.y),
+                             static_cast<int32_t>(t.position.x + half.x),
+                             static_cast<int32_t>(t.position.y + half.y)};
+            break;
+        }
         const arc::Axis axis_x = arc::Axis::from_angle(angle);
         const arc::Axis axis_y = axis_x.perpendicular();
-        const int64_t extent_x = arc::ceil_div_positive(
-            arc::magnitude(axis_x.x) * half.x + arc::magnitude(axis_y.x) * half.y,
-            arc::AxisOne);
-        const int64_t extent_y = arc::ceil_div_positive(
-            arc::magnitude(axis_x.y) * half.x + arc::magnitude(axis_y.y) * half.y,
-            arc::AxisOne);
+        const int64_t extent_x = arc::ceil_axis_positive(
+            arc::magnitude(axis_x.x) * half.x
+            + arc::magnitude(axis_y.x) * half.y);
+        const int64_t extent_y = arc::ceil_axis_positive(
+            arc::magnitude(axis_x.y) * half.x
+            + arc::magnitude(axis_y.y) * half.y);
         result.bounds = {static_cast<int32_t>(t.position.x - extent_x),
                          static_cast<int32_t>(t.position.y - extent_y),
                          static_cast<int32_t>(t.position.x + extent_x),
@@ -529,10 +539,25 @@ MaterializedShape materialize(const LocalShape& local, const FixedTransform& t) 
         break;
     }
     case ARC_SHAPE_CAPSULE: {
-        const arc::Vec a = t.position + rotate_scale(local.payload.capsule.a, t);
-        const arc::Vec b = t.position + rotate_scale(local.payload.capsule.b, t);
-        const int64_t radius =
-            mul_scale(local.payload.capsule.radius, t.scale16);
+        arc::Vec local_a = local.payload.capsule.a;
+        arc::Vec local_b = local.payload.capsule.b;
+        int64_t radius = local.payload.capsule.radius;
+        if (t.scale16 != arc::TOne) {
+            // Test identity once for all three capsule dimensions.
+            local_a = scale_vec(local_a, t.scale16);
+            local_b = scale_vec(local_b, t.scale16);
+            radius = mul_scale(radius, t.scale16);
+        }
+        if (t.rotation != 0) {
+            // A capsule has two local endpoints. Build the integer rotation
+            // basis once and reuse it for both instead of running CORDIC twice.
+            const arc::Axis axis_x = arc::Axis::from_angle(t.rotation);
+            const arc::Axis axis_y = axis_x.perpendicular();
+            local_a = axis_x.scale(local_a.x) + axis_y.scale(local_a.y);
+            local_b = axis_x.scale(local_b.x) + axis_y.scale(local_b.y);
+        }
+        const arc::Vec a = t.position + local_a;
+        const arc::Vec b = t.position + local_b;
         result.shape.capsule = {a.to_public(), b.to_public(), arc::to_float(radius)};
         result.bounds = {
             static_cast<int32_t>(std::min(a.x, b.x) - radius),

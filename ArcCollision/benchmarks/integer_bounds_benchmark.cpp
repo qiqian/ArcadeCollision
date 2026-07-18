@@ -10,6 +10,7 @@
 namespace {
 
 using arc::Bounds;
+using arc::Axis;
 
 #if defined(_MSC_VER)
 #define ARC_NOINLINE __declspec(noinline)
@@ -21,6 +22,12 @@ struct Scene {
     std::vector<Bounds> first;
     std::vector<Bounds> second;
     std::vector<uint32_t> order;
+};
+
+struct FixedScene {
+    std::vector<int64_t> x;
+    std::vector<int64_t> y;
+    std::vector<int64_t> values;
 };
 
 volatile uint64_t benchmark_sink = 0;
@@ -62,6 +69,152 @@ Scene make_scene(size_t count, bool dense) {
         std::swap(scene.order[i - 1], scene.order[other]);
     }
     return scene;
+}
+
+FixedScene make_fixed_scene(size_t count) {
+    FixedScene scene;
+    scene.x.reserve(count);
+    scene.y.reserve(count);
+    scene.values.reserve(count);
+    uint64_t state = UINT64_C(0x3c6ef372fe94f82b);
+    for (size_t i = 0; i < count; ++i) {
+        scene.x.push_back(static_cast<int64_t>(
+            next_random(state) % UINT64_C(1000000001)) - 500000000);
+        scene.y.push_back(static_cast<int64_t>(
+            next_random(state) % UINT64_C(1000000001)) - 500000000);
+        // Typical squared collision distances are well below the int64 ceiling;
+        // retain 48 bits so sqrt's former start-bit scan is represented while
+        // still covering values far larger than ordinary game geometry.
+        scene.values.push_back(static_cast<int64_t>(
+            next_random(state) & UINT64_C(0x0000ffffffffffff)));
+    }
+    return scene;
+}
+
+uint64_t scalar_magnitude(int64_t value) {
+    return value < 0
+        ? static_cast<uint64_t>(-(value + 1)) + 1
+        : static_cast<uint64_t>(value);
+}
+
+ARC_NOINLINE int scalar_product_shift(int64_t value) {
+    uint64_t magnitude = scalar_magnitude(value);
+    int bits = 0;
+    while (magnitude != 0) {
+        ++bits;
+        magnitude >>= 1;
+    }
+    return std::max(0, bits - 30);
+}
+
+ARC_NOINLINE int64_t scalar_sqrt(int64_t value) {
+    if (value <= 0) return 0;
+    uint64_t x = static_cast<uint64_t>(value);
+    uint64_t result = 0;
+    uint64_t bit = uint64_t{1} << 62;
+    while (bit > x) bit >>= 2;
+    while (bit != 0) {
+        if (x >= result + bit) {
+            x -= result + bit;
+            result = (result >> 1) + bit;
+        } else {
+            result >>= 1;
+        }
+        bit >>= 2;
+    }
+    return static_cast<int64_t>(result);
+}
+
+int64_t scalar_ratio_q30(int64_t numerator, int64_t denominator) {
+    const bool negative = numerator < 0;
+    uint64_t remainder = scalar_magnitude(numerator);
+    const uint64_t divisor = static_cast<uint64_t>(denominator);
+    if (remainder >= divisor)
+        return negative ? -arc::AxisOne : arc::AxisOne;
+    int64_t result = 0;
+    for (int i = 0; i < arc::AxisShift; ++i) {
+        result <<= 1;
+        if (remainder >= divisor - remainder) {
+            remainder -= divisor - remainder;
+            result |= 1;
+        } else {
+            remainder += remainder;
+        }
+    }
+    return negative ? -result : result;
+}
+
+ARC_NOINLINE Axis scalar_axis(int64_t x, int64_t y) {
+    const int64_t length_sq = x * x + y * y;
+    if (length_sq == 0) return {};
+    int extra_shift = 60;
+    while (extra_shift > 0
+           && (length_sq >> (62 - extra_shift)) != 0)
+        extra_shift -= 2;
+    const int64_t high_length = scalar_sqrt(length_sq << extra_shift);
+    const int64_t scale = int64_t{1} << (extra_shift >> 1);
+    return {scalar_ratio_q30(x * scale, high_length),
+            scalar_ratio_q30(y * scale, high_length)};
+}
+
+ARC_NOINLINE int64_t scalar_round_div(int64_t numerator, int64_t denominator) {
+    const int64_t half = denominator >> 1;
+    return numerator >= 0
+        ? (numerator + half) / denominator
+        : -((-numerator + half) / denominator);
+}
+
+ARC_NOINLINE uint64_t scalar_axis_pass(const FixedScene& scene, int repeats) {
+    uint64_t result = 0;
+    for (int repeat = 0; repeat < repeats; ++repeat)
+        for (size_t i = 0; i < scene.x.size(); ++i) {
+            const Axis axis = scalar_axis(scene.x[i], scene.y[i]);
+            result += static_cast<uint64_t>(axis.x ^ axis.y);
+        }
+    return result;
+}
+
+ARC_NOINLINE uint64_t simd_axis_pass(const FixedScene& scene, int repeats) {
+    uint64_t result = 0;
+    for (int repeat = 0; repeat < repeats; ++repeat)
+        for (size_t i = 0; i < scene.x.size(); ++i) {
+            const Axis axis = Axis::from_components(scene.x[i], scene.y[i], {});
+            result += static_cast<uint64_t>(axis.x ^ axis.y);
+        }
+    return result;
+}
+
+ARC_NOINLINE uint64_t scalar_shift_pass(const FixedScene& scene, int repeats) {
+    uint64_t result = 0;
+    for (int repeat = 0; repeat < repeats; ++repeat)
+        for (int64_t value : scene.values)
+            result += static_cast<uint64_t>(scalar_product_shift(value));
+    return result;
+}
+
+ARC_NOINLINE uint64_t optimized_shift_pass(const FixedScene& scene, int repeats) {
+    uint64_t result = 0;
+    for (int repeat = 0; repeat < repeats; ++repeat)
+        for (int64_t value : scene.values)
+            result += static_cast<uint64_t>(arc::product_shift(value, 0, 0));
+    return result;
+}
+
+ARC_NOINLINE uint64_t scalar_div_pass(const FixedScene& scene, int repeats) {
+    uint64_t result = 0;
+    for (int repeat = 0; repeat < repeats; ++repeat)
+        for (int64_t value : scene.values)
+            result += static_cast<uint64_t>(
+                scalar_round_div(value, arc::AxisOne));
+    return result;
+}
+
+ARC_NOINLINE uint64_t optimized_div_pass(const FixedScene& scene, int repeats) {
+    uint64_t result = 0;
+    for (int repeat = 0; repeat < repeats; ++repeat)
+        for (int64_t value : scene.values)
+            result += static_cast<uint64_t>(arc::round_axis(value));
+    return result;
 }
 
 ARC_NOINLINE uint64_t scalar_overlap_pass(const Scene& scene, int repeats) {
@@ -169,6 +322,9 @@ int main() {
     constexpr int Repeats = 16;
     const Scene sparse = make_scene(Count, false);
     const Scene dense = make_scene(Count, true);
+    constexpr size_t FixedCount = 1u << 15;
+    constexpr int FixedRepeats = 4;
+    const FixedScene fixed = make_fixed_scene(FixedCount);
 
     // Warm code and data before taking the best of several runs.
     benchmark_sink ^= scalar_overlap_pass(sparse, 1);
@@ -190,5 +346,21 @@ int main() {
     print_comparison("bounds unite   (scalar vs simd)",
         best_milliseconds([&] { return scalar_unite_pass(dense, Repeats); }),
         best_milliseconds([&] { return simd_unite_pass(dense, Repeats); }));
+
+    if (scalar_axis_pass(fixed, 1) != simd_axis_pass(fixed, 1)
+        || scalar_shift_pass(fixed, 1) != optimized_shift_pass(fixed, 1)
+        || scalar_div_pass(fixed, 1) != optimized_div_pass(fixed, 1)) {
+        std::cout << "fixed-core optimization mismatch!\n";
+        return 3;
+    }
+    print_comparison("axis normalize (scalar vs SIMD2)",
+        best_milliseconds([&] { return scalar_axis_pass(fixed, FixedRepeats); }),
+        best_milliseconds([&] { return simd_axis_pass(fixed, FixedRepeats); }));
+    print_comparison("product shift (scan vs BSR)",
+        best_milliseconds([&] { return scalar_shift_pass(fixed, FixedRepeats); }),
+        best_milliseconds([&] { return optimized_shift_pass(fixed, FixedRepeats); }));
+    print_comparison("axis division (idiv vs shift)",
+        best_milliseconds([&] { return scalar_div_pass(fixed, FixedRepeats); }),
+        best_milliseconds([&] { return optimized_div_pass(fixed, FixedRepeats); }));
     return benchmark_sink == UINT64_C(0xffffffffffffffff) ? 1 : 0;
 }

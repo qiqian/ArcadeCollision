@@ -47,6 +47,31 @@ inline I64x2 splat(int64_t value) {
 inline I64x2 add(I64x2 a, I64x2 b) { return _mm_add_epi64(a, b); }
 inline I64x2 subtract(I64x2 a, I64x2 b) { return _mm_sub_epi64(a, b); }
 
+// Emit `bit_count` binary fractional bits for two non-negative remainders with
+// one shared positive divisor. Every lane must start below divisor. This is the
+// overflow-safe long-division step used by Q1.30 axis normalization: both axis
+// components advance together without requiring packed integer division.
+inline I64x2 fraction_bits_2(
+    I64x2 remainder, int64_t divisor, int bit_count) {
+    const I64x2 divisor_lanes = splat(divisor);
+    const I64x2 one = splat(1);
+    const I64x2 all_bits = splat(-1);
+    I64x2 result = splat(0);
+    for (int i = 0; i < bit_count; ++i) {
+        result = add(result, result);
+        const I64x2 threshold = subtract(divisor_lanes, remainder);
+        // SSE4.2 provides signed 64-bit greater-than. All live values are in
+        // [0, INT64_MAX], so signed comparison has the required ordering.
+        const I64x2 below = _mm_cmpgt_epi64(threshold, remainder);
+        const I64x2 emit = _mm_xor_si128(below, all_bits);
+        const I64x2 doubled = add(remainder, remainder);
+        const I64x2 reduced = subtract(remainder, threshold);
+        remainder = _mm_blendv_epi8(doubled, reduced, emit);
+        result = _mm_or_si128(result, _mm_and_si128(emit, one));
+    }
+    return result;
+}
+
 inline I64x2 minimum(I64x2 a, I64x2 b) {
     const I64x2 a_is_greater = _mm_cmpgt_epi64(a, b);
     return _mm_blendv_epi8(a, b, a_is_greater);
@@ -149,6 +174,27 @@ inline I64x2 select(uint64x2_t mask, I64x2 when_true, I64x2 when_false) {
     return vreinterpretq_s64_u64(vbslq_u64(
         mask, vreinterpretq_u64_s64(when_true),
         vreinterpretq_u64_s64(when_false)));
+}
+
+// Two-lane counterpart of the SSE4.2 helper above. ARM64 NEON has native
+// signed 64-bit comparison/add/subtract, so the algorithm maps directly.
+inline I64x2 fraction_bits_2(
+    I64x2 remainder, int64_t divisor, int bit_count) {
+    const I64x2 divisor_lanes = splat(divisor);
+    const I64x2 one = splat(1);
+    I64x2 result = splat(0);
+    for (int i = 0; i < bit_count; ++i) {
+        result = add(result, result);
+        const I64x2 threshold = subtract(divisor_lanes, remainder);
+        const uint64x2_t emit = vcgeq_s64(remainder, threshold);
+        const I64x2 doubled = add(remainder, remainder);
+        const I64x2 reduced = subtract(remainder, threshold);
+        remainder = select(emit, reduced, doubled);
+        result = vreinterpretq_s64_u64(vorrq_u64(
+            vreinterpretq_u64_s64(result),
+            vandq_u64(emit, vreinterpretq_u64_s64(one))));
+    }
+    return result;
 }
 
 inline I64x2 minimum(I64x2 a, I64x2 b) {

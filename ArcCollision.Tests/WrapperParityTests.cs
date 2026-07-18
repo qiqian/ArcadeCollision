@@ -245,6 +245,53 @@ public class WrapperParityTests
     }
 
     [Fact]
+    public void WorldIdentityRotationAndScaleMaterializeBitExactlyAcrossBackends()
+    {
+        var shapes = new List<(Ref.Shape Ref, Native.Shape Native)>(CreateShapes())
+        {
+            // Covers the native OBB final-angle-zero bounds fast path; the OBB
+            // in CreateShapes intentionally has a non-zero authored angle.
+            (new Ref.Obb(Ref.Vec2.Zero, new Ref.Vec2(1.25f, .75f), 0f),
+             new Native.Obb(Native.Vec2.Zero, new Native.Vec2(1.25f, .75f), 0f)),
+        };
+        var refPosition = new Ref.Vec2(123.125f, -45.375f);
+        var nativePosition = new Native.Vec2(123.125f, -45.375f);
+
+        for (int i = 0; i < shapes.Count; i++)
+        {
+            using var reference = new Ref.ArcWorld();
+            using var native = new Native.ArcWorld();
+            Ref.ArcHandle refHandle = reference.Add(i, shapes[i].Ref);
+            Native.ArcHandle nativeHandle = native.Add(i, shapes[i].Native);
+
+            reference.UpdateTransform(refHandle, new Ref.Transform(
+                refPosition, new Ref.Angle32(0), 1f));
+            native.UpdateTransform(nativeHandle, new Native.Transform(
+                nativePosition, new Native.Angle32(0), 1f));
+            AssertShapeBits(reference.GetShape(refHandle), native.GetShape(nativeHandle));
+
+            // Query observes the materialized bounds stored in each world, not
+            // merely the public shape returned by GetShape.
+            for (int y = -8; y <= 8; y++)
+            {
+                for (int x = -8; x <= 8; x++)
+                {
+                    var refHits = new List<Ref.ArcHandle>();
+                    var nativeHits = new List<Native.ArcHandle>();
+                    var refProbe = new Ref.Vec2(
+                        refPosition.X + x * .25f, refPosition.Y + y * .25f);
+                    var nativeProbe = new Native.Vec2(
+                        nativePosition.X + x * .25f, nativePosition.Y + y * .25f);
+                    reference.Query(new Ref.Aabb(refProbe, new Ref.Vec2(Grid, Grid)), refHits);
+                    native.Query(new Native.Aabb(
+                        nativeProbe, new Native.Vec2(Grid, Grid)), nativeHits);
+                    Assert.Equal(refHits.Contains(refHandle), nativeHits.Contains(nativeHandle));
+                }
+            }
+        }
+    }
+
+    [Fact]
     public void OddGridBoundsContactsAndSweepSignedZeroAreBitExact()
     {
         const float g = 1f / 256f;

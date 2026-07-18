@@ -100,11 +100,11 @@ FxSweep moving_circle_obb(FxCircle mover, Vec motion, arc_obb target) {
     const Vec center = Vec::from(target.center);
     const Vec relative = mover.center - center;
     const FxCircle local_circle{{
-        round_div(axis_x.dot(relative), AxisOne),
-        round_div(axis_y.dot(relative), AxisOne)}, std::abs(mover.radius)};
+        round_axis(axis_x.dot(relative)),
+        round_axis(axis_y.dot(relative))}, std::abs(mover.radius)};
     const Vec local_motion{
-        round_div(axis_x.dot(motion), AxisOne),
-        round_div(axis_y.dot(motion), AxisOne)};
+        round_axis(axis_x.dot(motion)),
+        round_axis(axis_y.dot(motion))};
     const FxAabb local_box{{0, 0}, {
         std::abs(from_float(target.half_extents.x)),
         std::abs(from_float(target.half_extents.y))}};
@@ -126,9 +126,9 @@ FxSweep moving_aabb_aabb(FxAabb mover, Vec motion, FxAabb target) {
             return {true, 0, -initial.normal, initial.contact};
     }
     const Vec center = mover.center + motion.times_t(hit.time);
-    const int64_t extent = round_div(
+    const int64_t extent = round_axis(
         std::abs(hit.normal.x) * mover.half.x
-        + std::abs(hit.normal.y) * mover.half.y, AxisOne);
+        + std::abs(hit.normal.y) * mover.half.y);
     return {true, hit.time, hit.normal, center - hit.normal.scale(extent)};
 }
 
@@ -394,9 +394,9 @@ FxSweep ray_capsule(
     const Axis normal_axis = Axis::from_vector(
         {-segment.y, segment.x}, Axis::unit_y());
     const int64_t position =
-        round_div(normal_axis.dot(origin - a), AxisOne);
+        round_axis(normal_axis.dot(origin - a));
     const int64_t velocity =
-        round_div(normal_axis.dot(motion), AxisOne);
+        round_axis(normal_axis.dot(motion));
     int64_t enter;
     int64_t exit;
     if (velocity == 0) {

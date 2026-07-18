@@ -528,10 +528,10 @@ Bounds shape_bounds(const arc_shape& shape) {
         const int64_t half_y = std::abs(from_float(shape.obb.half_extents.y));
         const Axis axis_x = Axis::from_angle(shape.obb.angle);
         const Axis axis_y = axis_x.perpendicular();
-        const int64_t extent_x = ceil_div_positive(
-            std::abs(axis_x.x) * half_x + std::abs(axis_y.x) * half_y, AxisOne);
-        const int64_t extent_y = ceil_div_positive(
-            std::abs(axis_x.y) * half_x + std::abs(axis_y.y) * half_y, AxisOne);
+        const int64_t extent_x = ceil_axis_positive(
+            std::abs(axis_x.x) * half_x + std::abs(axis_y.x) * half_y);
+        const int64_t extent_y = ceil_axis_positive(
+            std::abs(axis_x.y) * half_x + std::abs(axis_y.y) * half_y);
         return bounds_from_center_half(center, {extent_x, extent_y});
     }
     case ARC_SHAPE_POLYGON: {

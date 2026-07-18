@@ -8,6 +8,10 @@
 #include <cmath>
 #include <stdexcept>
 
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+
 namespace arc {
 namespace {
 
@@ -17,39 +21,68 @@ int64_t round_shift(int64_t value, int shift) {
     return value >= 0 ? (value + half) >> shift : -((-value + half) >> shift);
 }
 
+// Integer bit width in one scalar instruction: BSR on x86/x64 and CLZ on ARM64.
+// SSE4.2 does not imply LZCNT, so the MSVC PC path deliberately uses BSR.
+int bit_width_u64(uint64_t value) {
+    if (value == 0) return 0;
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))
+    unsigned long index = 0;
+    _BitScanReverse64(&index, value);
+    return static_cast<int>(index) + 1;
+#elif defined(_MSC_VER) && defined(_M_IX86)
+    unsigned long index = 0;
+    const uint32_t high = static_cast<uint32_t>(value >> 32);
+    if (high != 0) {
+        _BitScanReverse(&index, high);
+        return static_cast<int>(index) + 33;
+    }
+    _BitScanReverse(&index, static_cast<uint32_t>(value));
+    return static_cast<int>(index) + 1;
+#else
+    return 64 - __builtin_clzll(value);
+#endif
+}
+
 // How far to pre-shift operands so their squared products stay within int64:
 // leave ~30 significant bits, so a product of two scaled operands fits in ~60.
 int product_shift_from_max(uint64_t value) {
-    int bits = 0;
-    while (value != 0) {
-        ++bits;
-        value >>= 1;
-    }
-    return std::max(0, bits - 30);
+    return std::max(0, bit_width_u64(value) - 30);
 }
 
-// numerator/denominator as a Q1.30 fraction (denominator > 0, |num| < den), by
-// bit-serial long division: 30 iterations each emit one fractional bit. Used to
-// normalise an axis component to unit length without a floating divide.
-int64_t ratio_q30(int64_t numerator, int64_t denominator) {
+// Two numerators over one denominator as Q1.30 fractions. Axis normalization
+// always needs X and Y together, so their 30 long-division steps run in the two
+// SSE4.2/NEON int64 lanes. Saturated and signed results are restored per lane.
+Axis ratio_q30_pair(
+    int64_t numerator_x, int64_t numerator_y, int64_t denominator) {
     if (denominator <= 0)
         throw std::out_of_range("Axis denominator must be positive.");
-    const bool negative = numerator < 0;
-    uint64_t remainder = magnitude(numerator);
     const uint64_t divisor = static_cast<uint64_t>(denominator);
-    if (remainder >= divisor)
-        return negative ? -AxisOne : AxisOne;
-    int64_t result = 0;
-    for (int i = 0; i < AxisShift; ++i) {
-        result <<= 1;
-        if (remainder >= divisor - remainder) {
-            remainder -= divisor - remainder;
-            result |= 1;
-        } else {
-            remainder += remainder;
-        }
-    }
-    return negative ? -result : result;
+    const uint64_t magnitude_x = magnitude(numerator_x);
+    const uint64_t magnitude_y = magnitude(numerator_y);
+    const bool saturated_x = magnitude_x >= divisor;
+    const bool saturated_y = magnitude_y >= divisor;
+
+    // Saturated lanes use a zero dummy remainder and are overwritten below.
+    const auto remainders = simd128::set(
+        saturated_x ? 0 : static_cast<int64_t>(magnitude_x),
+        saturated_y ? 0 : static_cast<int64_t>(magnitude_y));
+    const auto fractions = simd128::fraction_bits_2(
+        remainders, denominator, AxisShift);
+    alignas(16) int64_t result[2];
+    simd128::store(result, fractions);
+    if (saturated_x) result[0] = AxisOne;
+    if (saturated_y) result[1] = AxisOne;
+    if (numerator_x < 0) result[0] = -result[0];
+    if (numerator_y < 0) result[1] = -result[1];
+    return {result[0], result[1]};
+}
+
+// Largest even precision shift accepted by Axis::from_components. This is the
+// closed form of the former decrement-by-two scan.
+int axis_extra_shift(int64_t length_sq) {
+    const int bits = bit_width_u64(static_cast<uint64_t>(length_sq));
+    const int even_bits = (bits + 1) & ~1;
+    return std::max(0, 62 - even_bits);
 }
 
 // CORDIC rotation-mode table: arctan(2^-i) expressed as a 32-bit turn (2^32 =
@@ -118,6 +151,7 @@ int64_t round_div(int64_t numerator, int64_t denominator) {
         numerator = -numerator;
         denominator = -denominator;
     }
+    if (denominator == AxisOne) return round_axis(numerator);
     const int64_t half = denominator >> 1;
     return numerator >= 0
         ? (numerator + half) / denominator
@@ -137,6 +171,7 @@ int64_t floor_div(int64_t numerator, int64_t denominator) {
 int64_t ceil_div_positive(int64_t numerator, int64_t denominator) {
     if (numerator < 0 || denominator <= 0)
         throw std::out_of_range("Ceiling division requires non-negative values.");
+    if (denominator == AxisOne) return ceil_axis_positive(numerator);
     return numerator == 0 ? 0 : 1 + (numerator - 1) / denominator;
 }
 
@@ -240,16 +275,12 @@ Axis Axis::from_vector(const Vec& value, const Axis& fallback) {
 Axis Axis::from_components(int64_t px, int64_t py, const Axis& fallback) {
     const int64_t length_sq = px * px + py * py;
     if (length_sq == 0) return fallback;
-    int extra_shift = 60;
-    while (extra_shift > 0
-           && (length_sq >> (62 - extra_shift)) != 0)
-        extra_shift -= 2;
+    const int extra_shift = axis_extra_shift(length_sq);
     const int64_t high_length = sqrt_i64(length_sq << extra_shift);
     if (high_length == 0) return fallback;
     const int component_shift = extra_shift >> 1;
     const int64_t scale = int64_t{1} << component_shift;
-    return {ratio_q30(px * scale, high_length),
-            ratio_q30(py * scale, high_length)};
+    return ratio_q30_pair(px * scale, py * scale, high_length);
 }
 
 // Turn a 32-bit angle (2^32 = full turn) into a Q1.30 unit axis via integer

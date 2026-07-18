@@ -107,7 +107,7 @@ bool test_axis(Vec raw, const Proxy& a, const Proxy& b, SatState& state) {
         || (overlap == state.overlap && canonical_before(oriented, state.axis))) {
         state.has_axis = true;
         state.overlap = overlap;
-        state.depth = round_div(overlap, AxisOne);
+        state.depth = round_axis(overlap);
         state.axis = oriented;
     }
     return true;
@@ -336,7 +336,7 @@ bool test_box_axis(
     if (overlap < best_overlap
         || (overlap == best_overlap && canonical_before(oriented, best_axis))) {
         best_overlap = overlap;
-        best_depth = round_div(overlap, AxisOne);
+        best_depth = round_axis(overlap);
         best_axis = oriented;
     }
     return true;
@@ -366,8 +366,8 @@ FxManifold circle_obb(const arc_circle& circle, const arc_obb& box) {
     const FxCircle source = fixed_circle(circle);
     const Vec delta = source.center - target.center;
     const FxCircle local{{
-        round_div(target.axis_x.dot(delta), AxisOne),
-        round_div(target.axis_y.dot(delta), AxisOne)}, std::abs(source.radius)};
+        round_axis(target.axis_x.dot(delta)),
+        round_axis(target.axis_y.dot(delta))}, std::abs(source.radius)};
     const FxManifold result = circle_aabb(
         local, {{0, 0}, {target.half_x, target.half_y}});
     if (!result.colliding) return {};
@@ -423,7 +423,7 @@ bool test_capsule_box_axis(
     if (overlap < best_overlap
         || (overlap == best_overlap && canonical_before(oriented, best_axis))) {
         best_overlap = overlap;
-        best_depth = round_div(overlap, AxisOne);
+        best_depth = round_axis(overlap);
         best_axis = oriented;
     }
     return true;
@@ -612,8 +612,8 @@ bool circle_obb_overlap(const arc_circle& circle, const arc_obb& box) {
     const BoxProxy target = make_box(box);
     const FxCircle source = fixed_circle(circle);
     const Vec delta = source.center - target.center;
-    const int64_t local_x = round_div(target.axis_x.dot(delta), AxisOne);
-    const int64_t local_y = round_div(target.axis_y.dot(delta), AxisOne);
+    const int64_t local_x = round_axis(target.axis_x.dot(delta));
+    const int64_t local_y = round_axis(target.axis_y.dot(delta));
     const int64_t closest_x = std::clamp(local_x, -target.half_x, target.half_x);
     const int64_t closest_y = std::clamp(local_y, -target.half_y, target.half_y);
     const int64_t dx = local_x - closest_x;
@@ -985,12 +985,10 @@ arc_aabb ARC_CALL arc_shape_get_bounds(const arc_shape* shape) {
             const int64_t half_y =
                 std::abs(arc::from_float(shape->obb.half_extents.y));
             return {shape->obb.center, {
-                arc::to_float(arc::ceil_div_positive(
-                    std::abs(x.x) * half_x + std::abs(y.x) * half_y,
-                    arc::AxisOne)),
-                arc::to_float(arc::ceil_div_positive(
-                    std::abs(x.y) * half_x + std::abs(y.y) * half_y,
-                    arc::AxisOne))}};
+                arc::to_float(arc::ceil_axis_positive(
+                    std::abs(x.x) * half_x + std::abs(y.x) * half_y)),
+                arc::to_float(arc::ceil_axis_positive(
+                    std::abs(x.y) * half_x + std::abs(y.y) * half_y))}};
         }
         case ARC_SHAPE_POLYGON:
             if (shape->polygon_rotation == 0) {
