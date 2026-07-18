@@ -124,6 +124,8 @@ internal static class Program
         Console.WriteLine($"Candidates per trial: {reference[0].CandidateCount:N0}");
         Console.WriteLine($"Collisions per trial: {reference[0].CollisionCount:N0}");
         Console.WriteLine($"Result checksum: 0x{reference[0].Checksum:X16} (identical)");
+        Console.WriteLine($"Managed allocation/trial: Ref {FormatBytes(refSummary.AllocatedMedian)}, "
+            + $"Wrapper {FormatBytes(wrapperSummary.AllocatedMedian)}");
         double updates = (double)options.DynamicCount * options.Frames;
         Console.WriteLine($"Wrapper dynamic updates/s: {updates / (wrapperSummary.SimulationMedian / 1000):N0}");
         Console.WriteLine($"Ref dynamic updates/s:     {updates / (refSummary.SimulationMedian / 1000):N0}");
@@ -143,20 +145,30 @@ internal static class Program
             + $"{summary.SimulationMedian / frames,8:0.000}");
     }
 
+    private static string FormatBytes(double bytes)
+    {
+        if (bytes >= 1024 * 1024) return $"{bytes / (1024 * 1024):0.00} MiB";
+        if (bytes >= 1024) return $"{bytes / 1024:0.00} KiB";
+        return $"{bytes:0} B";
+    }
+
     private readonly record struct Summary(
         double BuildMedian,
         double BuildBest,
         double SimulationMedian,
         double SimulationBest,
         double BuildRelativeIqr,
-        double SimulationRelativeIqr)
+        double SimulationRelativeIqr,
+        double AllocatedMedian)
     {
         public static Summary From(TrialResult[] source)
         {
             double[] builds = source.Select(result => result.BuildTime.TotalMilliseconds).ToArray();
             double[] simulations = source.Select(result => result.SimulationTime.TotalMilliseconds).ToArray();
+            double[] allocations = source.Select(result => (double)result.AllocatedBytes).ToArray();
             Array.Sort(builds);
             Array.Sort(simulations);
+            Array.Sort(allocations);
             double buildMedian = Median(builds);
             double simulationMedian = Median(simulations);
             return new Summary(
@@ -165,7 +177,8 @@ internal static class Program
                 simulationMedian,
                 simulations[0],
                 RelativeIqr(builds, buildMedian),
-                RelativeIqr(simulations, simulationMedian));
+                RelativeIqr(simulations, simulationMedian),
+                Median(allocations));
         }
 
         private static double Median(double[] sorted)

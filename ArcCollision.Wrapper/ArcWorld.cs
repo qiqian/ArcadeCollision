@@ -94,6 +94,9 @@ public sealed unsafe class ArcWorld : IDisposable
     public const int MaxWorldCount = 15;
     public const int MaxColliderCount = ArcHandle.MaxIndex + 1;
     private NativeWorldHandle? _handle;
+    // QueryBatch is world-buffered and ArcWorld is not concurrently callable.
+    // Keep blittable conversion scratch outside the GC heap.
+    private NativeBuffer<NativeShape>? _queryBatchNative;
 
     public ArcWorld(float fatMargin = 16) : this(new ArcWorldOptions(fatMargin)) { }
     public ArcWorld(in ArcWorldOptions options)
@@ -288,16 +291,19 @@ public sealed unsafe class ArcWorld : IDisposable
         counts.Clear();
         int n = queries.Length;
         if (n == 0) return;
-        var native = new NativeShape[n];
-        for (int i = 0; i < n; i++) { FixedValidation.Shape(queries[i]); native[i] = queries[i].ToNative(); }
-        fixed (NativeShape* pointer = native)
+        NativeShape* native = (_queryBatchNative ??= new()).EnsureCapacity(n);
+        for (int i = 0; i < n; i++)
         {
-            NativeMethods.Check(NativeMethods.WorldQueryBatch(Handle, pointer, n, filter, out IntPtr handleData, out IntPtr countData, out int total));
-            NativeHandle* handleSource = (NativeHandle*)handleData;
-            for (int i = 0; i < total; i++) results.Add(new ArcHandle(handleSource[i]));
-            int* countSource = (int*)countData;
-            for (int k = 0; k < n; k++) counts.Add(countSource[k]);
+            FixedValidation.Shape(queries[i]);
+            native[i] = queries[i].ToNative();
         }
+        NativeMethods.Check(NativeMethods.WorldQueryBatch(
+            Handle, native, n, filter,
+            out IntPtr handleData, out IntPtr countData, out int total));
+        NativeHandle* handleSource = (NativeHandle*)handleData;
+        for (int i = 0; i < total; i++) results.Add(new ArcHandle(handleSource[i]));
+        int* countSource = (int*)countData;
+        for (int k = 0; k < n; k++) counts.Add(countSource[k]);
         for (int i = 0; i < n; i++) GC.KeepAlive(queries[i].PolygonObject);
     }
 
@@ -398,5 +404,11 @@ public sealed unsafe class ArcWorld : IDisposable
         for (int i = 0; i < count; i++) results.Add(new WorldCastHit(source[i]));
     }
 
-    public void Dispose() { _handle?.Dispose(); _handle = null; }
+    public void Dispose()
+    {
+        _handle?.Dispose();
+        _handle = null;
+        _queryBatchNative?.Dispose();
+        _queryBatchNative = null;
+    }
 }

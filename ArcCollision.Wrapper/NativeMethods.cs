@@ -284,13 +284,13 @@ internal static unsafe class NativeMethods
     [DllImport(Library, EntryPoint="arc_dynamic_tree_create_proxy", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus DynamicTreeCreateProxy(NativeDynamicTreeHandle tree, int id, BpBounds fatBounds, out int proxy);
     [DllImport(Library, EntryPoint="arc_dynamic_tree_move_proxy", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus DynamicTreeMoveProxy(NativeDynamicTreeHandle tree, int proxy, BpBounds bounds, BpBounds fatBounds, out int moved);
     [DllImport(Library, EntryPoint="arc_dynamic_tree_destroy_proxy", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus DynamicTreeDestroyProxy(NativeDynamicTreeHandle tree, int proxy);
-    [DllImport(Library, EntryPoint="arc_dynamic_tree_query", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus DynamicTreeQuery(NativeDynamicTreeHandle tree, BpBounds bounds, [Out] int[]? output, int capacity, out int required);
-    [DllImport(Library, EntryPoint="arc_dynamic_tree_compute_self_pairs", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus DynamicTreeComputeSelfPairs(NativeDynamicTreeHandle tree, [Out] NativeIntPair[]? output, int capacity, out int required);
+    [DllImport(Library, EntryPoint="arc_dynamic_tree_query", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus DynamicTreeQuery(NativeDynamicTreeHandle tree, BpBounds bounds, int* output, int capacity, out int required);
+    [DllImport(Library, EntryPoint="arc_dynamic_tree_compute_self_pairs", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus DynamicTreeComputeSelfPairs(NativeDynamicTreeHandle tree, NativeIntPair* output, int capacity, out int required);
 
     [DllImport(Library, EntryPoint="arc_static_bvh_create", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStaticBvhHandle StaticBvhCreate();
     [DllImport(Library, EntryPoint="arc_static_bvh_destroy", CallingConvention=CallingConvention.Cdecl)] internal static extern void StaticBvhDestroy(IntPtr bvh);
     [DllImport(Library, EntryPoint="arc_static_bvh_clear", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus StaticBvhClear(NativeStaticBvhHandle bvh);
     [DllImport(Library, EntryPoint="arc_static_bvh_ensure_capacity", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus StaticBvhEnsureCapacity(NativeStaticBvhHandle bvh, int leafCapacity);
-    [DllImport(Library, EntryPoint="arc_static_bvh_build", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus StaticBvhBuild(NativeStaticBvhHandle bvh, [In] int[]? ids, [In] BpBounds[]? bounds, int count);
-    [DllImport(Library, EntryPoint="arc_static_bvh_query", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus StaticBvhQuery(NativeStaticBvhHandle bvh, BpBounds bounds, [Out] int[]? output, int capacity, out int required);
+    [DllImport(Library, EntryPoint="arc_static_bvh_build", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus StaticBvhBuild(NativeStaticBvhHandle bvh, int* ids, BpBounds* bounds, int count);
+    [DllImport(Library, EntryPoint="arc_static_bvh_query", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus StaticBvhQuery(NativeStaticBvhHandle bvh, BpBounds bounds, int* output, int capacity, out int required);
 }

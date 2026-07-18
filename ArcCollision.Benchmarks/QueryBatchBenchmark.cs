@@ -9,9 +9,9 @@ namespace ArcCollision.Benchmarks;
 //   * Ref-loop     - reference backend, one Query per shape (managed).
 //   * Native-loop  - native backend, one arc_world_query per shape (scalar path,
 //                    N P/Invokes, no packet).
-//   * Native-batch - native backend, arc_world_query_batch: four queries at a time
-//                    through a 4-wide SIMD packet descent, one P/Invoke.
-// So Native-batch/Native-loop isolates the batch+packet win inside the native
+//   * Native-batch - native backend, arc_world_query_batch: one P/Invoke with an
+//                    adaptive scalar/direct-packet/Morton-packet native path.
+// So Native-batch/Native-loop isolates the batch/traversal win inside the native
 // backend, while Native-batch/Ref-loop is the end-to-end speedup a managed caller
 // sees. Colliders are held fixed; only the queries are timed. Sparse queries are
 // scattered uniformly (mostly empty -> traversal-bound); dense queries are centred
@@ -39,7 +39,7 @@ internal static class QueryBatchBenchmark
         Console.WriteLine($"World: static={options.StaticCount}, dynamic={options.DynamicCount} "
             + "(colliders held fixed; only the query is timed)");
         Console.WriteLine("Sparse=scattered; Dense=per-query collider; Coherent=4-query bundles share a collider");
-        Console.WriteLine("Mode      N        Ref-loop  Nat-loop  Nat-batch  batch/loop  batch/ref  Hits/query");
+        Console.WriteLine("Mode      N        Ref-loop  Nat-loop  Nat-batch  batch/loop  batch/ref  Hits/query   Alloc B/query R/L/B");
 
         int[] centers = ColliderCenters(scenario);
         using Ref.ArcWorld refWorld = BuildRefWorld(refScene, options);
@@ -83,9 +83,9 @@ internal static class QueryBatchBenchmark
         ValidateEquivalent(refResults, refCounts, wrapperResults, wrapperCounts, mode, n);
         long totalHits = refResults.Count;
 
-        double refLoopMs = StableMedianMs(options, threadId,
+        TimingSummary refLoop = StableTiming(options, threadId,
             () => refWorld.QueryBatch(refQueries, refResults, refCounts));
-        double nativeLoopMs = StableMedianMs(options, threadId, () =>
+        TimingSummary nativeLoop = StableTiming(options, threadId, () =>
         {
             wrapperResults.Clear();
             for (int i = 0; i < wrapperQueries.Length; i++)
@@ -94,16 +94,20 @@ internal static class QueryBatchBenchmark
                 wrapperResults.AddRange(scratch);
             }
         });
-        double nativeBatchMs = StableMedianMs(options, threadId,
+        TimingSummary nativeBatch = StableTiming(options, threadId,
             () => wrapperWorld.QueryBatch(wrapperQueries, wrapperResults, wrapperCounts));
 
         double hitsPerQuery = (double)totalHits / n;
         Console.WriteLine($"{mode,-8}  {n,-7}  "
-            + $"{refLoopMs,7:0.000}  {nativeLoopMs,8:0.000}  {nativeBatchMs,9:0.000}  "
-            + $"{nativeLoopMs / nativeBatchMs,9:0.00}x  {refLoopMs / nativeBatchMs,8:0.00}x  {hitsPerQuery,10:0.00}");
+            + $"{refLoop.MedianMs,7:0.000}  {nativeLoop.MedianMs,8:0.000}  {nativeBatch.MedianMs,9:0.000}  "
+            + $"{nativeLoop.MedianMs / nativeBatch.MedianMs,9:0.00}x  "
+            + $"{refLoop.MedianMs / nativeBatch.MedianMs,8:0.00}x  {hitsPerQuery,10:0.00}  "
+            + $"{refLoop.MedianAllocatedBytes / n,5:0.0}/"
+            + $"{nativeLoop.MedianAllocatedBytes / n,5:0.0}/"
+            + $"{nativeBatch.MedianAllocatedBytes / n,5:0.0}");
     }
 
-    private static double StableMedianMs(
+    private static TimingSummary StableTiming(
         BenchmarkOptions options, int threadId, Action action)
     {
         for (int i = 0; i < options.WarmupIterations; i++) action();
@@ -122,24 +126,47 @@ internal static class QueryBatchBenchmark
         }
 
         var samples = new double[options.Iterations];
+        var allocationSamples = new double[options.Iterations];
         for (int i = 0; i < options.Iterations; i++)
-            samples[i] = MeasureMs(threadId, action, repetitions) / repetitions;
+        {
+            TimingMeasurement measurement = Measure(threadId, action, repetitions);
+            samples[i] = measurement.ElapsedMs / repetitions;
+            allocationSamples[i] = (double)measurement.AllocatedBytes / repetitions;
+        }
         Array.Sort(samples);
-        int middle = samples.Length / 2;
-        return (samples.Length & 1) != 0
-            ? samples[middle]
-            : (samples[middle - 1] + samples[middle]) * 0.5;
+        Array.Sort(allocationSamples);
+        return new TimingSummary(Median(samples), Median(allocationSamples));
     }
 
     private static double MeasureMs(int threadId, Action action, int repetitions)
+        => Measure(threadId, action, repetitions).ElapsedMs;
+
+    private static TimingMeasurement Measure(
+        int threadId, Action action, int repetitions)
     {
         EnsureThread(threadId);
+        long allocatedStart = GC.GetAllocatedBytesForCurrentThread();
         long start = Stopwatch.GetTimestamp();
         for (int i = 0; i < repetitions; i++) action();
         double elapsedMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedStart;
         EnsureThread(threadId);
-        return elapsedMs;
+        return new TimingMeasurement(elapsedMs, allocatedBytes);
     }
+
+    private static double Median(double[] sorted)
+    {
+        int middle = sorted.Length / 2;
+        return (sorted.Length & 1) != 0
+            ? sorted[middle]
+            : (sorted[middle - 1] + sorted[middle]) * 0.5;
+    }
+
+    private readonly record struct TimingMeasurement(
+        double ElapsedMs, long AllocatedBytes);
+
+    private readonly record struct TimingSummary(
+        double MedianMs, double MedianAllocatedBytes);
 
     // Raw 24.8 centres of every collider, so dense queries can be placed on them.
     private static int[] ColliderCenters(BenchmarkScenario scenario)

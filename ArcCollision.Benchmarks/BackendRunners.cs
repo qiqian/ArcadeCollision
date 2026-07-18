@@ -9,6 +9,7 @@ internal readonly record struct TrialResult(
     TimeSpan SimulationTime,
     long CandidateCount,
     long CollisionCount,
+    long AllocatedBytes,
     ulong Checksum);
 
 internal static class BackendRunners
@@ -24,6 +25,7 @@ internal static class BackendRunners
         var dynamicHandles = new Ref.ArcHandle[options.DynamicCount];
         var pairs = new List<Ref.CandidatePair>(pairCapacity);
 
+        long allocatedStart = GC.GetAllocatedBytesForCurrentThread();
         long buildStart = Stopwatch.GetTimestamp();
         using var world = new Ref.ArcWorld(new Ref.ArcWorldOptions(
             options.FatMargin,
@@ -69,11 +71,12 @@ internal static class BackendRunners
             }
         }
         long simulationEnd = Stopwatch.GetTimestamp();
+        long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedStart;
         EnsureThread(expectedThreadId);
         return new TrialResult(
             Stopwatch.GetElapsedTime(buildStart, buildEnd),
             Stopwatch.GetElapsedTime(simulationStart, simulationEnd),
-            candidateCount, collisionCount, checksum);
+            candidateCount, collisionCount, allocatedBytes, checksum);
     }
 
     public static TrialResult RunWrapper(
@@ -84,6 +87,7 @@ internal static class BackendRunners
         var dynamicHandles = new Wrapper.ArcHandle[options.DynamicCount];
         var pairs = new List<Wrapper.CandidatePair>(pairCapacity);
 
+        long allocatedStart = GC.GetAllocatedBytesForCurrentThread();
         long buildStart = Stopwatch.GetTimestamp();
         using var world = new Wrapper.ArcWorld(new Wrapper.ArcWorldOptions(
             options.FatMargin,
@@ -129,11 +133,12 @@ internal static class BackendRunners
             }
         }
         long simulationEnd = Stopwatch.GetTimestamp();
+        long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedStart;
         EnsureThread(expectedThreadId);
         return new TrialResult(
             Stopwatch.GetElapsedTime(buildStart, buildEnd),
             Stopwatch.GetElapsedTime(simulationStart, simulationEnd),
-            candidateCount, collisionCount, checksum);
+            candidateCount, collisionCount, allocatedBytes, checksum);
     }
 
     private static int PairCapacity(BenchmarkOptions options) =>

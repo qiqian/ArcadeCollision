@@ -330,6 +330,73 @@ public class WrapperParityTests
     }
 
     [Fact]
+    public void WorldQueryBatchSparseAndDensePathsMatchAndReuseWrapperStorage()
+    {
+        using var refWorld = new Ref.ArcWorld();
+        using var nativeWorld = new Native.ArcWorld();
+        int entityId = 0;
+        for (int y = 0; y < 8; y++)
+        for (int x = 0; x < 8; x++)
+        {
+            var refShape = new Ref.Aabb(
+                new Ref.Vec2(x * 10, y * 10), new Ref.Vec2(2, 2));
+            var nativeShape = new Native.Aabb(
+                new Native.Vec2(x * 10, y * 10), new Native.Vec2(2, 2));
+            refWorld.AddStatic(entityId, refShape);
+            nativeWorld.AddStatic(entityId, nativeShape);
+            entityId++;
+        }
+        refWorld.BuildStatic();
+        nativeWorld.BuildStatic();
+
+        var refSparse = new Ref.Shape[128];
+        var nativeSparse = new Native.Shape[128];
+        var refDense = new Ref.Shape[128];
+        var nativeDense = new Native.Shape[128];
+        for (int i = 0; i < 128; i++)
+        {
+            refSparse[i] = new Ref.Aabb(
+                new Ref.Vec2(10_000 + i * 10, 10_000), new Ref.Vec2(1, 1));
+            nativeSparse[i] = new Native.Aabb(
+                new Native.Vec2(10_000 + i * 10, 10_000), new Native.Vec2(1, 1));
+            refDense[i] = new Ref.Aabb(
+                new Ref.Vec2(35, 35), new Ref.Vec2(100, 100));
+            nativeDense[i] = new Native.Aabb(
+                new Native.Vec2(35, 35), new Native.Vec2(100, 100));
+        }
+
+        AssertBatchParity(refSparse[..16], nativeSparse[..16]);
+        AssertBatchParity(refSparse, nativeSparse);
+        AssertBatchParity(refDense, nativeDense);
+
+        // The dense call has already grown every managed result/conversion
+        // buffer. Repeating it must not allocate a NativeShape[] per call.
+        var results = new List<Native.ArcHandle>(128 * 64);
+        var counts = new List<int>(128);
+        nativeWorld.QueryBatch(nativeDense, results, counts);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 8; i++)
+            nativeWorld.QueryBatch(nativeDense, results, counts);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.InRange(allocated, 0, 256);
+
+        void AssertBatchParity(Ref.Shape[] refQueries, Native.Shape[] nativeQueries)
+        {
+            var expectedResults = new List<Ref.ArcHandle>();
+            var expectedCounts = new List<int>();
+            var actualResults = new List<Native.ArcHandle>();
+            var actualCounts = new List<int>();
+            refWorld.QueryBatch(refQueries, expectedResults, expectedCounts);
+            nativeWorld.QueryBatch(nativeQueries, actualResults, actualCounts);
+
+            Assert.Equal(expectedCounts, actualCounts);
+            Assert.Equal(expectedResults.Count, actualResults.Count);
+            for (int i = 0; i < expectedResults.Count; i++)
+                Assert.Equal(expectedResults[i].EntityId, actualResults[i].EntityId);
+        }
+    }
+
+    [Fact]
     public void ManifoldFieldsSelectTheSameWorkAndResultsInBothBackends()
     {
         foreach (var a in CreateShapes())
@@ -732,6 +799,42 @@ public class WrapperParityTests
             native.Query(nativeBounds, actual);
             Assert.Equal(expected, actual);
         }
+    }
+
+    [Fact]
+    public void NativeStandaloneBroadphaseScratchDoesNotAllocateAfterWarmup()
+    {
+        var bounds = new Native.BpBounds(-10, -10, 10, 10);
+        using var tree = new Native.DynamicAabbTree();
+        tree.CreateProxy(7, bounds);
+        tree.CreateProxy(9, bounds);
+        var query = new List<int>(4);
+        var pairs = new List<(int A, int B)>(4);
+        tree.Query(bounds, query);
+        tree.ComputeSelfPairs(pairs);
+
+        using var bvh = new Native.StaticBvh();
+        var source = new Dictionary<int, Native.BpBounds>
+        {
+            [5] = bounds,
+            [6] = new Native.BpBounds(20, 20, 30, 30),
+        };
+        bvh.Build(source);
+        query.Clear();
+        bvh.Query(bounds, query);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 32; i++)
+        {
+            query.Clear();
+            pairs.Clear();
+            tree.Query(bounds, query);
+            tree.ComputeSelfPairs(pairs);
+            bvh.Build(source);
+            bvh.Query(bounds, query);
+        }
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.InRange(allocated, 0, 256);
     }
 
     private static void AssertFloatBits(float expected, float actual) =>

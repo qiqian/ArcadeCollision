@@ -10,25 +10,34 @@ internal static class FixedValidation
 
     internal static long From(float value)
     {
-        if (!float.IsFinite(value)
-            || value < -CollisionLimits.MaxCoordinate
-            || value > CollisionLimits.MaxCoordinate)
-            throw new ArgumentOutOfRangeException(
-                "v",
-                $"Fixed-point input must be finite and within +/-{CollisionLimits.MaxCoordinate}.");
+        Scalar(value);
         return (long)MathF.Round(value * 256f);
+    }
+
+    // Boundary validation does not need to quantize. The native call performs
+    // the one authoritative float->fixed conversion; rounding here as well was
+    // pure overhead, especially for large sparse QueryBatch inputs.
+    private static void Scalar(float value)
+    {
+        if (float.IsFinite(value)
+            && value >= -CollisionLimits.MaxCoordinate
+            && value <= CollisionLimits.MaxCoordinate)
+            return;
+        throw new ArgumentOutOfRangeException(
+            "v",
+            $"Fixed-point input must be finite and within +/-{CollisionLimits.MaxCoordinate}.");
     }
 
     internal static void Vec2(Vec2 value)
     {
-        _ = From(value.X);
-        _ = From(value.Y);
+        Scalar(value.X);
+        Scalar(value.Y);
     }
 
     internal static void Circle(Circle value)
     {
         Vec2(value.Center);
-        _ = From(value.Radius);
+        Scalar(value.Radius);
     }
 
     internal static void Aabb(Aabb value)
@@ -41,7 +50,7 @@ internal static class FixedValidation
     {
         Vec2(value.A);
         Vec2(value.B);
-        _ = From(value.Radius);
+        Scalar(value.Radius);
     }
 
     internal static void Obb(Obb value)

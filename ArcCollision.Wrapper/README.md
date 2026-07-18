@@ -4,6 +4,11 @@
 `ArcCollision.Wrapper` namespace and forwards collision work to the native C++
 library through its C ABI.
 
+High-frequency blittable scratch storage (World batch-shape conversion and the
+standalone broadphase build/query buffers) is held in reusable unmanaged buffers.
+After capacity warmup these paths do not create temporary managed arrays; public
+`List<T>` results and Polygon vertex storage remain managed by design.
+
 Switch implementations by changing the namespace import:
 
 ```csharp

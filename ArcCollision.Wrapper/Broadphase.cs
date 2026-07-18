@@ -66,11 +66,11 @@ public readonly struct BpBounds
 /// by <see cref="CreateProxy"/> stay valid until <see cref="DestroyProxy"/> /
 /// <see cref="Clear"/> / <see cref="Dispose"/>.
 /// </summary>
-public sealed class DynamicAabbTree : IDisposable
+public sealed unsafe class DynamicAabbTree : IDisposable
 {
     private readonly NativeDynamicTreeHandle _handle;
-    private int[] _queryBuffer = Array.Empty<int>();
-    private NativeIntPair[] _pairBuffer = Array.Empty<NativeIntPair>();
+    private NativeBuffer<int>? _queryBuffer;
+    private NativeBuffer<NativeIntPair>? _pairBuffer;
 
     public DynamicAabbTree()
     {
@@ -112,9 +112,11 @@ public sealed class DynamicAabbTree : IDisposable
         NativeStatus status = NativeMethods.DynamicTreeQuery(Handle, bounds, null, 0, out int required);
         if (status == NativeStatus.BufferTooSmall)
         {
-            if (_queryBuffer.Length < required) _queryBuffer = new int[required];
-            NativeMethods.Check(NativeMethods.DynamicTreeQuery(Handle, bounds, _queryBuffer, _queryBuffer.Length, out required));
-            for (int i = 0; i < required; i++) results.Add(_queryBuffer[i]);
+            NativeBuffer<int> storage = _queryBuffer ??= new();
+            int* buffer = storage.EnsureCapacity(required);
+            NativeMethods.Check(NativeMethods.DynamicTreeQuery(
+                Handle, bounds, buffer, storage.Capacity, out required));
+            for (int i = 0; i < required; i++) results.Add(buffer[i]);
         }
         else NativeMethods.Check(status);
     }
@@ -125,14 +127,22 @@ public sealed class DynamicAabbTree : IDisposable
         NativeStatus status = NativeMethods.DynamicTreeComputeSelfPairs(Handle, null, 0, out int required);
         if (status == NativeStatus.BufferTooSmall)
         {
-            if (_pairBuffer.Length < required) _pairBuffer = new NativeIntPair[required];
-            NativeMethods.Check(NativeMethods.DynamicTreeComputeSelfPairs(Handle, _pairBuffer, _pairBuffer.Length, out required));
-            for (int i = 0; i < required; i++) results.Add((_pairBuffer[i].A, _pairBuffer[i].B));
+            NativeBuffer<NativeIntPair> storage = _pairBuffer ??= new();
+            NativeIntPair* buffer = storage.EnsureCapacity(required);
+            NativeMethods.Check(NativeMethods.DynamicTreeComputeSelfPairs(
+                Handle, buffer, storage.Capacity, out required));
+            for (int i = 0; i < required; i++)
+                results.Add((buffer[i].A, buffer[i].B));
         }
         else NativeMethods.Check(status);
     }
 
-    public void Dispose() => _handle.Dispose();
+    public void Dispose()
+    {
+        _handle.Dispose();
+        _queryBuffer?.Dispose();
+        _pairBuffer?.Dispose();
+    }
 }
 
 /// <summary>
@@ -140,10 +150,12 @@ public sealed class DynamicAabbTree : IDisposable
 /// <c>ArcCollision.Ref.StaticBvh</c> backed by the C API. Each <see cref="Build"/>
 /// fully replaces the leaf set.
 /// </summary>
-public sealed class StaticBvh : IDisposable
+public sealed unsafe class StaticBvh : IDisposable
 {
     private readonly NativeStaticBvhHandle _handle;
-    private int[] _queryBuffer = Array.Empty<int>();
+    private NativeBuffer<int>? _idsBuffer;
+    private NativeBuffer<BpBounds>? _boundsBuffer;
+    private NativeBuffer<int>? _queryBuffer;
 
     public StaticBvh()
     {
@@ -172,8 +184,8 @@ public sealed class StaticBvh : IDisposable
             return;
         }
 
-        int[] ids = new int[count];
-        BpBounds[] bounds = new BpBounds[count];
+        int* ids = (_idsBuffer ??= new()).EnsureCapacity(count);
+        BpBounds* bounds = (_boundsBuffer ??= new()).EnsureCapacity(count);
         int i = 0;
         foreach (KeyValuePair<int, BpBounds> item in source)
         {
@@ -190,12 +202,20 @@ public sealed class StaticBvh : IDisposable
         NativeStatus status = NativeMethods.StaticBvhQuery(Handle, bounds, null, 0, out int required);
         if (status == NativeStatus.BufferTooSmall)
         {
-            if (_queryBuffer.Length < required) _queryBuffer = new int[required];
-            NativeMethods.Check(NativeMethods.StaticBvhQuery(Handle, bounds, _queryBuffer, _queryBuffer.Length, out required));
-            for (int i = 0; i < required; i++) results.Add(_queryBuffer[i]);
+            NativeBuffer<int> storage = _queryBuffer ??= new();
+            int* buffer = storage.EnsureCapacity(required);
+            NativeMethods.Check(NativeMethods.StaticBvhQuery(
+                Handle, bounds, buffer, storage.Capacity, out required));
+            for (int i = 0; i < required; i++) results.Add(buffer[i]);
         }
         else NativeMethods.Check(status);
     }
 
-    public void Dispose() => _handle.Dispose();
+    public void Dispose()
+    {
+        _handle.Dispose();
+        _idsBuffer?.Dispose();
+        _boundsBuffer?.Dispose();
+        _queryBuffer?.Dispose();
+    }
 }
