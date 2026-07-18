@@ -1,6 +1,6 @@
 using System;
 
-namespace ArcCollision;
+namespace ArcCollision.Ref;
 
 /// <summary>
 /// Geometric distance / closest-point helpers shared by the tests. Float

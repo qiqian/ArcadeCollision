@@ -43,6 +43,18 @@ void SpatialHash::query_static(
     static_.query(bounds, results);
 }
 
+void SpatialHash::query_dynamic_packet(
+    const Bounds queries[4], std::vector<int>* results[4],
+    std::vector<PacketFrame>& stack) const {
+    dynamic_.query_packet(queries, results, stack);
+}
+
+void SpatialHash::query_static_packet(
+    const Bounds queries[4], std::vector<int>* results[4],
+    std::vector<PacketFrame>& stack) {
+    static_.query_packet(queries, results, stack);
+}
+
 void SpatialHash::compute_pairs(std::vector<std::pair<int, int>>& results) {
     results.clear();
     dynamic_.compute_self_pairs(results);

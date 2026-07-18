@@ -1,4 +1,4 @@
-namespace ArcCollision;
+namespace ArcCollision.Ref;
 
 /// <summary>Public limits of the deterministic 24.8 fixed-point core.</summary>
 public static class CollisionLimits

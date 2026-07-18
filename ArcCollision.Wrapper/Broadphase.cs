@@ -2,7 +2,7 @@ namespace ArcCollision.Wrapper;
 
 /// <summary>
 /// Broadphase axis-aligned bounds in the 24.8 fixed-point grid, stored as int32
-/// min/max. Drop-in equivalent of <c>ArcCollision.BpBounds</c>: the shape-derived
+/// min/max. Drop-in equivalent of <c>ArcCollision.Ref.BpBounds</c>: the shape-derived
 /// constructors compute their min/max in the native library so they are bit-for-bit
 /// identical to the reference backend; the pure-integer operations run in managed
 /// code. Blittable (four <see cref="int"/> fields, 16 bytes) matching the native
@@ -62,7 +62,7 @@ public readonly struct BpBounds
 
 /// <summary>
 /// Incremental broadphase over the native library: a drop-in equivalent of
-/// <c>ArcCollision.DynamicAabbTree</c> backed by the C API. Proxy indices returned
+/// <c>ArcCollision.Ref.DynamicAabbTree</c> backed by the C API. Proxy indices returned
 /// by <see cref="CreateProxy"/> stay valid until <see cref="DestroyProxy"/> /
 /// <see cref="Clear"/> / <see cref="Dispose"/>.
 /// </summary>
@@ -137,7 +137,7 @@ public sealed class DynamicAabbTree : IDisposable
 
 /// <summary>
 /// Static broadphase over the native library: a drop-in equivalent of
-/// <c>ArcCollision.StaticBvh</c> backed by the C API. Each <see cref="Build"/>
+/// <c>ArcCollision.Ref.StaticBvh</c> backed by the C API. Each <see cref="Build"/>
 /// fully replaces the leaf set.
 /// </summary>
 public sealed class StaticBvh : IDisposable

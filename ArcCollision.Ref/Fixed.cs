@@ -2,7 +2,7 @@ using System;
 using System.Numerics;
 using Xunit;
 
-namespace ArcCollision;
+namespace ArcCollision.Ref;
 
 /// <summary>
 /// Internal fixed-point layer for the integer collision core.

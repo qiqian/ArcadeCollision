@@ -1,6 +1,6 @@
 using System;
 
-namespace ArcCollision;
+namespace ArcCollision.Ref;
 
 /// <summary>
 /// Continuous (swept) collision tests. These prevent fast movers from

@@ -1,4 +1,4 @@
-using Ref = ArcCollision;
+using Ref = ArcCollision.Ref;
 using Wrapper = ArcCollision.Wrapper;
 
 namespace ArcCollision.Benchmarks;

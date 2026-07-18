@@ -5,6 +5,12 @@
 
 namespace arc {
 
+// One entry of a packet (4-wide) broadphase descent: a node index plus the 4-bit
+// mask of which of the four simultaneous queries are still live down this branch.
+// The caller owns the descent stack so packet queries hold no shared state and
+// can run concurrently against a read-only tree.
+struct PacketFrame { int node; int mask; };
+
 // Incremental broadphase: a self-balancing tree of fat AABB proxies. Supports
 // add/move/remove in ~log n and box queries / self-pair enumeration. Nodes live
 // in a pooled array with a free list; leaves store the caller's id. Mirrors the
@@ -16,6 +22,8 @@ public:
     bool move_proxy(int proxy, const Bounds& bounds, const Bounds& fat_bounds);
     void destroy_proxy(int proxy);
     void query(const Bounds& bounds, std::vector<int>& results) const;
+    void query_packet(const Bounds queries[4], std::vector<int>* results[4],
+        std::vector<PacketFrame>& stack) const;
     void compute_self_pairs(std::vector<std::pair<int, int>>& results) const;
     void ensure_capacity(int capacity);
     void clear();
@@ -70,6 +78,8 @@ public:
     void remove(int id);
     void build();
     void query(const Bounds& bounds, std::vector<int>& results);
+    void query_packet(const Bounds queries[4], std::vector<int>* results[4],
+        std::vector<PacketFrame>& stack);
     void ensure_capacity(int capacity);
     void clear();
     int root_index() const { return root_; }
@@ -128,6 +138,10 @@ public:
     void remove_static(int id);
     void query_dynamic(const Bounds& bounds, std::vector<int>& results) const;
     void query_static(const Bounds& bounds, std::vector<int>& results);
+    void query_dynamic_packet(const Bounds queries[4], std::vector<int>* results[4],
+        std::vector<PacketFrame>& stack) const;
+    void query_static_packet(const Bounds queries[4], std::vector<int>* results[4],
+        std::vector<PacketFrame>& stack);
     void compute_pairs(std::vector<std::pair<int, int>>& results);
     void build_static();
     void clear();

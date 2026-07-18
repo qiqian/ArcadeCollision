@@ -1,4 +1,4 @@
-namespace ArcCollision;
+namespace ArcCollision.Ref;
 
 internal static class DeterministicHash
 {

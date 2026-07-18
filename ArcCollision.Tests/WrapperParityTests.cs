@@ -1,6 +1,6 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
-using Ref = ArcCollision;
+using Ref = ArcCollision.Ref;
 using Native = ArcCollision.Wrapper;
 using Xunit;
 
@@ -39,7 +39,7 @@ public class WrapperParityTests
         foreach (Type referenceType in PublicTypes(reference))
         {
             Type wrapperType = wrapper.GetType(
-                referenceType.FullName!.Replace("ArcCollision", "ArcCollision.Wrapper", StringComparison.Ordinal),
+                referenceType.FullName!.Replace("ArcCollision.Ref", "ArcCollision.Wrapper", StringComparison.Ordinal),
                 throwOnError: true)!;
             if (TypeShape(referenceType) != TypeShape(wrapperType))
                 differences.Add($"{referenceType.Name} type\nExpected: {TypeShape(referenceType)}"
@@ -405,7 +405,7 @@ public class WrapperParityTests
     }
 
     private static IEnumerable<Type> PublicTypes(Assembly assembly) =>
-        assembly.GetExportedTypes().Where(t => t.Namespace is "ArcCollision" or "ArcCollision.Wrapper");
+        assembly.GetExportedTypes().Where(t => t.Namespace is "ArcCollision.Ref" or "ArcCollision.Wrapper");
 
     private static string TypeKey(Type type) => Normalize(type.FullName!);
 

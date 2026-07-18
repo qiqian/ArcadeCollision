@@ -109,6 +109,18 @@ struct arc_world {
     std::vector<arc_candidate_pair> pair_values;
     std::vector<arc_handle> query_values;
     std::vector<arc_world_cast_hit> cast_values;
+    // Scratch for arc_world_query_batch. Queries are Morton-sorted so each packet
+    // of four is spatially coherent (shared traversal); results land in
+    // morton_handles in that order, then scatter back to input order in
+    // query_values. Counts/slice-starts are indexed by the original query.
+    std::vector<int32_t> query_batch_counts;   // per input query (published)
+    std::vector<arc::Bounds> query_batch_bounds;
+    std::vector<uint64_t> query_morton;        // per input query
+    std::vector<int> query_order;              // input indices, Morton-sorted
+    std::vector<int32_t> query_slice_start;    // per input query: start in morton_handles
+    std::vector<arc_handle> morton_handles;    // results in Morton (packet) order
+    std::vector<int> packet_candidates[4];
+    std::vector<arc::PacketFrame> packet_stack;
     int free_list = -1;
     int active_count = 0;
     int enabled_count = 0;
@@ -164,6 +176,26 @@ bool query_slot(
     const Slot& slot, const arc_collision_filter* filter) {
     return slot.active && slot.enabled
         && (!filter || arc::filter_allows(*filter, slot.filter));
+}
+
+// Spread the low 32 bits of v into even bit positions of a 64-bit word.
+uint64_t spread_bits(uint32_t v) {
+    uint64_t x = v;
+    x = (x | (x << 16)) & 0x0000FFFF0000FFFFULL;
+    x = (x | (x << 8))  & 0x00FF00FF00FF00FFULL;
+    x = (x | (x << 4))  & 0x0F0F0F0F0F0F0F0FULL;
+    x = (x | (x << 2))  & 0x3333333333333333ULL;
+    x = (x | (x << 1))  & 0x5555555555555555ULL;
+    return x;
+}
+
+// 64-bit Morton code of a bounds centre: spatially near centres get near codes,
+// so sorting queries by it makes each group of four coherent. The signed 24.8
+// centre is biased to an order-preserving unsigned value before interleaving.
+uint64_t morton_code(const arc::Bounds& bounds) {
+    const uint32_t x = static_cast<uint32_t>(bounds.center_x()) ^ 0x80000000u;
+    const uint32_t y = static_cast<uint32_t>(bounds.center_y()) ^ 0x80000000u;
+    return spread_bits(x) | (spread_bits(y) << 1);
 }
 
 arc::Bounds swept_bounds(const arc_shape& mover, arc_vec2 motion) {
@@ -658,6 +690,131 @@ arc_status ARC_CALL arc_world_query(
         return publish_world_results(world->query_values, output, count);
     } catch (...) {
         arc::set_error("Query failed.");
+        return ARC_STATUS_INTERNAL_ERROR;
+    }
+}
+
+// Batched box query. Processes the queries four at a time through a shared 4-wide
+// SIMD packet descent of both broadphase trees, then filters and sorts each
+// query's candidates exactly like the single-shape arc_world_query. Results are
+// concatenated into one world-owned handle buffer; out_counts[k] is the number of
+// handles belonging to query k (its slice starts after the previous queries'
+// counts). Both views follow the borrowed-result contract of arc_world_query.
+arc_status ARC_CALL arc_world_query_batch(
+    arc_world* world, const arc_shape* queries, int32_t query_count,
+    const arc_collision_filter* filter,
+    const arc_handle** out_handles, const int32_t** out_counts,
+    int32_t* out_total) {
+    if (out_handles) *out_handles = nullptr;
+    if (out_counts) *out_counts = nullptr;
+    if (out_total) *out_total = 0;
+    if (!world || !out_handles || !out_counts || !out_total
+        || query_count < 0 || (query_count > 0 && !queries)) {
+        arc::set_error("Invalid world or batch query arguments.");
+        return ARC_STATUS_INVALID_ARGUMENT;
+    }
+    try {
+        world->query_values.clear();
+        world->query_batch_counts.clear();
+        world->morton_handles.clear();
+        if (query_count == 0) return ARC_STATUS_OK;
+
+        const size_t count = static_cast<size_t>(query_count);
+        world->query_batch_bounds.clear();
+        world->query_batch_bounds.reserve(count);
+        world->query_morton.resize(count);
+        for (int32_t i = 0; i < query_count; ++i) {
+            if (!arc::validate_shape(queries[i])) {
+                arc::set_error("Invalid batch query shape.");
+                return ARC_STATUS_INVALID_ARGUMENT;
+            }
+            const arc::Bounds bounds = arc::shape_bounds(queries[i]);
+            world->query_batch_bounds.push_back(bounds);
+            world->query_morton[static_cast<size_t>(i)] = morton_code(bounds);
+        }
+        // Sort query indices by Morton code so each packet of four is spatially
+        // coherent and shares its tree descent. Results are gathered in this order
+        // and scattered back to input order below, so the output is unchanged.
+        world->query_order.resize(count);
+        for (int32_t i = 0; i < query_count; ++i)
+            world->query_order[static_cast<size_t>(i)] = i;
+        const std::vector<uint64_t>& morton = world->query_morton;
+        std::sort(world->query_order.begin(), world->query_order.end(),
+            [&morton](int a, int b) {
+                return morton[static_cast<size_t>(a)] < morton[static_cast<size_t>(b)];
+            });
+        world->query_batch_counts.assign(count, 0);
+        world->query_slice_start.assign(count, 0);
+
+        // Padding for the final partial group of four: a box that overlaps nothing
+        // (colliders live within +/-ARC_MAX_COORDINATE, far from the int32 rails).
+        const arc::Bounds empty_box{
+            std::numeric_limits<int32_t>::max(), std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::min()};
+        std::vector<int>* lane_results[4] = {
+            &world->packet_candidates[0], &world->packet_candidates[1],
+            &world->packet_candidates[2], &world->packet_candidates[3]};
+        for (int32_t base = 0; base < query_count; base += 4) {
+            const int lanes =
+                static_cast<int>(std::min<int32_t>(4, query_count - base));
+            arc::Bounds group[4];
+            for (int lane = 0; lane < 4; ++lane) {
+                group[lane] = lane < lanes
+                    ? world->query_batch_bounds[
+                        static_cast<size_t>(world->query_order[static_cast<size_t>(base + lane)])]
+                    : empty_box;
+                world->packet_candidates[lane].clear();
+            }
+            // Dynamic then static into the same per-lane lists (a collider lives in
+            // exactly one tree, so no lane can see a duplicate id).
+            world->broadphase.query_dynamic_packet(group, lane_results, world->packet_stack);
+            world->broadphase.query_static_packet(group, lane_results, world->packet_stack);
+            for (int lane = 0; lane < lanes; ++lane) {
+                const int query_index =
+                    world->query_order[static_cast<size_t>(base + lane)];
+                const arc::Bounds& bounds = group[lane];
+                const size_t start = world->morton_handles.size();
+                for (int index : world->packet_candidates[lane]) {
+                    const Slot& slot = world->slots[static_cast<size_t>(index)];
+                    if (query_slot(slot, filter) && slot.bounds.overlaps(bounds))
+                        world->morton_handles.push_back(
+                            make_handle(world, static_cast<size_t>(index)));
+                }
+                std::sort(
+                    world->morton_handles.begin() + static_cast<ptrdiff_t>(start),
+                    world->morton_handles.end(), handle_less);
+                world->query_slice_start[static_cast<size_t>(query_index)] =
+                    static_cast<int32_t>(start);
+                world->query_batch_counts[static_cast<size_t>(query_index)] =
+                    static_cast<int32_t>(world->morton_handles.size() - start);
+            }
+        }
+        if (world->morton_handles.size()
+                > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+            arc::set_error("Batch result count exceeds the C ABI limit.");
+            return ARC_STATUS_INTERNAL_ERROR;
+        }
+        // Scatter the Morton-order results back into input order: query k's handles
+        // are contiguous starting at its running input-order offset.
+        world->query_values.resize(world->morton_handles.size());
+        size_t offset = 0;
+        for (size_t q = 0; q < count; ++q) {
+            const size_t start =
+                static_cast<size_t>(world->query_slice_start[q]);
+            const size_t length =
+                static_cast<size_t>(world->query_batch_counts[q]);
+            std::copy(world->morton_handles.begin() + static_cast<ptrdiff_t>(start),
+                world->morton_handles.begin() + static_cast<ptrdiff_t>(start + length),
+                world->query_values.begin() + static_cast<ptrdiff_t>(offset));
+            offset += length;
+        }
+        *out_handles =
+            world->query_values.empty() ? nullptr : world->query_values.data();
+        *out_counts = world->query_batch_counts.data();
+        *out_total = static_cast<int32_t>(world->query_values.size());
+        return ARC_STATUS_OK;
+    } catch (...) {
+        arc::set_error("Batch query failed.");
         return ARC_STATUS_INTERNAL_ERROR;
     }
 }

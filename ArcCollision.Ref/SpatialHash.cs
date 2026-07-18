@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace ArcCollision;
+namespace ArcCollision.Ref;
 
 /// <summary>
 /// ArcWorld's internal hybrid broadphase. The historical name is retained

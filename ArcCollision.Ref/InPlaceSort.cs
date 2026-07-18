@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
-namespace ArcCollision;
+namespace ArcCollision.Ref;
 
 /// <summary>Allocation-free deterministic heap sort for hot-path buffers.</summary>
 internal static class InPlaceSort

@@ -1,6 +1,6 @@
 using System;
 
-namespace ArcCollision;
+namespace ArcCollision.Ref;
 
 /// <summary>
 /// Broadphase axis-aligned bounds in the 24.8 fixed-point grid, stored as int32

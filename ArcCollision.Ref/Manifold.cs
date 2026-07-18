@@ -1,4 +1,4 @@
-namespace ArcCollision;
+namespace ArcCollision.Ref;
 
 /// <summary>
 /// Result of a discrete (static) overlap test.

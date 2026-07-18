@@ -1,6 +1,6 @@
 using System;
 
-namespace ArcCollision;
+namespace ArcCollision.Ref;
 
 /// <summary>
 /// Deterministic binary angle: one full turn maps to the complete UInt32 range.

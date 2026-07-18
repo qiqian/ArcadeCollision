@@ -231,6 +231,13 @@ ARC_API arc_status ARC_CALL arc_world_set_enabled(arc_world* world, arc_handle h
 ARC_API arc_status ARC_CALL arc_world_shift_origin(arc_world* world, arc_vec2 origin_delta);
 ARC_API arc_status ARC_CALL arc_world_compute_pairs(arc_world* world, const arc_candidate_pair** out_data, int32_t* out_count);
 ARC_API arc_status ARC_CALL arc_world_query(arc_world* world, const arc_shape* query, const arc_collision_filter* filter_or_null, const arc_handle** out_data, int32_t* out_count);
+/* Batched box query: queries[0..query_count) are resolved together through a
+   4-wide SIMD packet broadphase descent. out_handles receives all results
+   concatenated (borrowed, like arc_world_query); out_counts receives query_count
+   per-query counts (query k's handles are the out_counts[k] entries following the
+   sum of the earlier counts); out_total is the total handle count. query_count==0
+   yields out_handles=NULL, out_counts=NULL, out_total=0. */
+ARC_API arc_status ARC_CALL arc_world_query_batch(arc_world* world, const arc_shape* queries, int32_t query_count, const arc_collision_filter* filter_or_null, const arc_handle** out_handles, const int32_t** out_counts, int32_t* out_total);
 ARC_API arc_status ARC_CALL arc_world_try_contact_pair(arc_world* world, arc_candidate_pair pair, arc_contact_pair* out_contact, arc_bool* out_colliding);
 ARC_API arc_status ARC_CALL arc_world_try_contact_shape(arc_world* world, const arc_shape* query, const arc_collision_filter* filter_or_null, arc_handle target, arc_manifold* out_manifold, arc_bool* out_colliding);
 ARC_API arc_status ARC_CALL arc_world_shape_cast(arc_world* world, const arc_shape* mover, arc_vec2 motion, const arc_collision_filter* filter_or_null, arc_world_cast_hit* out_hit, arc_bool* out_found);

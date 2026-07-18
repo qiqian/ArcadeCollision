@@ -1,6 +1,6 @@
 using System;
 
-namespace ArcCollision;
+namespace ArcCollision.Ref;
 
 public enum SweepAlgorithm
 {

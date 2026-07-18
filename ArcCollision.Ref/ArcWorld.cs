@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 
-namespace ArcCollision;
+namespace ArcCollision.Ref;
 
 /// <summary>
 /// Lightweight collider token. Its first 32 bits pack a 20-bit slot index and
@@ -471,6 +471,50 @@ public sealed class ArcWorld : IDisposable
         in Shape query, in CollisionFilter filter, List<ArcHandle> results)
     {
         QueryCore(query, filter, applyFilter: true, results);
+    }
+
+    /// <summary>
+    /// Resolves several query shapes together, mirroring the native batch API.
+    /// Results are concatenated into <paramref name="results"/>, and counts[k] is
+    /// the number of handles belonging to queries[k] (its slice follows the sum of
+    /// the earlier counts). This reference backend simply loops over the queries.
+    /// </summary>
+    public void QueryBatch(
+        ReadOnlySpan<Shape> queries, List<ArcHandle> results, List<int> counts)
+    {
+        QueryBatchCore(queries, default, applyFilter: false, results, counts);
+    }
+
+    /// <summary>Mutually filtered batch query; see the unfiltered overload.</summary>
+    public void QueryBatch(
+        ReadOnlySpan<Shape> queries,
+        in CollisionFilter filter,
+        List<ArcHandle> results,
+        List<int> counts)
+    {
+        QueryBatchCore(queries, filter, applyFilter: true, results, counts);
+    }
+
+    private readonly List<ArcHandle> _queryBatchScratch = new();
+
+    private void QueryBatchCore(
+        ReadOnlySpan<Shape> queries,
+        in CollisionFilter filter,
+        bool applyFilter,
+        List<ArcHandle> results,
+        List<int> counts)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(results);
+        ArgumentNullException.ThrowIfNull(counts);
+        results.Clear();
+        counts.Clear();
+        for (int i = 0; i < queries.Length; i++)
+        {
+            QueryCore(queries[i], filter, applyFilter, _queryBatchScratch);
+            results.AddRange(_queryBatchScratch);
+            counts.Add(_queryBatchScratch.Count);
+        }
     }
 
     /// <summary>Returns the earliest unfiltered hit along a translation.</summary>

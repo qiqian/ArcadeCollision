@@ -172,6 +172,30 @@ public sealed unsafe class ArcWorld : IDisposable
         GC.KeepAlive(query.PolygonObject);
     }
 
+    public void QueryBatch(ReadOnlySpan<Shape> queries, List<ArcHandle> results, List<int> counts) => QueryBatchCore(queries, null, results, counts);
+    public void QueryBatch(ReadOnlySpan<Shape> queries, in CollisionFilter filter, List<ArcHandle> results, List<int> counts) { CollisionFilter copy = filter; QueryBatchCore(queries, &copy, results, counts); }
+    private void QueryBatchCore(ReadOnlySpan<Shape> queries, CollisionFilter* filter, List<ArcHandle> results, List<int> counts)
+    {
+        _ = Handle;
+        ArgumentNullException.ThrowIfNull(results);
+        ArgumentNullException.ThrowIfNull(counts);
+        results.Clear();
+        counts.Clear();
+        int n = queries.Length;
+        if (n == 0) return;
+        var native = new NativeShape[n];
+        for (int i = 0; i < n; i++) { FixedValidation.Shape(queries[i]); native[i] = queries[i].ToNative(); }
+        fixed (NativeShape* pointer = native)
+        {
+            NativeMethods.Check(NativeMethods.WorldQueryBatch(Handle, pointer, n, filter, out IntPtr handleData, out IntPtr countData, out int total));
+            NativeHandle* handleSource = (NativeHandle*)handleData;
+            for (int i = 0; i < total; i++) results.Add(new ArcHandle(handleSource[i]));
+            int* countSource = (int*)countData;
+            for (int k = 0; k < n; k++) counts.Add(countSource[k]);
+        }
+        for (int i = 0; i < n; i++) GC.KeepAlive(queries[i].PolygonObject);
+    }
+
     public bool TryComputeContact(in CandidatePair pair, out ContactPair contact)
     {
         NativeStatus status = NativeMethods.WorldContactPair(Handle, pair.Native, out NativeContact native, out int colliding);

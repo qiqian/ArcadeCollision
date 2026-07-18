@@ -1,6 +1,6 @@
 using System;
 
-namespace ArcCollision;
+namespace ArcCollision.Ref;
 
 /// <summary>
 /// Discrete (static) overlap tests. Every function returns a <see cref="Manifold"/>

@@ -1,6 +1,6 @@
 using System;
 
-namespace ArcCollision;
+namespace ArcCollision.Ref;
 
 /// <summary>A circle defined by a center point and radius.</summary>
 public readonly struct Circle

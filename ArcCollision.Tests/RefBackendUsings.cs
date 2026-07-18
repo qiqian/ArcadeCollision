@@ -1,4 +1,4 @@
-global using ArcCollision;
+global using ArcCollision.Ref;
 using Xunit;
 
 namespace ArcCollision.Tests;

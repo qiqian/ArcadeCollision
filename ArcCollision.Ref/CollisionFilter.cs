@@ -1,6 +1,6 @@
 using System;
 
-namespace ArcCollision;
+namespace ArcCollision.Ref;
 
 /// <summary>Built-in collision category bits.</summary>
 public static class CollisionCategories

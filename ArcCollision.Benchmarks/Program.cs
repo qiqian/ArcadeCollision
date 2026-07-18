@@ -77,6 +77,7 @@ internal static class Program
         }
 
         PrintResults(options, refResults, wrapperResults);
+        QueryBatchBenchmark.Run(scenario, refScene, wrapperScene, options, threadId);
         GC.KeepAlive(refScene);
         GC.KeepAlive(wrapperScene);
     }

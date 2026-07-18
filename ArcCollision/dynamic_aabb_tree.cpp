@@ -75,6 +75,39 @@ void DynamicAabbTree::query(
     }
 }
 
+// Packet (4-wide) box query: descends the tree once for four queries at a time,
+// testing each node against all four with a single SIMD overlap. A per-branch
+// mask drops queries that diverge, so scattered queries prune quickly while
+// coherent ones share the traversal. results[i] receives the ids overlapping
+// queries[i]. The caller owns `stack`, so this holds no shared state and is
+// reentrant against the read-only tree.
+void DynamicAabbTree::query_packet(
+    const Bounds queries[4], std::vector<int>* results[4],
+    std::vector<PacketFrame>& stack) const {
+    if (root_ == -1) return;
+    const simd128::Box4 q0 = simd128::load_box(&queries[0].min_x);
+    const simd128::Box4 q1 = simd128::load_box(&queries[1].min_x);
+    const simd128::Box4 q2 = simd128::load_box(&queries[2].min_x);
+    const simd128::Box4 q3 = simd128::load_box(&queries[3].min_x);
+    stack.clear();
+    stack.push_back({root_, 0xF});
+    while (!stack.empty()) {
+        const PacketFrame frame = stack.back();
+        stack.pop_back();
+        const Node& node = nodes_[static_cast<size_t>(frame.node)];
+        const int mask = simd128::overlap_mask_broadcast(
+            simd128::load_box(&node.bounds.min_x), q0, q1, q2, q3) & frame.mask;
+        if (mask == 0) continue;
+        if (node.is_leaf()) {
+            for (int lane = 0; lane < 4; ++lane)
+                if (mask & (1 << lane)) results[lane]->push_back(node.id);
+        } else {
+            stack.push_back({node.child1, mask});
+            stack.push_back({node.child2, mask});
+        }
+    }
+}
+
 // Enumerate every pair of leaves whose fat bounds overlap, each ordered small-id
 // first. Iterative dual-node descent over the tree: (node,node) self-pairs expand
 // into their child cross-products, and disjoint node pairs are pruned wholesale.

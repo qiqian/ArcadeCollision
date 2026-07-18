@@ -86,6 +86,37 @@ void StaticBvh::query(
     }
 }
 
+// Packet (4-wide) box query; see DynamicAabbTree::query_packet for the descent.
+// Builds the tree first (like the scalar query), then shares one traversal across
+// four queries with a single SIMD overlap per node and a per-branch live mask.
+void StaticBvh::query_packet(
+    const Bounds queries[4], std::vector<int>* results[4],
+    std::vector<PacketFrame>& stack) {
+    build();
+    if (root_ == -1) return;
+    const simd128::Box4 q0 = simd128::load_box(&queries[0].min_x);
+    const simd128::Box4 q1 = simd128::load_box(&queries[1].min_x);
+    const simd128::Box4 q2 = simd128::load_box(&queries[2].min_x);
+    const simd128::Box4 q3 = simd128::load_box(&queries[3].min_x);
+    stack.clear();
+    stack.push_back({root_, 0xF});
+    while (!stack.empty()) {
+        const PacketFrame frame = stack.back();
+        stack.pop_back();
+        const Node& node = nodes_[static_cast<size_t>(frame.node)];
+        const int mask = simd128::overlap_mask_broadcast(
+            simd128::load_box(&node.bounds.min_x), q0, q1, q2, q3) & frame.mask;
+        if (mask == 0) continue;
+        if (node.child1 == -1) {
+            for (int lane = 0; lane < 4; ++lane)
+                if (mask & (1 << lane)) results[lane]->push_back(node.id);
+        } else {
+            stack.push_back({node.child1, mask});
+            stack.push_back({node.child2, mask});
+        }
+    }
+}
+
 // Recursively build the subtree over leaves [start, start+count). Compute the
 // node bounds and centroid spread, pick a split (SAH-binned), partition in place,
 // and recurse. A degenerate split (all on one side) falls back to a median sort so

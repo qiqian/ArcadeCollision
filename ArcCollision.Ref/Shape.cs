@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 
-namespace ArcCollision;
+namespace ArcCollision.Ref;
 
 public enum ShapeKind
 {

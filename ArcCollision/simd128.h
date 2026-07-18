@@ -103,6 +103,32 @@ inline int overlap_mask4(
     return (~_mm_movemask_ps(_mm_castsi128_ps(separated))) & 0xF;
 }
 
+// Overlap of one box `a` against four query boxes at once (the packet-traversal
+// primitive: `a` is a tree node, q0..q3 are four simultaneous queries). Returns a
+// 4-bit mask whose bit i is set iff a overlaps q<i>. `a` broadcasts each of its
+// four components across the lanes; only the query side is transposed to SoA.
+inline int overlap_mask_broadcast(
+    Box4 a, Box4 q0, Box4 q1, Box4 q2, Box4 q3) {
+    const Box4 a_min_x = _mm_shuffle_epi32(a, _MM_SHUFFLE(0, 0, 0, 0));
+    const Box4 a_min_y = _mm_shuffle_epi32(a, _MM_SHUFFLE(1, 1, 1, 1));
+    const Box4 a_max_x = _mm_shuffle_epi32(a, _MM_SHUFFLE(2, 2, 2, 2));
+    const Box4 a_max_y = _mm_shuffle_epi32(a, _MM_SHUFFLE(3, 3, 3, 3));
+    const Box4 ql0 = _mm_unpacklo_epi32(q0, q1);
+    const Box4 ql1 = _mm_unpacklo_epi32(q2, q3);
+    const Box4 qh0 = _mm_unpackhi_epi32(q0, q1);
+    const Box4 qh1 = _mm_unpackhi_epi32(q2, q3);
+    const Box4 q_min_x = _mm_unpacklo_epi64(ql0, ql1);
+    const Box4 q_min_y = _mm_unpackhi_epi64(ql0, ql1);
+    const Box4 q_max_x = _mm_unpacklo_epi64(qh0, qh1);
+    const Box4 q_max_y = _mm_unpackhi_epi64(qh0, qh1);
+    const Box4 separated = _mm_or_si128(
+        _mm_or_si128(_mm_cmpgt_epi32(a_min_x, q_max_x),
+                     _mm_cmpgt_epi32(q_min_x, a_max_x)),
+        _mm_or_si128(_mm_cmpgt_epi32(a_min_y, q_max_y),
+                     _mm_cmpgt_epi32(q_min_y, a_max_y)));
+    return (~_mm_movemask_ps(_mm_castsi128_ps(separated))) & 0xF;
+}
+
 #elif defined(ARC_SIMD128_NEON)
 
 using I64x2 = int64x2_t;
@@ -165,6 +191,27 @@ inline int overlap_mask4(
     const uint32x4_t separated = vorrq_u32(
         vorrq_u32(vcgtq_s32(a_min_x, b_max_x), vcgtq_s32(b_min_x, a_max_x)),
         vorrq_u32(vcgtq_s32(a_min_y, b_max_y), vcgtq_s32(b_min_y, a_max_y)));
+    const uint32_t weights[4] = {1u, 2u, 4u, 8u};
+    const uint32x4_t weighted = vandq_u32(vmvnq_u32(separated), vld1q_u32(weights));
+    return static_cast<int>(vaddvq_u32(weighted));
+}
+
+// One box `a` against four query boxes at once; see the SSE version for semantics.
+inline int overlap_mask_broadcast(
+    Box4 a, Box4 q0, Box4 q1, Box4 q2, Box4 q3) {
+    const Box4 a_min_x = vdupq_laneq_s32(a, 0);
+    const Box4 a_min_y = vdupq_laneq_s32(a, 1);
+    const Box4 a_max_x = vdupq_laneq_s32(a, 2);
+    const Box4 a_max_y = vdupq_laneq_s32(a, 3);
+    const int32x4x2_t qt0 = vtrnq_s32(q0, q1);
+    const int32x4x2_t qt1 = vtrnq_s32(q2, q3);
+    const Box4 q_min_x = vcombine_s32(vget_low_s32(qt0.val[0]), vget_low_s32(qt1.val[0]));
+    const Box4 q_min_y = vcombine_s32(vget_low_s32(qt0.val[1]), vget_low_s32(qt1.val[1]));
+    const Box4 q_max_x = vcombine_s32(vget_high_s32(qt0.val[0]), vget_high_s32(qt1.val[0]));
+    const Box4 q_max_y = vcombine_s32(vget_high_s32(qt0.val[1]), vget_high_s32(qt1.val[1]));
+    const uint32x4_t separated = vorrq_u32(
+        vorrq_u32(vcgtq_s32(a_min_x, q_max_x), vcgtq_s32(q_min_x, a_max_x)),
+        vorrq_u32(vcgtq_s32(a_min_y, q_max_y), vcgtq_s32(q_min_y, a_max_y)));
     const uint32_t weights[4] = {1u, 2u, 4u, 8u};
     const uint32x4_t weighted = vandq_u32(vmvnq_u32(separated), vld1q_u32(weights));
     return static_cast<int>(vaddvq_u32(weighted));
