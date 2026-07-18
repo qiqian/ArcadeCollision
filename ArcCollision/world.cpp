@@ -172,9 +172,15 @@ struct Slot {
     int tree_proxy = -1;
     int next_free = -1;
     uint16_t generation = 0;
-    bool active = false;
-    bool enabled = false;
-    bool is_static = false;
+    // These flags are always accessed independently of their physical layout,
+    // so compiler-specific bit-field packing does not affect world behaviour.
+    bool active : 1;
+    bool enabled : 1;
+    bool is_static : 1;
+
+    // Bit-field default member initializers require C++20. Keep the library at
+    // C++17 and initialize them explicitly instead.
+    Slot() : active(false), enabled(false), is_static(false) {}
 };
 
 std::mutex world_id_mutex;
