@@ -71,10 +71,6 @@ struct SupportFeature {
     int64_t tangent_max;
 };
 
-bool is_capsule_proxy(const Proxy& proxy) {
-    return proxy.count == 2 && proxy.radius != 0;
-}
-
 SupportFeature find_support_feature(
     const Proxy& proxy, Axis normal, Axis tangent, bool maximum) {
     int64_t extreme = normal.dot(proxy.vertex(0));
@@ -874,8 +870,8 @@ FxManifold collide_aabb_aabb(const FxAabb& a, const FxAabb& b) {
 
 // Generic convex-vs-convex SAT: test both hulls' edge normals, add vertex/edge
 // axes when either shape is rounded (a radius), and fall back to the centre delta
-// for the fully-contained case. The result uses a clamped support-midpoint
-// contact, with a feature-aware tangent selection whenever a capsule is involved.
+// for the fully-contained case. Contact is the clamped local overlap of both
+// support features, so a face is never reduced to one arbitrary endpoint.
 FxManifold collide_proxy(
     const Proxy& a, const Proxy& b, bool compute_contact) {
     if (a.count == 0 || b.count == 0) return {};
@@ -895,9 +891,7 @@ FxManifold collide_proxy(
     }
     Vec contact;
     if (compute_contact) {
-        contact = is_capsule_proxy(a) || is_capsule_proxy(b)
-            ? support_feature_contact(a, b, state.axis)
-            : midpoint(support(a, state.axis), support(b, -state.axis));
+        contact = support_feature_contact(a, b, state.axis);
         contact = clamp_contact(contact, proxy_bounds(a), proxy_bounds(b));
     }
     return {true, state.axis, state.depth, contact};

@@ -1012,9 +1012,7 @@ public static partial class Collide
         FxVec2 contact = FxVec2.Zero;
         if (computeContact)
         {
-            contact = IsCapsuleProxy(a) || IsCapsuleProxy(b)
-            ? SupportFeatureContact(a, b, normalAxis)
-                : Midpoint(Support(a, normalAxis), Support(b, -normalAxis));
+            contact = SupportFeatureContact(a, b, normalAxis);
             contact = ClampContact(contact, ProxyBounds(a), ProxyBounds(b));
         }
         return new FxManifold(true, normalAxis, state.Depth, contact);
@@ -1215,9 +1213,6 @@ public static partial class Collide
             TangentMax = tangentMax;
         }
     }
-
-    private static bool IsCapsuleProxy(in ConvexProxy proxy) =>
-        proxy.Count == 2 && proxy.Radius != 0;
 
     // A face or capsule side is an entire support feature, not one arbitrary
     // vertex. Build both shapes' extreme features and choose the middle of their

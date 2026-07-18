@@ -1,0 +1,54 @@
+{
+  "Version": 1,
+  "SavedAtUtc": "2026-07-18T12:54:01.7018969+00:00",
+  "GenericSweep": false,
+  "Scene": "AabbPolygon",
+  "SweepMover": "Circle",
+  "SweepTarget": "Circle",
+  "ShowContacts": true,
+  "CanvasWidth": 940,
+  "CanvasHeight": 860,
+  "ResultText": "Scene: AabbPolygon\n\nCOLLIDING\n\ndepth  :    0.18\nnormal : (-0.64, -0.77)\ncontact: (705.0, 496.0)",
+  "Handles": [
+    {
+      "Name": "A.c",
+      "X": 785,
+      "Y": 562
+    },
+    {
+      "Name": "A.e",
+      "X": 865,
+      "Y": 652
+    },
+    {
+      "Name": "B.c",
+      "X": 627,
+      "Y": 430
+    },
+    {
+      "Name": "B.p0",
+      "X": 542,
+      "Y": 365
+    },
+    {
+      "Name": "B.p1",
+      "X": 682,
+      "Y": 350
+    },
+    {
+      "Name": "B.p2",
+      "X": 732,
+      "Y": 450
+    },
+    {
+      "Name": "B.p3",
+      "X": 647,
+      "Y": 520
+    },
+    {
+      "Name": "B.p4",
+      "X": 532,
+      "Y": 475
+    }
+  ]
+}

@@ -194,6 +194,50 @@ public class WrapperParityTests
     }
 
     [Fact]
+    public void AabbPolygonContactUsesTheLocalSupportFeatures()
+    {
+        // Regression for test/aabb-vs-polygon.arc-case.json. The AABB's
+        // top-left vertex grazes the polygon's p2-p3 support edge. Treating
+        // that edge as one arbitrary endpoint reported (705,496), well below
+        // the local intersection near (705,472).
+        var refAabb = new Ref.Aabb(
+            new Ref.Vec2(785, 562), new Ref.Vec2(80, 90));
+        var nativeAabb = new Native.Aabb(
+            new Native.Vec2(785, 562), new Native.Vec2(80, 90));
+        var refPolygon = new Ref.Polygon(
+            new Ref.Vec2(542, 365), new Ref.Vec2(682, 350),
+            new Ref.Vec2(732, 450), new Ref.Vec2(647, 520),
+            new Ref.Vec2(532, 475));
+        var nativePolygon = new Native.Polygon(
+            new Native.Vec2(542, 365), new Native.Vec2(682, 350),
+            new Native.Vec2(732, 450), new Native.Vec2(647, 520),
+            new Native.Vec2(532, 475));
+
+        Ref.Manifold expected = Ref.Collide.ShapeVsShape(
+            new Ref.Shape(refAabb), new Ref.Shape(refPolygon));
+        Native.Manifold actual = Native.Collide.ShapeVsShape(
+            new Native.Shape(nativeAabb), new Native.Shape(nativePolygon));
+        Ref.Manifold reverseExpected = Ref.Collide.ShapeVsShape(
+            new Ref.Shape(refPolygon), new Ref.Shape(refAabb));
+        Native.Manifold reverseActual = Native.Collide.ShapeVsShape(
+            new Native.Shape(nativePolygon), new Native.Shape(nativeAabb));
+
+        Assert.True(expected.Colliding && actual.Colliding);
+        Assert.InRange(expected.Contact.X, 704f, 706f);
+        Assert.InRange(expected.Contact.Y, 471f, 473f);
+        AssertFloatBits(expected.Depth, actual.Depth);
+        AssertVecBits(expected.Normal, actual.Normal);
+        AssertVecBits(expected.Contact, actual.Contact);
+
+        Assert.True(reverseExpected.Colliding && reverseActual.Colliding);
+        AssertFloatBits(reverseExpected.Depth, reverseActual.Depth);
+        AssertVecBits(reverseExpected.Normal, reverseActual.Normal);
+        AssertVecBits(reverseExpected.Contact, reverseActual.Contact);
+        AssertFloatBits(expected.Contact.X, reverseExpected.Contact.X);
+        AssertFloatBits(expected.Contact.Y, reverseExpected.Contact.Y);
+    }
+
+    [Fact]
     public void ManifoldFieldsSelectTheSameWorkAndResultsInBothBackends()
     {
         foreach (var a in CreateShapes())
