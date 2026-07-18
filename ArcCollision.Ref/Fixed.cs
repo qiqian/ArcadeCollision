@@ -23,6 +23,8 @@ internal static class Fx
     public const long One = 1L << Shift;              // 256: one world unit
     public const int TShift = 16;
     public const long TOne = 1L << TShift;            // 65536: parameter 1.0
+    public const int ScaleShift = 16;
+    public const long ScaleOne = 1L << ScaleShift;    // Q16.16 uniform scale
 
     // Keeps every derived delta, squared length and radius sum inside Int64.
     // Public coordinates remain usable up to roughly +/-1.95 million units.
@@ -37,6 +39,62 @@ internal static class Fx
         return (long)MathF.Round(v * One);
     }
     public static float To(long fx) => fx / (float)One;
+
+    /// <summary>
+    /// Quantizes a transform position directly from its IEEE-754 bits. Unlike a
+    /// floating multiply followed by Round, this boundary conversion has one
+    /// explicitly defined result on every runtime and architecture.
+    /// </summary>
+    public static long FromTransformPosition(float value)
+    {
+        if (!float.IsFinite(value) || value < -MaxInput || value > MaxInput)
+            throw new ArgumentOutOfRangeException(nameof(value),
+                $"Transform position must be finite and within +/-{MaxInput}.");
+        return FloatBitsToFixed(value, Shift, long.MaxValue);
+    }
+
+    /// <summary>Quantizes a non-negative uniform scale to Q16.16.</summary>
+    public static long FromScale(float value)
+    {
+        if (!float.IsFinite(value) || value < 0f)
+            throw new ArgumentOutOfRangeException(nameof(value), value,
+                "Scale must be finite and non-negative.");
+        return FloatBitsToFixed(value, ScaleShift, long.MaxValue / ScaleOne);
+    }
+
+    /// <summary>Applies a Q16.16 scale to a Q24.8 spatial value.</summary>
+    public static long MulScale(long value, long scale16)
+    {
+        if (scale16 < 0) throw new ArgumentOutOfRangeException(nameof(scale16));
+        ulong magnitude = Magnitude(value);
+        ulong whole = (ulong)scale16 >> ScaleShift;
+        ulong fraction = (ulong)scale16 & (ScaleOne - 1);
+        if (whole != 0 && magnitude > (ulong)long.MaxValue / whole)
+            throw new ArgumentOutOfRangeException(nameof(scale16), "Scaled value is too large.");
+        ulong result = magnitude * whole;
+        ulong fractional = (magnitude * fraction + (ScaleOne >> 1)) >> ScaleShift;
+        if (result > (ulong)long.MaxValue - fractional)
+            throw new ArgumentOutOfRangeException(nameof(scale16), "Scaled value is too large.");
+        result += fractional;
+        long signed = (long)result;
+        return value < 0 ? -signed : signed;
+    }
+
+    /// <summary>Composes two non-negative Q16.16 scale values.</summary>
+    public static long MulScales(long a, long b)
+    {
+        if (a < 0 || b < 0) throw new ArgumentOutOfRangeException();
+        ulong whole = (ulong)b >> ScaleShift;
+        ulong fraction = (ulong)b & (ScaleOne - 1);
+        if (whole != 0 && (ulong)a > (ulong)long.MaxValue / whole)
+            throw new ArgumentOutOfRangeException(nameof(b), "Composed scale is too large.");
+        ulong result = (ulong)a * whole;
+        ulong fractional = ((ulong)a * fraction + (ScaleOne >> 1)) >> ScaleShift;
+        ulong limit = (ulong)(long.MaxValue / ScaleOne);
+        if (result > limit || fractional > limit - result)
+            throw new ArgumentOutOfRangeException(nameof(b), "Composed scale is too large.");
+        return (long)(result + fractional);
+    }
 
     /// <summary>Convert a 16.16 parameter back to float.</summary>
     public static float ToT(long t16) => t16 / (float)TOne;
@@ -156,6 +214,59 @@ internal static class Fx
 
     internal static ulong Magnitude(long value) =>
         value < 0 ? (ulong)(-(value + 1)) + 1 : (ulong)value;
+
+    private static long FloatBitsToFixed(float value, int fixedShift, long maxRaw)
+    {
+        uint bits = BitConverter.SingleToUInt32Bits(value);
+        bool negative = (bits & 0x80000000u) != 0;
+        int exponentBits = (int)((bits >> 23) & 0xffu);
+        uint fractionBits = bits & 0x007fffffu;
+        if (exponentBits == 0 && fractionBits == 0) return 0;
+
+        ulong significand;
+        int exponent;
+        if (exponentBits == 0)
+        {
+            significand = fractionBits;
+            exponent = -149 + fixedShift;
+        }
+        else
+        {
+            significand = 0x00800000u | fractionBits;
+            exponent = exponentBits - 127 - 23 + fixedShift;
+        }
+
+        ulong rounded;
+        if (exponent >= 0)
+        {
+            if (exponent >= 63 || significand > ((ulong)maxRaw >> exponent))
+                throw new ArgumentOutOfRangeException(nameof(value), value,
+                    "Fixed-point transform value is too large.");
+            rounded = significand << exponent;
+        }
+        else
+        {
+            int right = -exponent;
+            if (right >= 64)
+            {
+                rounded = 0;
+            }
+            else
+            {
+                rounded = significand >> right;
+                ulong remainderMask = (1UL << right) - 1;
+                ulong remainder = significand & remainderMask;
+                ulong half = 1UL << (right - 1);
+                if (remainder > half || (remainder == half && (rounded & 1) != 0))
+                    rounded++;
+            }
+            if (rounded > (ulong)maxRaw)
+                throw new ArgumentOutOfRangeException(nameof(value), value,
+                    "Fixed-point transform value is too large.");
+        }
+        long result = (long)rounded;
+        return negative ? -result : result;
+    }
 
     public static long ScaleProductOperand(long value, int shift) =>
         shift == 0 ? value : value >> shift;

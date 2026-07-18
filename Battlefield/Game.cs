@@ -1102,17 +1102,20 @@ internal sealed class Game : IDisposable
             // forever and stall the wave.
             if (!fighter.Dead && fighter.CombatActive && !fighter.SpawnWalking)
             {
-                Shape body = fighter.Body;
-                if (_world.IsValid(fighter.BodyHandle))
+                Capsule body = fighter.Body;
+                if (!_world.IsValid(fighter.BodyHandle))
                 {
-                    _world.Update(fighter.BodyHandle, body);
-                    _world.SetEnabled(fighter.BodyHandle, true);
-                }
-                else
+                    Vec2 along = new(fighter.Def.BodyHalfSpine, 0f);
                     fighter.BodyHandle = _world.Add(
                         fighter.EntityId,
-                        body,
-                        BattlefieldCollisionFilters.FighterBody);
+                        new Capsule(-along, along, fighter.Def.Radius),
+                        BattlefieldCollisionFilters.FighterBody,
+                        enabled: false);
+                }
+                Vec2 bodyCenter = (body.A + body.B) * .5f;
+                _world.UpdateTransform(
+                    fighter.BodyHandle, new Transform(bodyCenter));
+                _world.SetEnabled(fighter.BodyHandle, true);
             }
             else if (_world.IsValid(fighter.BodyHandle))
             {
@@ -1235,20 +1238,25 @@ internal sealed class Game : IDisposable
         }
 
         BoxShape hurt = target.CurrentHurtShape();
-        Shape shape = new Obb(hurt.Center, hurt.HalfSize, hurt.Rotation);
-        if (_world.IsValid(target.HurtHandle))
+        bool rebuild = !_world.IsValid(target.HurtHandle)
+            || !target.HurtColliderHalfSize.Equals(hurt.HalfSize);
+        if (rebuild)
         {
-            _world.Update(target.HurtHandle, shape);
-            _world.SetFilter(
-                target.HurtHandle,
-                BattlefieldCollisionFilters.Hurtbox(target.Faction));
-            _world.SetEnabled(target.HurtHandle, true);
-        }
-        else
+            if (_world.IsValid(target.HurtHandle))
+                _world.Remove(target.HurtHandle);
             target.HurtHandle = _world.Add(
                 target.EntityId,
-                shape,
-                BattlefieldCollisionFilters.Hurtbox(target.Faction));
+                new Obb(Vec2.Zero, hurt.HalfSize, 0f),
+                BattlefieldCollisionFilters.Hurtbox(target.Faction),
+                enabled: false);
+            target.HurtColliderHalfSize = hurt.HalfSize;
+        }
+        _world.UpdateTransform(target.HurtHandle, new Transform(
+            hurt.Center, Angle32.FromRadians(hurt.Rotation), 1f));
+        _world.SetFilter(
+            target.HurtHandle,
+            BattlefieldCollisionFilters.Hurtbox(target.Faction));
+        _world.SetEnabled(target.HurtHandle, true);
     }
 
     private static Vec2 HitCenter(Fighter attacker, in HitWindow hit) =>

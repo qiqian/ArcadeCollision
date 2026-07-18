@@ -300,7 +300,8 @@ public class BroadphaseTests
         Assert.DoesNotContain(results, handle => handle.EntityId == 4);
 
         Polygon moved = polygon.Moved(new Vec2(200, 0));
-        world.Update(polygonHandle, moved);
+        world.UpdateTransformDelta(
+            polygonHandle, new Transform(new Vec2(200, 0)));
         world.Query(moved, results);
         Assert.Contains(results, handle => handle.EntityId == 5);
     }
@@ -371,9 +372,10 @@ public class BroadphaseTests
         for (int step = 0; step < 200; step++)
         {
             int id = random.Next(0, 100);
-            Aabb moved = RandomBox(random);
+            Aabb randomPlacement = RandomBox(random);
+            Aabb moved = new(randomPlacement.Center, dynamic[id].HalfExtents);
             dynamic[id] = moved;
-            world.Update(handles[id], moved);
+            world.UpdateTransform(handles[id], new Transform(moved.Center));
 
             Aabb query = RandomBox(random).Expanded(150);
             world.Query(query, actualHandles);

@@ -165,6 +165,37 @@ public sealed class Polygon
         TriangleIndices = IsConvex ? Array.Empty<int>() : Triangulate(_fixedVertices);
     }
 
+    private Polygon(FxVec2[] vertices)
+    {
+        if (vertices.Length < 3)
+            throw new ArgumentException("A polygon requires at least three vertices.", nameof(vertices));
+        _fixedVertices = vertices;
+        _vertices = new Vec2[vertices.Length];
+        long minX = vertices[0].X, minY = vertices[0].Y;
+        long maxX = minX, maxY = minY;
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            FxVec2 vertex = vertices[i];
+            _vertices[i] = vertex.ToVec2();
+            minX = Math.Min(minX, vertex.X);
+            minY = Math.Min(minY, vertex.Y);
+            maxX = Math.Max(maxX, vertex.X);
+            maxY = Math.Max(maxY, vertex.Y);
+        }
+        MinXFx = minX;
+        MinYFx = minY;
+        MaxXFx = maxX;
+        MaxYFx = maxY;
+        _bounds = Aabb.FromMinMax(
+            new Vec2(Fx.To(minX), Fx.To(minY)),
+            new Vec2(Fx.To(maxX), Fx.To(maxY)));
+        ValidateSimple(_fixedVertices);
+        IsConvex = ComputeConvexity(_fixedVertices);
+        TriangleIndices = IsConvex ? Array.Empty<int>() : Triangulate(_fixedVertices);
+    }
+
+    internal static Polygon FromFixed(FxVec2[] vertices) => new(vertices);
+
     private Polygon(Polygon source, Vec2 delta)
     {
         FxVec2 fixedDelta = FxVec2.From(delta);

@@ -128,19 +128,21 @@ static int broadphase_stress(void)
 
     for (i = 0; i < count; ++i) {
         if (!is_static[i] && i % 7 == 0) {
-            arc_shape shape = {0};
+            arc_transform transform;
             circles[i].center.x += i % 14 == 0 ? 4.5f : 0.75f;
-            shape.kind = ARC_SHAPE_CIRCLE;
-            shape.circle = circles[i];
-            if (arc_world_update(world, handles[i], &shape) != ARC_STATUS_OK)
+            transform.position = circles[i].center;
+            transform.rotation = 0u;
+            transform.scale = 1.0f;
+            if (arc_world_update_transform(world, handles[i], &transform) != ARC_STATUS_OK)
                 return 22;
         }
         if (is_static[i] && i % 17 == 0) {
-            arc_shape shape = {0};
+            arc_transform transform;
             circles[i].center.y += 1.0f;
-            shape.kind = ARC_SHAPE_CIRCLE;
-            shape.circle = circles[i];
-            if (arc_world_update(world, handles[i], &shape) != ARC_STATUS_OK)
+            transform.position = circles[i].center;
+            transform.rotation = 0u;
+            transform.scale = 1.0f;
+            if (arc_world_update_transform(world, handles[i], &transform) != ARC_STATUS_OK)
                 return 22;
         }
         if (i % 11 == 0) {

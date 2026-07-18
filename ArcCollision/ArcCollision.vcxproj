@@ -62,7 +62,9 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
     <TargetName>arccollision</TargetName>
-    <OutDir>$(SolutionDir).native-build\$(Configuration)\</OutDir>
+    <!-- Keep the Visual Studio build and the CMake preset on the same native
+         artifact path. Managed projects copy the DLL from this directory. -->
+    <OutDir>$(ProjectDir)build\windows-x64\$(Configuration)\</OutDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>

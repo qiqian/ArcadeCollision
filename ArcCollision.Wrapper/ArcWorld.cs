@@ -62,7 +62,7 @@ public sealed unsafe class ArcWorld : IDisposable
     public ArcWorld(in ArcWorldOptions options)
     {
         _ = FixedValidation.From(options.FatMargin);
-        if (NativeMethods.GetAbiVersion() != 3) throw new InvalidOperationException("ArcCollision native ABI version mismatch.");
+        if (NativeMethods.GetAbiVersion() != 4) throw new InvalidOperationException("ArcCollision native ABI version mismatch.");
         NativeOptions native = new(options);
         _handle = NativeMethods.WorldCreate(native);
         if (_handle.IsInvalid)
@@ -111,15 +111,34 @@ public sealed unsafe class ArcWorld : IDisposable
         NativeMethods.Check(NativeMethods.WorldShiftOrigin(Handle, originDelta));
     }
     public void BuildStatic() => NativeMethods.Check(NativeMethods.WorldBuildStatic(Handle));
-    public void Update(ArcHandle handle, in Shape shape)
+    /// <summary>
+    /// Re-places the collider's immutable base shape at an absolute rigid transform.
+    /// </summary>
+    public void UpdateTransform(ArcHandle handle, in Transform transform)
     {
         if (!IsValid(handle))
             throw new ArgumentException(
                 "Handle is stale or does not belong to this world.", nameof(handle));
-        FixedValidation.Shape(shape);
-        NativeShape native = shape.ToNative();
-        NativeMethods.Check(NativeMethods.WorldUpdate(Handle, handle.Native, native), nameof(handle));
-        GC.KeepAlive(shape.PolygonObject);
+        FixedValidation.Vec2(transform.Position);
+        NativeTransform native = new(transform);
+        NativeMethods.Check(
+            NativeMethods.WorldUpdateTransform(Handle, handle.Native, native),
+            nameof(transform));
+    }
+
+    /// <summary>
+    /// Composes a relative transform onto the collider's current transform.
+    /// </summary>
+    public void UpdateTransformDelta(ArcHandle handle, in Transform delta)
+    {
+        if (!IsValid(handle))
+            throw new ArgumentException(
+                "Handle is stale or does not belong to this world.", nameof(handle));
+        FixedValidation.Vec2(delta.Position);
+        NativeTransform native = new(delta);
+        NativeMethods.Check(
+            NativeMethods.WorldUpdateTransformDelta(Handle, handle.Native, native),
+            nameof(delta));
     }
     public void Remove(ArcHandle handle) => NativeMethods.Check(NativeMethods.WorldRemove(Handle, handle.Native), nameof(handle));
     public bool IsValid(ArcHandle handle) => NativeMethods.WorldIsValid(Handle, handle.Native) != 0;

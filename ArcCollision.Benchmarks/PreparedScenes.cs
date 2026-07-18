@@ -8,6 +8,7 @@ internal sealed class RefPreparedScene
     public Ref.Shape[] StaticShapes { get; }
     public Ref.Shape[] DynamicInitialShapes { get; }
     public Ref.Shape[] DynamicFrameShapes { get; }
+    public Ref.Transform[] DynamicFrameTransforms { get; }
     private readonly Ref.Polygon[] _polygons;
 
     public RefPreparedScene(BenchmarkScenario source)
@@ -16,6 +17,8 @@ internal sealed class RefPreparedScene
         StaticShapes = Convert(source.StaticShapes);
         DynamicInitialShapes = Convert(source.DynamicInitialShapes);
         DynamicFrameShapes = Convert(source.DynamicFrameShapes);
+        DynamicFrameTransforms = ConvertTransforms(
+            source.DynamicFrameShapes, source.DynamicInitialShapes);
     }
 
     private Ref.Shape[] Convert(ShapeSpec[] source)
@@ -47,6 +50,24 @@ internal sealed class RefPreparedScene
         };
     }
 
+    private static Ref.Transform[] ConvertTransforms(
+        ShapeSpec[] frames, ShapeSpec[] initial)
+    {
+        var result = new Ref.Transform[frames.Length];
+        for (int i = 0; i < result.Length; i++)
+        {
+            ShapeSpec frame = frames[i];
+            ShapeSpec basis = initial[i % initial.Length];
+            uint rotation = frame.Kind is BenchmarkShapeKind.Obb or BenchmarkShapeKind.Polygon
+                ? unchecked(frame.Angle - basis.Angle)
+                : 0u;
+            result[i] = new Ref.Transform(
+                new Ref.Vec2(ToFloat(frame.X), ToFloat(frame.Y)),
+                new Ref.Angle32(rotation), 1f);
+        }
+        return result;
+    }
+
     private static Ref.Polygon[] CreatePolygons()
     {
         var result = new Ref.Polygon[PolygonTemplates.Count];
@@ -69,6 +90,7 @@ internal sealed class WrapperPreparedScene
     public Wrapper.Shape[] StaticShapes { get; }
     public Wrapper.Shape[] DynamicInitialShapes { get; }
     public Wrapper.Shape[] DynamicFrameShapes { get; }
+    public Wrapper.Transform[] DynamicFrameTransforms { get; }
     private readonly Wrapper.Polygon[] _polygons;
 
     public WrapperPreparedScene(BenchmarkScenario source)
@@ -77,6 +99,8 @@ internal sealed class WrapperPreparedScene
         StaticShapes = Convert(source.StaticShapes);
         DynamicInitialShapes = Convert(source.DynamicInitialShapes);
         DynamicFrameShapes = Convert(source.DynamicFrameShapes);
+        DynamicFrameTransforms = ConvertTransforms(
+            source.DynamicFrameShapes, source.DynamicInitialShapes);
     }
 
     private Wrapper.Shape[] Convert(ShapeSpec[] source)
@@ -106,6 +130,24 @@ internal sealed class WrapperPreparedScene
                 _polygons[spec.PolygonVariant], center, new Wrapper.Angle32(spec.Angle)),
             _ => throw new InvalidOperationException(),
         };
+    }
+
+    private static Wrapper.Transform[] ConvertTransforms(
+        ShapeSpec[] frames, ShapeSpec[] initial)
+    {
+        var result = new Wrapper.Transform[frames.Length];
+        for (int i = 0; i < result.Length; i++)
+        {
+            ShapeSpec frame = frames[i];
+            ShapeSpec basis = initial[i % initial.Length];
+            uint rotation = frame.Kind is BenchmarkShapeKind.Obb or BenchmarkShapeKind.Polygon
+                ? unchecked(frame.Angle - basis.Angle)
+                : 0u;
+            result[i] = new Wrapper.Transform(
+                new Wrapper.Vec2(ToFloat(frame.X), ToFloat(frame.Y)),
+                new Wrapper.Angle32(rotation), 1f);
+        }
+        return result;
     }
 
     private static Wrapper.Polygon[] CreatePolygons()

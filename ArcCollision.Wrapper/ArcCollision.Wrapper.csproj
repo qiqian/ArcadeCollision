@@ -20,10 +20,16 @@
   <ItemGroup>
     <InternalsVisibleTo Include="ArcCollision.Tests.Wrapper" />
   </ItemGroup>
-  <!-- The native library is built by CMake (see the README build presets); build
-       it before building the managed projects. No .vcxproj ProjectReference: it was
-       a parallel build system outputting to a different dir (breaking single-source)
-       and could not be built by the dotnet CLI. -->
+  <!-- Test Explorer builds project dependencies rather than requiring a separate
+       solution build. Inside Visual Studio, make the native project an explicit
+       build-only dependency. Keep it conditional because dotnet CLI cannot build
+       a Visual C++ project; CLI/cross-platform builds continue to use CMake. -->
+  <ItemGroup Condition="'$(BuildingInsideVisualStudio)' == 'true' And '$(OS)' == 'Windows_NT'">
+    <ProjectReference Include="..\ArcCollision\ArcCollision.vcxproj"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true" />
+  </ItemGroup>
+
   <Target Name="CopyLocalNativeArcCollision" AfterTargets="Build">
     <ItemGroup>
       <!-- Single native source: the CMake preset output dir (build/<preset>). -->

@@ -16,7 +16,7 @@ public class GameReadinessTests
         world.ComputePairs(pairs);
         CandidatePair pair = Assert.Single(pairs);
 
-        world.Update(unrelated, new Circle(new Vec2(200, 0), 1));
+        world.UpdateTransform(unrelated, new Transform(new Vec2(200, 0)));
 
         Assert.True(world.TryComputeContact(pair, out _));
     }
@@ -41,7 +41,7 @@ public class GameReadinessTests
         world.ComputePairs(pairs);
         Assert.Empty(pairs);
 
-        world.Update(first, new Circle(new Vec2(1, 0), 2));
+        world.UpdateTransform(first, new Transform(new Vec2(1, 0)));
         world.SetEnabled(first, true);
 
         Assert.Equal(2, world.EnabledCount);
@@ -190,8 +190,8 @@ public class GameReadinessTests
         void RunFrame(int frame)
         {
             for (int i = 0; i < handles.Length; i++)
-                world.Update(handles[i],
-                    new Circle(new Vec2(i * 1.5f, frame & 1), 1));
+                world.UpdateTransform(handles[i],
+                    new Transform(new Vec2(i * 1.5f, frame & 1)));
             world.ComputePairs(pairs);
             world.Query(new Aabb(new Vec2(24, 0), new Vec2(30, 4)), query);
         }

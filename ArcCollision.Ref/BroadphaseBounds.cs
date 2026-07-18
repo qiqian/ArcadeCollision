@@ -128,6 +128,59 @@ public readonly struct BpBounds
         };
     }
 
+    internal static BpBounds FromFixedCircle(FxVec2 center, long radius) => new(
+        center.X - radius, center.Y - radius,
+        center.X + radius, center.Y + radius);
+
+    internal static BpBounds FromFixedAabb(FxVec2 center, FxVec2 half) => new(
+        center.X - half.X, center.Y - half.Y,
+        center.X + half.X, center.Y + half.Y);
+
+    internal static BpBounds FromFixedCapsule(
+        FxVec2 a, FxVec2 b, long radius) => new(
+        Math.Min(a.X, b.X) - radius, Math.Min(a.Y, b.Y) - radius,
+        Math.Max(a.X, b.X) + radius, Math.Max(a.Y, b.Y) + radius);
+
+    internal static BpBounds FromFixedObb(
+        FxVec2 center, FxVec2 half, Angle32 angle)
+    {
+        FxAxis axisX = FxAxis.FromAngle(angle);
+        FxAxis axisY = axisX.Perpendicular;
+        long extentX = Fx.CeilDivPositive(
+            Math.Abs(axisX.X) * half.X + Math.Abs(axisY.X) * half.Y, FxAxis.One);
+        long extentY = Fx.CeilDivPositive(
+            Math.Abs(axisX.Y) * half.X + Math.Abs(axisY.Y) * half.Y, FxAxis.One);
+        return new BpBounds(
+            center.X - extentX, center.Y - extentY,
+            center.X + extentX, center.Y + extentY);
+    }
+
+    internal static BpBounds FromFixedPolygon(
+        Polygon polygon, FxVec2 translation, Angle32 rotation)
+    {
+        ArgumentNullException.ThrowIfNull(polygon);
+        if (rotation.Raw == 0)
+        {
+            return new BpBounds(
+                polygon.MinXFx + translation.X, polygon.MinYFx + translation.Y,
+                polygon.MaxXFx + translation.X, polygon.MaxYFx + translation.Y);
+        }
+
+        FxAxis axisX = FxAxis.FromAngle(rotation);
+        FxAxis axisY = axisX.Perpendicular;
+        FxVec2 first = Transform(polygon.FixedVertices[0], translation, axisX, axisY);
+        long minX = first.X, minY = first.Y, maxX = first.X, maxY = first.Y;
+        for (int i = 1; i < polygon.FixedVertices.Length; i++)
+        {
+            FxVec2 vertex = Transform(polygon.FixedVertices[i], translation, axisX, axisY);
+            minX = Math.Min(minX, vertex.X);
+            minY = Math.Min(minY, vertex.Y);
+            maxX = Math.Max(maxX, vertex.X);
+            maxY = Math.Max(maxY, vertex.Y);
+        }
+        return new BpBounds(minX, minY, maxX, maxY);
+    }
+
     // max − min can reach ~2^31, so widen before halving/summing.
     public int CenterX => (int)(MinX + (((long)MaxX - MinX) >> 1));
     public int CenterY => (int)(MinY + (((long)MaxY - MinY) >> 1));

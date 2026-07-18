@@ -11,6 +11,10 @@
 static_assert(sizeof(arc_shape) == 24, "arc_shape must be 24 bytes (pack 4)");
 static_assert(sizeof(arc_status) == sizeof(int32_t), "arc_status must be 32 bits");
 static_assert(sizeof(arc_handle) == 8, "arc_handle must be 8 bytes");
+static_assert(sizeof(arc_transform) == 16, "arc_transform must be 16 bytes");
+static_assert(offsetof(arc_transform, position) == 0, "transform position at 0");
+static_assert(offsetof(arc_transform, rotation) == 8, "transform rotation at 8");
+static_assert(offsetof(arc_transform, scale) == 12, "transform scale at 12");
 static_assert(sizeof(arc_candidate_pair) == 16, "arc_candidate_pair must be 16 bytes");
 static_assert(sizeof(arc_sweep_hit) == 24, "arc_sweep_hit must be 24 bytes");
 static_assert(sizeof(arc_world_cast_hit) == 32, "arc_world_cast_hit must be 32 bytes");

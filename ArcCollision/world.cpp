@@ -7,6 +7,8 @@
 // standalone broadphase arrays retain the two-call output/capacity protocol.
 #include "broadphase.h"
 
+#include <cstring>
+#include <limits>
 #include <mutex>
 #include <new>
 
@@ -68,8 +70,26 @@ struct StoredShape {
     ~StoredShape() { arc::release_shape(value); }
 };
 
+struct FixedTransform {
+    arc::Vec position;
+    uint32_t rotation = 0;
+    int64_t scale16 = arc::TOne;
+};
+
+struct LocalShape {
+    int32_t kind = ARC_SHAPE_CIRCLE;
+    int64_t radius = 0;
+    arc::Vec half;
+    uint32_t base_angle = 0;
+    arc::Vec a;
+    arc::Vec b;
+    StoredShape polygon;
+};
+
 struct Slot {
-    StoredShape shape;
+    StoredShape shape;       // materialized world shape (for narrowphase)
+    LocalShape local;        // immutable fixed local form (precomputed on add)
+    FixedTransform transform; // current integer placement of `local`
     arc::Bounds bounds;
     arc_collision_filter filter{};
     int32_t entity_id = 0;
@@ -203,6 +223,268 @@ arc::Bounds swept_bounds(const arc_shape& mover, arc_vec2 motion) {
     const arc::Bounds end = start.translated(
         arc::from_float(motion.x), arc::from_float(motion.y));
     return arc::Bounds::unite(start, end);
+}
+
+// --- Integer transform placement (mirrors ArcCollision.Ref/Transform.cs) ------
+// Public transform floats are quantized once: position -> Q24.8, scale -> Q16.16.
+// Every composition, scale and rotation below is integer-only. Angle32 rotation
+// uses the same Q1.30 CORDIC axes as collision/SAT.
+
+int64_t float_bits_to_fixed(float value, int fixed_shift, int64_t max_raw) {
+    uint32_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    const bool negative = (bits & 0x80000000u) != 0;
+    const int exponent_bits = static_cast<int>((bits >> 23) & 0xffu);
+    const uint32_t fraction_bits = bits & 0x007fffffu;
+    if (exponent_bits == 0xff)
+        throw std::out_of_range("Transform value must be finite.");
+    if (exponent_bits == 0 && fraction_bits == 0) return 0;
+
+    uint64_t significand;
+    int exponent;
+    if (exponent_bits == 0) {
+        significand = fraction_bits;
+        exponent = -149 + fixed_shift;
+    } else {
+        significand = 0x00800000u | fraction_bits;
+        exponent = exponent_bits - 127 - 23 + fixed_shift;
+    }
+
+    uint64_t rounded;
+    if (exponent >= 0) {
+        if (exponent >= 63
+            || significand > (static_cast<uint64_t>(max_raw) >> exponent))
+            throw std::out_of_range("Fixed-point transform value is too large.");
+        rounded = significand << exponent;
+    } else {
+        const int right = -exponent;
+        if (right >= 64) {
+            rounded = 0;
+        } else {
+            rounded = significand >> right;
+            const uint64_t mask = (uint64_t{1} << right) - 1;
+            const uint64_t remainder = significand & mask;
+            const uint64_t half = uint64_t{1} << (right - 1);
+            if (remainder > half || (remainder == half && (rounded & 1) != 0))
+                ++rounded;
+        }
+        if (rounded > static_cast<uint64_t>(max_raw))
+            throw std::out_of_range("Fixed-point transform value is too large.");
+    }
+    const int64_t result = static_cast<int64_t>(rounded);
+    return negative ? -result : result;
+}
+
+FixedTransform fixed_transform_from_public(const arc_transform& value) {
+    if (!arc::valid_vec(value.position) || value.scale < 0.0f) {
+        throw std::out_of_range("Invalid transform.");
+    }
+    return {
+        {float_bits_to_fixed(value.position.x, arc::FxShift,
+                             std::numeric_limits<int64_t>::max()),
+         float_bits_to_fixed(value.position.y, arc::FxShift,
+                             std::numeric_limits<int64_t>::max())},
+        value.rotation,
+        float_bits_to_fixed(value.scale, arc::TShift,
+            std::numeric_limits<int64_t>::max() / arc::TOne),
+    };
+}
+
+int64_t mul_scale(int64_t value, int64_t scale16) {
+    if (scale16 < 0) throw std::out_of_range("Scale must be non-negative.");
+    const uint64_t magnitude = arc::magnitude(value);
+    const uint64_t whole = static_cast<uint64_t>(scale16) >> arc::TShift;
+    const uint64_t fraction = static_cast<uint64_t>(scale16) & (arc::TOne - 1);
+    if (whole != 0
+        && magnitude > static_cast<uint64_t>(INT64_MAX) / whole)
+        throw std::out_of_range("Scaled value is too large.");
+    uint64_t result = magnitude * whole;
+    const uint64_t fractional =
+        (magnitude * fraction + (arc::TOne >> 1)) >> arc::TShift;
+    if (result > static_cast<uint64_t>(INT64_MAX) - fractional)
+        throw std::out_of_range("Scaled value is too large.");
+    result += fractional;
+    const int64_t signed_result = static_cast<int64_t>(result);
+    return value < 0 ? -signed_result : signed_result;
+}
+
+int64_t mul_scales(int64_t a, int64_t b) {
+    if (a < 0 || b < 0) throw std::out_of_range("Scale must be non-negative.");
+    const uint64_t whole = static_cast<uint64_t>(b) >> arc::TShift;
+    const uint64_t fraction = static_cast<uint64_t>(b) & (arc::TOne - 1);
+    if (whole != 0 && static_cast<uint64_t>(a) > UINT64_C(0x7fffffffffffffff) / whole)
+        throw std::out_of_range("Composed scale is too large.");
+    const uint64_t result = static_cast<uint64_t>(a) * whole;
+    const uint64_t fractional =
+        (static_cast<uint64_t>(a) * fraction + (arc::TOne >> 1)) >> arc::TShift;
+    const uint64_t limit = static_cast<uint64_t>(INT64_MAX / arc::TOne);
+    if (result > limit || fractional > limit - result)
+        throw std::out_of_range("Composed scale is too large.");
+    return static_cast<int64_t>(result + fractional);
+}
+
+arc::Vec scale_vec(const arc::Vec& value, int64_t scale16) {
+    return {mul_scale(value.x, scale16), mul_scale(value.y, scale16)};
+}
+
+arc::Vec rotate_scale(const arc::Vec& value, const FixedTransform& transform) {
+    const arc::Vec scaled = scale_vec(value, transform.scale16);
+    if (transform.rotation == 0) return scaled;
+    const arc::Axis axis_x = arc::Axis::from_angle(transform.rotation);
+    const arc::Axis axis_y = axis_x.perpendicular();
+    return axis_x.scale(scaled.x) + axis_y.scale(scaled.y);
+}
+
+LocalShape to_local(const arc_shape& shape, FixedTransform& initial) {
+    LocalShape local;
+    local.kind = shape.kind;
+    switch (shape.kind) {
+    case ARC_SHAPE_CIRCLE:
+        initial = {arc::Vec::from(shape.circle.center), 0u, arc::TOne};
+        local.radius = arc::from_float(shape.circle.radius);
+        break;
+    case ARC_SHAPE_AABB:
+        initial = {arc::Vec::from(shape.aabb.center), 0u, arc::TOne};
+        local.half = arc::Vec::from(shape.aabb.half_extents);
+        break;
+    case ARC_SHAPE_OBB:
+        initial = {arc::Vec::from(shape.obb.center), 0u, arc::TOne};
+        local.half = arc::Vec::from(shape.obb.half_extents);
+        local.base_angle = shape.obb.angle;
+        break;
+    case ARC_SHAPE_CAPSULE: {
+        const arc::Vec a = arc::Vec::from(shape.capsule.a);
+        const arc::Vec b = arc::Vec::from(shape.capsule.b);
+        const arc::Vec mid{(a.x + b.x) / 2, (a.y + b.y) / 2};
+        initial = {mid, 0u, arc::TOne};
+        local.a = a - mid;
+        local.b = b - mid;
+        local.radius = arc::from_float(shape.capsule.radius);
+        break;
+    }
+    case ARC_SHAPE_POLYGON: {
+        initial = {arc::Vec::from(shape.polygon_translation), 0u, arc::TOne};
+        local.base_angle = shape.polygon_rotation;
+        arc_shape polygon_shape{};
+        polygon_shape.kind = ARC_SHAPE_POLYGON;
+        polygon_shape.polygon = shape.polygon;
+        local.polygon = StoredShape(polygon_shape);
+        break;
+    }
+    default:
+        break;
+    }
+    return local;
+}
+
+arc::Bounds fixed_polygon_bounds(
+    const arc_polygon& polygon, const arc::Vec& translation, uint32_t rotation) {
+    if (rotation == 0) return polygon.bounds.translated(translation.x, translation.y);
+    const arc::Axis axis_x = arc::Axis::from_angle(rotation);
+    const arc::Axis axis_y = axis_x.perpendicular();
+    auto transform = [&](const arc::Vec& vertex) {
+        return translation + axis_x.scale(vertex.x) + axis_y.scale(vertex.y);
+    };
+    arc::Vec first = transform(polygon.fixed_vertices[0]);
+    arc::Bounds bounds{static_cast<int32_t>(first.x), static_cast<int32_t>(first.y),
+                       static_cast<int32_t>(first.x), static_cast<int32_t>(first.y)};
+    for (size_t i = 1; i < polygon.fixed_vertices.size(); ++i) {
+        const arc::Vec vertex = transform(polygon.fixed_vertices[i]);
+        bounds.min_x = std::min(bounds.min_x, static_cast<int32_t>(vertex.x));
+        bounds.min_y = std::min(bounds.min_y, static_cast<int32_t>(vertex.y));
+        bounds.max_x = std::max(bounds.max_x, static_cast<int32_t>(vertex.x));
+        bounds.max_y = std::max(bounds.max_y, static_cast<int32_t>(vertex.y));
+    }
+    return bounds;
+}
+
+struct MaterializedShape {
+    arc_shape shape{};
+    arc::Bounds bounds{};
+    arc_polygon* owned_polygon = nullptr;
+};
+
+MaterializedShape materialize(const LocalShape& local, const FixedTransform& t) {
+    MaterializedShape result;
+    result.shape.kind = local.kind;
+    const arc_vec2 position = t.position.to_public();
+    switch (local.kind) {
+    case ARC_SHAPE_CIRCLE: {
+        const int64_t radius = mul_scale(local.radius, t.scale16);
+        result.shape.circle = {position, arc::to_float(radius)};
+        result.bounds = {static_cast<int32_t>(t.position.x - radius),
+                         static_cast<int32_t>(t.position.y - radius),
+                         static_cast<int32_t>(t.position.x + radius),
+                         static_cast<int32_t>(t.position.y + radius)};
+        break;
+    }
+    case ARC_SHAPE_AABB: {
+        const arc::Vec half = scale_vec(local.half, t.scale16);
+        result.shape.aabb = {position, half.to_public()};
+        result.bounds = {static_cast<int32_t>(t.position.x - half.x),
+                         static_cast<int32_t>(t.position.y - half.y),
+                         static_cast<int32_t>(t.position.x + half.x),
+                         static_cast<int32_t>(t.position.y + half.y)};
+        break;
+    }
+    case ARC_SHAPE_OBB: {
+        const arc::Vec half = scale_vec(local.half, t.scale16);
+        const uint32_t angle = local.base_angle + t.rotation;
+        result.shape.obb = {position, half.to_public(), angle};
+        const arc::Axis axis_x = arc::Axis::from_angle(angle);
+        const arc::Axis axis_y = axis_x.perpendicular();
+        const int64_t extent_x = arc::ceil_div_positive(
+            arc::magnitude(axis_x.x) * half.x + arc::magnitude(axis_y.x) * half.y,
+            arc::AxisOne);
+        const int64_t extent_y = arc::ceil_div_positive(
+            arc::magnitude(axis_x.y) * half.x + arc::magnitude(axis_y.y) * half.y,
+            arc::AxisOne);
+        result.bounds = {static_cast<int32_t>(t.position.x - extent_x),
+                         static_cast<int32_t>(t.position.y - extent_y),
+                         static_cast<int32_t>(t.position.x + extent_x),
+                         static_cast<int32_t>(t.position.y + extent_y)};
+        break;
+    }
+    case ARC_SHAPE_CAPSULE: {
+        const arc::Vec a = t.position + rotate_scale(local.a, t);
+        const arc::Vec b = t.position + rotate_scale(local.b, t);
+        const int64_t radius = mul_scale(local.radius, t.scale16);
+        result.shape.capsule = {a.to_public(), b.to_public(), arc::to_float(radius)};
+        result.bounds = {
+            static_cast<int32_t>(std::min(a.x, b.x) - radius),
+            static_cast<int32_t>(std::min(a.y, b.y) - radius),
+            static_cast<int32_t>(std::max(a.x, b.x) + radius),
+            static_cast<int32_t>(std::max(a.y, b.y) + radius)};
+        break;
+    }
+    case ARC_SHAPE_POLYGON: {
+        result.shape.polygon_rotation = local.base_angle + t.rotation;
+        result.shape.polygon_translation = position;
+        arc_polygon* polygon = local.polygon.value.polygon;
+        if (t.scale16 != arc::TOne) {
+            std::vector<arc::Vec> vertices(polygon->fixed_vertices.size());
+            for (size_t i = 0; i < vertices.size(); ++i)
+                vertices[i] = scale_vec(polygon->fixed_vertices[i], t.scale16);
+            result.owned_polygon = arc::polygon_from_fixed(vertices);
+            polygon = result.owned_polygon;
+        }
+        result.shape.polygon = polygon;
+        if (polygon)
+            result.bounds = fixed_polygon_bounds(
+                *polygon, t.position, result.shape.polygon_rotation);
+        break;
+    }
+    default:
+        break;
+    }
+    return result;
+}
+
+FixedTransform compose_transform(
+    const FixedTransform& current, const FixedTransform& delta) {
+    return {current.position + delta.position,
+            current.rotation + delta.rotation,
+            mul_scales(current.scale16, delta.scale16)};
 }
 
 void append_query(
@@ -348,6 +630,8 @@ arc_status ARC_CALL arc_world_clear(arc_world* world) {
     for (size_t i = 0; i < world->slots.size(); ++i) {
         Slot& slot = world->slots[i];
         slot.shape = StoredShape{};
+        slot.local = LocalShape{};
+        slot.transform = {};
         slot.bounds = {};
         slot.filter = {};
         slot.entity_id = 0;
@@ -446,6 +730,9 @@ arc_status ARC_CALL arc_world_add(
         table[index] = generation;
 
         Slot& slot = world->slots[index];
+        FixedTransform initial;
+        slot.local = to_local(*shape, initial);
+        slot.transform = initial;
         slot.shape = std::move(stored);
         slot.bounds = bounds;
         slot.filter = filter;
@@ -478,27 +765,30 @@ arc_status ARC_CALL arc_world_add(
     }
 }
 
-arc_status ARC_CALL arc_world_update(
-    arc_world* world, arc_handle handle, const arc_shape* shape) {
-    Slot* slot = get_slot(world, handle);
-    if (!slot) {
-        arc::set_error("Handle is stale or belongs to another world.");
-        return ARC_STATUS_INVALID_HANDLE;
-    }
-    if (!shape || !arc::validate_shape(*shape)) {
-        arc::set_error("Invalid shape.");
-        return ARC_STATUS_INVALID_ARGUMENT;
-    }
+// Re-place a collider's immutable base shape at `transform`: materialize the world
+// shape from the local form, recompute bounds, and move its broadphase proxy.
+arc_status apply_transform(arc_world* world, arc_handle handle,
+    Slot* slot, const FixedTransform& transform) {
     try {
-        StoredShape stored(*shape);
-        const arc::Bounds bounds = arc::shape_bounds(*shape);
+        MaterializedShape world_shape = materialize(slot->local, transform);
+        if (world_shape.shape.kind == ARC_SHAPE_POLYGON
+            && !world_shape.shape.polygon) {
+            arc::set_error("Transform produces an invalid polygon.");
+            return ARC_STATUS_INVALID_ARGUMENT;
+        }
+        StoredShape stored(world_shape.shape);
+        // StoredShape retained the generated geometry; drop materialize's
+        // creation reference before any later operation can throw.
+        if (world_shape.owned_polygon)
+            arc_polygon_release(world_shape.owned_polygon);
         slot->shape = std::move(stored);
-        slot->bounds = bounds;
+        slot->transform = transform;
+        slot->bounds = world_shape.bounds;
         if (slot->enabled && slot->is_static)
             world->broadphase.add_or_update_static(
-                static_cast<int>(handle_index(handle)), bounds);
+                static_cast<int>(handle_index(handle)), world_shape.bounds);
         else if (slot->enabled)
-            world->broadphase.update_dynamic(slot->tree_proxy, bounds);
+            world->broadphase.update_dynamic(slot->tree_proxy, world_shape.bounds);
         return ARC_STATUS_OK;
     } catch (const std::out_of_range& exception) {
         arc::set_error(exception.what());
@@ -506,6 +796,49 @@ arc_status ARC_CALL arc_world_update(
     } catch (...) {
         arc::set_error("Update failed.");
         return ARC_STATUS_INTERNAL_ERROR;
+    }
+}
+
+arc_status ARC_CALL arc_world_update_transform(
+    arc_world* world, arc_handle handle, const arc_transform* transform) {
+    Slot* slot = get_slot(world, handle);
+    if (!slot) {
+        arc::set_error("Handle is stale or belongs to another world.");
+        return ARC_STATUS_INVALID_HANDLE;
+    }
+    if (!transform || !arc::valid_vec(transform->position)
+        || !(transform->scale >= 0.0f)) {
+        arc::set_error("Invalid transform.");
+        return ARC_STATUS_INVALID_ARGUMENT;
+    }
+    try {
+        return apply_transform(
+            world, handle, slot, fixed_transform_from_public(*transform));
+    } catch (const std::out_of_range& exception) {
+        arc::set_error(exception.what());
+        return ARC_STATUS_OUT_OF_RANGE;
+    }
+}
+
+arc_status ARC_CALL arc_world_update_transform_delta(
+    arc_world* world, arc_handle handle, const arc_transform* delta) {
+    Slot* slot = get_slot(world, handle);
+    if (!slot) {
+        arc::set_error("Handle is stale or belongs to another world.");
+        return ARC_STATUS_INVALID_HANDLE;
+    }
+    if (!delta || !arc::valid_vec(delta->position)
+        || !(delta->scale >= 0.0f)) {
+        arc::set_error("Invalid transform delta.");
+        return ARC_STATUS_INVALID_ARGUMENT;
+    }
+    try {
+        const FixedTransform fixed_delta = fixed_transform_from_public(*delta);
+        return apply_transform(world, handle, slot,
+            compose_transform(slot->transform, fixed_delta));
+    } catch (const std::out_of_range& exception) {
+        arc::set_error(exception.what());
+        return ARC_STATUS_OUT_OF_RANGE;
     }
 }
 
@@ -523,6 +856,8 @@ arc_status ARC_CALL arc_world_remove(arc_world* world, arc_handle handle) {
     if (slot->enabled) --world->enabled_count;
     if (!slot->is_static) --world->dynamic_count;
     slot->shape = StoredShape{};
+    slot->local = LocalShape{};
+    slot->transform = {};
     slot->bounds = {};
     slot->filter = {};
     slot->entity_id = 0;
@@ -606,21 +941,41 @@ arc_status ARC_CALL arc_world_shift_origin(
     }
     try {
         (void)arc::Vec::from(origin_delta);
-        const arc_vec2 delta{-origin_delta.x, -origin_delta.y};
-        std::vector<std::pair<arc_shape, arc::Bounds>> moved;
+        const arc::Vec fixed_delta{
+            -float_bits_to_fixed(origin_delta.x, arc::FxShift,
+                                 std::numeric_limits<int64_t>::max()),
+            -float_bits_to_fixed(origin_delta.y, arc::FxShift,
+                                 std::numeric_limits<int64_t>::max())};
+        struct ShiftedSlot {
+            StoredShape shape;
+            arc::Bounds bounds;
+            FixedTransform transform;
+        };
+        std::vector<ShiftedSlot> moved;
         moved.reserve(static_cast<size_t>(world->active_count));
         for (Slot& slot : world->slots) {
             if (!slot.active) continue;
-            const arc_shape shape = arc::moved_shape(slot.shape.value, delta);
-            moved.emplace_back(shape, arc::shape_bounds(shape));
+            FixedTransform shifted = slot.transform;
+            shifted.position += fixed_delta;
+            MaterializedShape materialized = materialize(slot.local, shifted);
+            if (materialized.shape.kind == ARC_SHAPE_POLYGON
+                && !materialized.shape.polygon) {
+                arc::set_error("Origin shift produces an invalid polygon.");
+                return ARC_STATUS_INVALID_ARGUMENT;
+            }
+            StoredShape stored(materialized.shape);
+            if (materialized.owned_polygon)
+                arc_polygon_release(materialized.owned_polygon);
+            moved.push_back({std::move(stored), materialized.bounds, shifted});
         }
         world->broadphase.clear();
         size_t moved_index = 0;
         for (size_t index = 0; index < world->slots.size(); ++index) {
             Slot& slot = world->slots[index];
             if (!slot.active) continue;
-            slot.shape.value = moved[moved_index].first;
-            slot.bounds = moved[moved_index].second;
+            slot.shape = std::move(moved[moved_index].shape);
+            slot.transform = moved[moved_index].transform;
+            slot.bounds = moved[moved_index].bounds;
             slot.tree_proxy = -1;
             ++moved_index;
             if (!slot.enabled) continue;

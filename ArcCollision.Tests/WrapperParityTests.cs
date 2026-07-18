@@ -212,6 +212,39 @@ public class WrapperParityTests
     }
 
     [Fact]
+    public void WorldTransformsMaterializeBitExactlyAcrossBackends()
+    {
+        (Ref.Shape Ref, Native.Shape Native)[] shapes = CreateShapes();
+        for (int i = 0; i < shapes.Length; i++)
+        {
+            using var reference = new Ref.ArcWorld();
+            using var native = new Native.ArcWorld();
+            Ref.ArcHandle refHandle = reference.Add(i, shapes[i].Ref);
+            Native.ArcHandle nativeHandle = native.Add(i, shapes[i].Native);
+
+            var refAbsolute = new Ref.Transform(
+                new Ref.Vec2(1_234_567.1f, -765_432.06f),
+                new Ref.Angle32(0x2A17C39Du), 1.2345678f);
+            var nativeAbsolute = new Native.Transform(
+                new Native.Vec2(1_234_567.1f, -765_432.06f),
+                new Native.Angle32(0x2A17C39Du), 1.2345678f);
+            reference.UpdateTransform(refHandle, refAbsolute);
+            native.UpdateTransform(nativeHandle, nativeAbsolute);
+            AssertShapeBits(reference.GetShape(refHandle), native.GetShape(nativeHandle));
+
+            var refDelta = new Ref.Transform(
+                new Ref.Vec2(-17.003f, 29.997f),
+                new Ref.Angle32(0x139A24E7u), .812345f);
+            var nativeDelta = new Native.Transform(
+                new Native.Vec2(-17.003f, 29.997f),
+                new Native.Angle32(0x139A24E7u), .812345f);
+            reference.UpdateTransformDelta(refHandle, refDelta);
+            native.UpdateTransformDelta(nativeHandle, nativeDelta);
+            AssertShapeBits(reference.GetShape(refHandle), native.GetShape(nativeHandle));
+        }
+    }
+
+    [Fact]
     public void OddGridBoundsContactsAndSweepSignedZeroAreBitExact()
     {
         const float g = 1f / 256f;
@@ -352,6 +385,59 @@ public class WrapperParityTests
     private static void AssertFloatBits(float expected, float actual) =>
         Assert.Equal(BitConverter.SingleToUInt32Bits(expected),
             BitConverter.SingleToUInt32Bits(actual));
+
+    private static void AssertShapeBits(Ref.Shape expected, Native.Shape actual)
+    {
+        Assert.Equal((int)expected.Kind, (int)actual.Kind);
+        switch (expected.Kind)
+        {
+            case Ref.ShapeKind.Circle:
+                Assert.True(expected.TryGetCircle(out Ref.Circle refCircle));
+                Assert.True(actual.TryGetCircle(out Native.Circle nativeCircle));
+                AssertVecBits(refCircle.Center, nativeCircle.Center);
+                AssertFloatBits(refCircle.Radius, nativeCircle.Radius);
+                break;
+            case Ref.ShapeKind.Aabb:
+                Assert.True(expected.TryGetAabb(out Ref.Aabb refAabb));
+                Assert.True(actual.TryGetAabb(out Native.Aabb nativeAabb));
+                AssertVecBits(refAabb.Center, nativeAabb.Center);
+                AssertVecBits(refAabb.HalfExtents, nativeAabb.HalfExtents);
+                break;
+            case Ref.ShapeKind.Capsule:
+                Assert.True(expected.TryGetCapsule(out Ref.Capsule refCapsule));
+                Assert.True(actual.TryGetCapsule(out Native.Capsule nativeCapsule));
+                AssertVecBits(refCapsule.A, nativeCapsule.A);
+                AssertVecBits(refCapsule.B, nativeCapsule.B);
+                AssertFloatBits(refCapsule.Radius, nativeCapsule.Radius);
+                break;
+            case Ref.ShapeKind.Obb:
+                Assert.True(expected.TryGetObb(out Ref.Obb refObb));
+                Assert.True(actual.TryGetObb(out Native.Obb nativeObb));
+                AssertVecBits(refObb.Center, nativeObb.Center);
+                AssertVecBits(refObb.HalfExtents, nativeObb.HalfExtents);
+                Assert.Equal(refObb.Angle.Raw, nativeObb.Angle.Raw);
+                break;
+            case Ref.ShapeKind.Polygon:
+                Assert.True(expected.TryGetPolygon(
+                    out Ref.Polygon? refPolygon, out Ref.Vec2 refTranslation,
+                    out Ref.Angle32 refRotation));
+                Assert.True(actual.TryGetPolygon(
+                    out Native.Polygon? nativePolygon, out Native.Vec2 nativeTranslation,
+                    out Native.Angle32 nativeRotation));
+                AssertVecBits(refTranslation, nativeTranslation);
+                Assert.Equal(refRotation.Raw, nativeRotation.Raw);
+                Assert.Equal(refPolygon!.Count, nativePolygon!.Count);
+                for (int i = 0; i < refPolygon.Count; i++)
+                    AssertVecBits(refPolygon[i], nativePolygon[i]);
+                break;
+        }
+    }
+
+    private static void AssertVecBits(Ref.Vec2 expected, Native.Vec2 actual)
+    {
+        AssertFloatBits(expected.X, actual.X);
+        AssertFloatBits(expected.Y, actual.Y);
+    }
 
     private static (Ref.Shape Ref, Native.Shape Native)[] CreateShapes()
     {

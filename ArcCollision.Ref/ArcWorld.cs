@@ -152,6 +152,12 @@ public sealed class ArcWorld : IDisposable
     private struct Slot
     {
         public Shape Shape;
+        // The immutable local canonical form (precomputed on Add) plus the current
+        // transform. Shape == Materialize(Local, Transform); the local form lets
+        // a transform-only update re-place the collider without
+        // re-supplying or re-deriving geometry.
+        public LocalShape Local;
+        public FxTransform Transform;
         public BpBounds Bounds;
         public CollisionFilter Filter;
         public int EntityId;
@@ -251,14 +257,25 @@ public sealed class ArcWorld : IDisposable
         ThrowIfDisposed();
         _ = Fx.From(originDelta.X);
         _ = Fx.From(originDelta.Y);
-        Vec2 motion = -originDelta;
+        var fixedMotion = new FxVec2(
+            -Fx.FromTransformPosition(originDelta.X),
+            -Fx.FromTransformPosition(originDelta.Y));
 
-        // Validate the complete shift before mutating the world.
+        // Materialize the complete integer shift before mutating the world.
+        // Besides preserving failure atomicity, this keeps origin rebasing on
+        // exactly the same fixed transform path as UpdateTransform.
+        var shiftedTransforms = new FxTransform[_slotCount];
+        var shiftedShapes = new ShapeTransform.Result[_slotCount];
         for (int i = 0; i < _slotCount; i++)
         {
             if (!_slots[i].Active) continue;
-            Shape moved = _slots[i].Shape.Moved(motion);
-            _ = new BpBounds(moved);
+            ref Slot slot = ref _slots[i];
+            FxTransform shifted = new(
+                slot.Transform.Position + fixedMotion,
+                slot.Transform.Rotation,
+                slot.Transform.Scale16);
+            shiftedTransforms[i] = shifted;
+            shiftedShapes[i] = ShapeTransform.Materialize(slot.Local, shifted);
         }
 
         _broadphase.Clear();
@@ -267,8 +284,9 @@ public sealed class ArcWorld : IDisposable
         {
             ref Slot slot = ref _slots[i];
             if (!slot.Active) continue;
-            slot.Shape = slot.Shape.Moved(motion);
-            slot.Bounds = new BpBounds(slot.Shape);
+            slot.Shape = shiftedShapes[i].Shape;
+            slot.Transform = shiftedTransforms[i];
+            slot.Bounds = shiftedShapes[i].Bounds;
             slot.TreeProxy = -1;
             if (!slot.Enabled) continue;
             if (slot.Static)
@@ -290,12 +308,43 @@ public sealed class ArcWorld : IDisposable
         _broadphase.BuildStatic();
     }
 
-    public void Update(ArcHandle handle, in Shape shape)
+    /// <summary>
+    /// Re-places the collider's immutable base shape at an absolute rigid transform
+    /// (world position, rotation applied to the authored orientation, uniform
+    /// scale) instead of re-supplying geometry. Translation-only transforms (the
+    /// common case) just shift the base to the new position.
+    /// </summary>
+    public void UpdateTransform(ArcHandle handle, in Transform transform)
     {
         ref Slot slot = ref GetSlot(handle);
-        BpBounds bounds = new(shape);
-        slot.Shape = shape;
-        slot.Bounds = bounds;
+        ApplyTransform(handle, ref slot, FxTransform.From(transform));
+    }
+
+    /// <summary>
+    /// Applies a transform relative to the collider's current one: the delta
+    /// position is added, the delta rotation composed, and the delta scale
+    /// multiplied. A delta of <see cref="Transform.Identity"/> is a no-op; a pure
+    /// position delta moves the collider while preserving its orientation.
+    /// </summary>
+    public void UpdateTransformDelta(ArcHandle handle, in Transform delta)
+    {
+        ref Slot slot = ref GetSlot(handle);
+        FxTransform fixedDelta = FxTransform.From(delta);
+        ApplyTransform(handle, ref slot,
+            FxTransform.Compose(slot.Transform, fixedDelta));
+    }
+
+    private void ApplyTransform(ArcHandle handle, ref Slot slot, in FxTransform transform)
+    {
+        ShapeTransform.Result world = ShapeTransform.Materialize(slot.Local, transform);
+        slot.Shape = world.Shape;
+        slot.Transform = transform;
+        slot.Bounds = world.Bounds;
+        RefreshProxy(handle, ref slot, world.Bounds);
+    }
+
+    private void RefreshProxy(ArcHandle handle, ref Slot slot, in BpBounds bounds)
+    {
         if (!slot.Enabled)
             return;
         if (slot.Static)
@@ -393,6 +442,8 @@ public sealed class ArcWorld : IDisposable
         if (slot.Enabled) _enabledCount--;
 
         slot.Shape = default;
+        slot.Local = default;
+        slot.Transform = default;
         slot.Bounds = default;
         slot.Filter = default;
         slot.EntityId = 0;
@@ -426,6 +477,8 @@ public sealed class ArcWorld : IDisposable
         {
             ref Slot slot = ref _slots[i];
             slot.Shape = default;
+            slot.Local = default;
+            slot.Transform = default;
             slot.Bounds = default;
             slot.Filter = default;
             slot.EntityId = 0;
@@ -778,6 +831,8 @@ public sealed class ArcWorld : IDisposable
         int index = AllocateSlot();
         ref Slot slot = ref _slots[index];
         slot.Shape = shape;
+        slot.Local = LocalShape.From(shape, out FxTransform initial);
+        slot.Transform = initial;
         slot.Bounds = bounds;
         slot.Filter = filter;
         slot.EntityId = entityId;

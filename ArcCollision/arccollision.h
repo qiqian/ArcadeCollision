@@ -33,7 +33,7 @@
 extern "C" {
 #endif
 
-#define ARC_ABI_VERSION 3u   /* World bulk APIs now return borrowed result views. */
+#define ARC_ABI_VERSION 4u   /* Collider updates take a rigid transform, not a shape. */
 #define ARC_MAX_WORLD_COUNT 15
 #define ARC_MAX_COLLIDER_COUNT 1048576
 #define ARC_MAX_ENTITY_ID 268435455
@@ -149,6 +149,15 @@ typedef struct arc_world_options {
     float fat_margin; int32_t initial_collider_capacity, initial_pair_capacity;
 } arc_world_options;
 
+/* Placement of a collider's immutable base shape: world position of the shape's
+   local origin, a rotation applied to its authored orientation (Angle32, like
+   arc_obb.angle), and a uniform scale. At the world boundary position is
+   quantized to Q24.8 and scale to Q16.16; composition and materialization are
+   integer-only. Identity is
+   {position=0, rotation=0, scale=1} and reproduces the authored pose. Circles and
+   axis-aligned boxes ignore rotation; OBB/capsule/polygon respond to it. */
+typedef struct arc_transform { arc_vec2 position; uint32_t rotation; float scale; } arc_transform;
+
 /* ABI and diagnostics. arc_get_last_error returns thread-local UTF-8 text that
    remains valid until the next ArcCollision call on the same thread. */
 ARC_API uint32_t ARC_CALL arc_get_abi_version(void);
@@ -220,7 +229,12 @@ ARC_API int32_t ARC_CALL arc_world_get_dynamic_count(const arc_world* world);
 ARC_API int32_t ARC_CALL arc_world_get_static_count(const arc_world* world);
 ARC_API float ARC_CALL arc_world_get_fat_margin(const arc_world* world);
 ARC_API arc_status ARC_CALL arc_world_add(arc_world* world, int32_t entity_id, const arc_shape* shape, arc_collision_filter filter, arc_bool is_static, arc_bool enabled, arc_handle* out_handle);
-ARC_API arc_status ARC_CALL arc_world_update(arc_world* world, arc_handle handle, const arc_shape* shape);
+/* Re-place a collider's immutable base shape. update_transform sets the absolute
+   transform; update_transform_delta composes onto the current one (position
+   added, rotation composed, scale multiplied), so an identity delta is a no-op
+   and a pure position delta moves the collider keeping its orientation. */
+ARC_API arc_status ARC_CALL arc_world_update_transform(arc_world* world, arc_handle handle, const arc_transform* transform);
+ARC_API arc_status ARC_CALL arc_world_update_transform_delta(arc_world* world, arc_handle handle, const arc_transform* delta);
 ARC_API arc_status ARC_CALL arc_world_remove(arc_world* world, arc_handle handle);
 ARC_API arc_bool ARC_CALL arc_world_is_valid(const arc_world* world, arc_handle handle);
 ARC_API arc_status ARC_CALL arc_world_get_shape(const arc_world* world, arc_handle handle, arc_shape* out_shape);

@@ -32,7 +32,7 @@ public class ArcWorldTests
         Assert.False(second.IsValid(foreign));
         Assert.True(second.IsValid(local));
         Assert.Throws<ArgumentException>(() =>
-            second.Update(foreign, new Circle(new Vec2(10, 0), 1)));
+            second.UpdateTransform(foreign, new Transform(new Vec2(10, 0))));
         Assert.Throws<ArgumentException>(() => second.Remove(foreign));
         Assert.True(second.IsValid(local));
     }
@@ -357,7 +357,7 @@ public class ArcWorldTests
         world.ComputePairs(candidates);
         CandidatePair stale = Assert.Single(candidates);
 
-        world.Update(moving, new Aabb(new Vec2(20, 0), half));
+        world.UpdateTransform(moving, new Transform(new Vec2(20, 0)));
 
         Assert.False(world.TryComputeContact(stale, out _));
         world.ComputePairs(candidates);
@@ -376,7 +376,7 @@ public class ArcWorldTests
         Assert.True(world.IsValid(replacement));
         Assert.NotEqual(removed, replacement);
         Assert.Throws<ArgumentException>(() =>
-            world.Update(removed, new Circle(Vec2.Zero, 2)));
+            world.UpdateTransform(removed, Transform.Identity));
     }
 
     [Fact]

@@ -47,7 +47,8 @@ internal static class BackendRunners
         {
             int shapeOffset = frame * options.DynamicCount;
             for (int i = 0; i < dynamicHandles.Length; i++)
-                world.Update(dynamicHandles[i], scene.DynamicFrameShapes[shapeOffset + i]);
+                world.UpdateTransform(
+                    dynamicHandles[i], scene.DynamicFrameTransforms[shapeOffset + i]);
 
             world.ComputePairs(pairs);
             candidateCount += pairs.Count;
@@ -106,7 +107,8 @@ internal static class BackendRunners
         {
             int shapeOffset = frame * options.DynamicCount;
             for (int i = 0; i < dynamicHandles.Length; i++)
-                world.Update(dynamicHandles[i], scene.DynamicFrameShapes[shapeOffset + i]);
+                world.UpdateTransform(
+                    dynamicHandles[i], scene.DynamicFrameTransforms[shapeOffset + i]);
 
             world.ComputePairs(pairs);
             candidateCount += pairs.Count;

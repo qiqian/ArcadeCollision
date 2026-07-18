@@ -45,6 +45,119 @@ bool point_in_triangle(Vec point, Vec a, Vec b, Vec c, int winding) {
         : ab <= 0 && bc <= 0 && ca <= 0;
 }
 
+// Validate and cache metadata from an already-quantized vertex array. Keeping
+// this separate lets world transform scaling construct polygons directly from
+// integer vertices without a fixed -> float -> fixed round trip.
+bool finish_fixed_polygon(arc_polygon& polygon) {
+    const int32_t count = static_cast<int32_t>(polygon.fixed_vertices.size());
+    if (count < 3) {
+        set_error("A polygon requires at least three vertices.");
+        return false;
+    }
+    Vec centroid_sum;
+    for (const Vec& vertex : polygon.fixed_vertices) centroid_sum += vertex;
+    polygon.centroid = {centroid_sum.x / count, centroid_sum.y / count};
+
+    for (int32_t i = 0; i < count; ++i) {
+        const Vec a = polygon.fixed_vertices[static_cast<size_t>(i)];
+        const Vec b = polygon.fixed_vertices[static_cast<size_t>((i + 1) % count)];
+        if (a.x == b.x && a.y == b.y) {
+            set_error("Polygon has a zero-length edge after fixed-point quantization.");
+            return false;
+        }
+        const Vec c = polygon.fixed_vertices[static_cast<size_t>((i + 2) % count)];
+        if (cross(a, b, c) == 0 && (b - a).dot(c - b) < 0) {
+            set_error("Polygon has overlapping adjacent edges.");
+            return false;
+        }
+        for (int32_t j = i + 1; j < count; ++j) {
+            const bool adjacent = j == i + 1 || (i == 0 && j == count - 1);
+            if (adjacent) continue;
+            const Vec c0 = polygon.fixed_vertices[static_cast<size_t>(j)];
+            const Vec c1 = polygon.fixed_vertices[static_cast<size_t>((j + 1) % count)];
+            if (segments_intersect(a, b, c0, c1)) {
+                set_error("Polygon must be simple and non-self-intersecting.");
+                return false;
+            }
+        }
+    }
+
+    const Vec first = polygon.fixed_vertices[0];
+    polygon.bounds = {static_cast<int32_t>(first.x), static_cast<int32_t>(first.y),
+                      static_cast<int32_t>(first.x), static_cast<int32_t>(first.y)};
+    int turn_sign = 0;
+    int64_t signed_area = 0;
+    polygon.convex = true;
+    polygon.triangles.clear();
+    for (int32_t i = 0; i < count; ++i) {
+        const Vec a = polygon.fixed_vertices[static_cast<size_t>(i)];
+        const Vec b = polygon.fixed_vertices[static_cast<size_t>((i + 1) % count)];
+        const Vec c = polygon.fixed_vertices[static_cast<size_t>((i + 2) % count)];
+        polygon.bounds.min_x = std::min(polygon.bounds.min_x, static_cast<int32_t>(a.x));
+        polygon.bounds.min_y = std::min(polygon.bounds.min_y, static_cast<int32_t>(a.y));
+        polygon.bounds.max_x = std::max(polygon.bounds.max_x, static_cast<int32_t>(a.x));
+        polygon.bounds.max_y = std::max(polygon.bounds.max_y, static_cast<int32_t>(a.y));
+        signed_area += a.x * b.y - a.y * b.x;
+        const int64_t turn = cross(a, b, c);
+        if (turn == 0) continue;
+        const int current = turn > 0 ? 1 : -1;
+        if (turn_sign != 0 && current != turn_sign) polygon.convex = false;
+        turn_sign = current;
+    }
+    if (turn_sign == 0) {
+        set_error("Polygon vertices must enclose a non-zero area.");
+        return false;
+    }
+    if (polygon.convex) return true;
+
+    const int winding = signed_area >= 0 ? 1 : -1;
+    std::vector<int> remaining(static_cast<size_t>(count));
+    for (int32_t i = 0; i < count; ++i)
+        remaining[static_cast<size_t>(i)] = i;
+    polygon.triangles.reserve(static_cast<size_t>(count - 2) * 3);
+    while (remaining.size() > 3) {
+        bool clipped = false;
+        for (size_t i = 0; i < remaining.size(); ++i) {
+            const int previous = remaining[(i + remaining.size() - 1) % remaining.size()];
+            const int current = remaining[i];
+            const int next = remaining[(i + 1) % remaining.size()];
+            const int64_t corner = cross(
+                polygon.fixed_vertices[static_cast<size_t>(previous)],
+                polygon.fixed_vertices[static_cast<size_t>(current)],
+                polygon.fixed_vertices[static_cast<size_t>(next)]);
+            if ((winding > 0 && corner <= 0) || (winding < 0 && corner >= 0))
+                continue;
+            bool contains = false;
+            for (int candidate : remaining) {
+                if (candidate == previous || candidate == current || candidate == next)
+                    continue;
+                if (point_in_triangle(
+                        polygon.fixed_vertices[static_cast<size_t>(candidate)],
+                        polygon.fixed_vertices[static_cast<size_t>(previous)],
+                        polygon.fixed_vertices[static_cast<size_t>(current)],
+                        polygon.fixed_vertices[static_cast<size_t>(next)], winding)) {
+                    contains = true;
+                    break;
+                }
+            }
+            if (contains) continue;
+            polygon.triangles.push_back(previous);
+            polygon.triangles.push_back(current);
+            polygon.triangles.push_back(next);
+            remaining.erase(remaining.begin() + static_cast<std::ptrdiff_t>(i));
+            clipped = true;
+            break;
+        }
+        if (!clipped) {
+            set_error("Polygon must be simple and non-self-intersecting.");
+            return false;
+        }
+    }
+    polygon.triangles.insert(
+        polygon.triangles.end(), remaining.begin(), remaining.end());
+    return true;
+}
+
 // Validate and precompute a polygon: quantize vertices to 24.8, normalize winding,
 // reject self-intersecting/degenerate input, ear-clip into a triangle fan, flag
 // convexity (convex polygons skip per-triangle collision), and cache bounds.
@@ -196,6 +309,44 @@ void finish_proxy(Proxy& proxy) {
 }
 
 } // namespace
+
+arc_polygon* polygon_from_fixed(const std::vector<Vec>& vertices) {
+    try {
+        if (vertices.size() < 3) {
+            set_error("A polygon requires at least three vertices.");
+            return nullptr;
+        }
+        auto* polygon = new arc_polygon;
+        polygon->fixed_vertices = vertices;
+        polygon->vertices.resize(vertices.size());
+        arc_vec2 first = vertices[0].to_public();
+        float min_x = first.x, min_y = first.y;
+        float max_x = first.x, max_y = first.y;
+        for (size_t i = 0; i < vertices.size(); ++i) {
+            const arc_vec2 vertex = vertices[i].to_public();
+            polygon->vertices[i] = vertex;
+            min_x = std::min(min_x, vertex.x);
+            min_y = std::min(min_y, vertex.y);
+            max_x = std::max(max_x, vertex.x);
+            max_y = std::max(max_y, vertex.y);
+        }
+        polygon->public_bounds = {
+            {(min_x + max_x) * 0.5f, (min_y + max_y) * 0.5f},
+            {(max_x - min_x) * 0.5f, (max_y - min_y) * 0.5f},
+        };
+        if (!finish_fixed_polygon(*polygon)) {
+            delete polygon;
+            return nullptr;
+        }
+        return polygon;
+    } catch (const std::exception& exception) {
+        set_error(exception.what());
+        return nullptr;
+    } catch (...) {
+        set_error("Polygon allocation failed.");
+        return nullptr;
+    }
+}
 
 bool validate_shape(const arc_shape& shape) {
     switch (shape.kind) {

@@ -83,6 +83,20 @@ internal readonly struct NativeSweepHit
 }
 [StructLayout(LayoutKind.Sequential)] internal readonly struct NativeCastHit { public readonly NativeHandle Handle; public readonly NativeSweepHit Hit; }
 [StructLayout(LayoutKind.Sequential)] internal readonly struct NativeOptions { public readonly float FatMargin; public readonly int ColliderCapacity, PairCapacity; public NativeOptions(in ArcWorldOptions o) { FatMargin = o.FatMargin; ColliderCapacity = o.InitialColliderCapacity; PairCapacity = o.InitialPairCapacity; } }
+[StructLayout(LayoutKind.Sequential)]
+internal readonly struct NativeTransform
+{
+    public readonly Vec2 Position;
+    public readonly uint Rotation;
+    public readonly float Scale;
+
+    public NativeTransform(in Transform transform)
+    {
+        Position = transform.Position;
+        Rotation = transform.Rotation.Raw;
+        Scale = transform.Scale;
+    }
+}
 
 internal sealed class NativeWorldHandle : SafeHandleZeroOrMinusOneIsInvalid
 {
@@ -240,7 +254,8 @@ internal static unsafe class NativeMethods
     [DllImport(Library, EntryPoint="arc_world_get_static_count", CallingConvention=CallingConvention.Cdecl)] internal static extern int WorldStaticCount(NativeWorldHandle world);
     [DllImport(Library, EntryPoint="arc_world_get_fat_margin", CallingConvention=CallingConvention.Cdecl)] internal static extern float WorldFatMargin(NativeWorldHandle world);
     [DllImport(Library, EntryPoint="arc_world_add", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldAdd(NativeWorldHandle world, int entity, in NativeShape shape, CollisionFilter filter, int isStatic, int enabled, out NativeHandle handle);
-    [DllImport(Library, EntryPoint="arc_world_update", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldUpdate(NativeWorldHandle world, NativeHandle handle, in NativeShape shape);
+    [DllImport(Library, EntryPoint="arc_world_update_transform", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldUpdateTransform(NativeWorldHandle world, NativeHandle handle, in NativeTransform transform);
+    [DllImport(Library, EntryPoint="arc_world_update_transform_delta", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldUpdateTransformDelta(NativeWorldHandle world, NativeHandle handle, in NativeTransform delta);
     [DllImport(Library, EntryPoint="arc_world_remove", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldRemove(NativeWorldHandle world, NativeHandle handle);
     [DllImport(Library, EntryPoint="arc_world_is_valid", CallingConvention=CallingConvention.Cdecl)] internal static extern int WorldIsValid(NativeWorldHandle world, NativeHandle handle);
     [DllImport(Library, EntryPoint="arc_world_get_shape", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldGetShape(NativeWorldHandle world, NativeHandle handle, out NativeShape shape);

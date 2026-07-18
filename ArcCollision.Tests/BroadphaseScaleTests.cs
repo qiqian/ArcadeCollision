@@ -43,6 +43,19 @@ public class BroadphaseScaleTests
             ShapeKind.Obb => TestGeo.BoundsOf(O),
             _ => TestGeo.BoundsOf(P!),
         };
+
+        public Tracked Moved(Vec2 delta) => new()
+        {
+            Id = Id,
+            Handle = Handle,
+            IsStatic = IsStatic,
+            Kind = Kind,
+            C = C.Moved(delta),
+            B = B.Moved(delta),
+            K = K.Moved(delta),
+            O = O.Moved(delta),
+            P = P?.Moved(delta),
+        };
     }
 
     private static Tracked MakeTracked(Random rng, int id, Vec2 at, float sizeMax)
@@ -110,6 +123,15 @@ public class BroadphaseScaleTests
     }
 
     private static (int, int) Key(int a, int b) => a < b ? (a, b) : (b, a);
+
+    private static Vec2 Anchor(Tracked t) => t.Kind switch
+    {
+        ShapeKind.Circle => t.C.Center,
+        ShapeKind.Aabb => t.B.Center,
+        ShapeKind.Capsule => t.K.A,
+        ShapeKind.Obb => t.O.Center,
+        _ => t.P!.Bounds.Center,
+    };
 
     private static HashSet<(int, int)> WorldPairs(ArcWorld world, List<CandidatePair> scratch)
     {
@@ -225,10 +247,9 @@ public class BroadphaseScaleTests
                 Vec2 at = teleport
                     ? RandomPos()
                     : Anchor(t) + new Vec2(rng.Next(-8, 9), rng.Next(-8, 9));
-                Tracked moved = MakeTracked(rng, t.Id, at, 3000f);
-                moved.IsStatic = t.IsStatic;
-                moved.Handle = t.Handle;
-                world.Update(t.Handle, moved.AsShape());
+                Vec2 delta = at - Anchor(t);
+                Tracked moved = t.Moved(delta);
+                world.UpdateTransformDelta(t.Handle, new Transform(delta));
                 entities[entities.IndexOf(t)] = moved;
             }
             else if (op < 75)
@@ -272,14 +293,6 @@ public class BroadphaseScaleTests
 
         Assert.Equal(entities.Count, world.Count);
 
-        static Vec2 Anchor(Tracked t) => t.Kind switch
-        {
-            ShapeKind.Circle => t.C.Center,
-            ShapeKind.Aabb => t.B.Center,
-            ShapeKind.Capsule => t.K.A,
-            ShapeKind.Obb => t.O.Center,
-            _ => t.P!.Bounds.Center,
-        };
     }
 
     [Fact]
@@ -305,12 +318,12 @@ public class BroadphaseScaleTests
             {
                 Tracked t = entities[rng.Next(entities.Count)];
                 if (t.IsStatic) continue;
-                Tracked moved = MakeTracked(rng, t.Id, new Vec2(
+                Vec2 at = new(
                     (float)(rng.NextDouble() * 2 - 1) * 50_000f,
-                    (float)(rng.NextDouble() * 2 - 1) * 50_000f), 800f);
-                moved.IsStatic = false;
-                moved.Handle = t.Handle;
-                world.Update(t.Handle, moved.AsShape());
+                    (float)(rng.NextDouble() * 2 - 1) * 50_000f);
+                Vec2 delta = at - Anchor(t);
+                Tracked moved = t.Moved(delta);
+                world.UpdateTransformDelta(t.Handle, new Transform(delta));
                 entities[entities.IndexOf(t)] = moved;
             }
             return WorldPairs(world, new List<CandidatePair>());
@@ -334,7 +347,7 @@ public class BroadphaseScaleTests
 
         // Candidates are broadphase hints. Current handle, filter and shape state
         // is rechecked instead of invalidating every pair for an unrelated update.
-        world.Update(a, new Circle(new Vec2(0, 0), 5f));
+        world.UpdateTransform(a, new Transform(Vec2.Zero));
         Assert.True(world.TryComputeContact(pair, out _));
     }
 }

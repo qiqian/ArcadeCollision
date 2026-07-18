@@ -278,6 +278,7 @@ bool validate_shape(const arc_shape& shape);
 arc_shape moved_shape(arc_shape shape, const arc_vec2& delta);
 void retain_shape(const arc_shape& shape);
 void release_shape(const arc_shape& shape);
+arc_polygon* polygon_from_fixed(const std::vector<Vec>& vertices);
 int piece_count(const arc_shape& shape);
 Proxy make_proxy(const arc_shape& shape, int piece = 0);
 
