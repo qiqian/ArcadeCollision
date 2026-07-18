@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 
 namespace ArcCollision.Ref;
 
@@ -80,27 +81,64 @@ internal readonly struct FxTransform
 /// update materializes the world shape directly from this form without re-deriving
 /// it (e.g. the capsule endpoints are already relative to the midpoint).
 /// </summary>
+[StructLayout(LayoutKind.Explicit, Size = 56)]
 internal readonly struct LocalShape
 {
-    public readonly ShapeKind Kind;
-    public readonly long Radius;        // circle, capsule; Q24.8
-    public readonly FxVec2 HalfExtents; // aabb, obb; Q24.8
-    public readonly uint BaseAngle;     // obb angle / polygon authored rotation
-    public readonly FxVec2 LocalA;      // capsule endpoint A, relative to midpoint
-    public readonly FxVec2 LocalB;      // capsule endpoint B, relative to midpoint
-    public readonly Polygon? Polygon;   // polygon (vertices already local)
+    // Fixed primitive payloads form a tagged union. Capsule is the largest at
+    // 40 bytes: A @0, B @16, radius @32. As with public Shape, the managed
+    // Polygon reference must live in a separate non-overlapping slot so the GC
+    // can identify it reliably.
+    [FieldOffset(0)] private readonly long _circleRadius;
+    [FieldOffset(0)] private readonly FxVec2 _boxHalfExtents;
+    [FieldOffset(16)] private readonly uint _obbBaseAngle;
+    [FieldOffset(0)] private readonly FxVec2 _capsuleA;
+    [FieldOffset(16)] private readonly FxVec2 _capsuleB;
+    [FieldOffset(32)] private readonly long _capsuleRadius;
+    [FieldOffset(0)] private readonly uint _polygonBaseAngle;
 
-    private LocalShape(ShapeKind kind, long radius, FxVec2 halfExtents,
-        uint baseAngle, FxVec2 localA, FxVec2 localB, Polygon? polygon)
+    [FieldOffset(40)] public readonly ShapeKind Kind;
+    [FieldOffset(48)] private readonly Polygon? _polygon;
+
+    private LocalShape(long circleRadius)
     {
-        Kind = kind;
-        Radius = radius;
-        HalfExtents = halfExtents;
-        BaseAngle = baseAngle;
-        LocalA = localA;
-        LocalB = localB;
-        Polygon = polygon;
+        this = default;
+        Kind = ShapeKind.Circle;
+        _circleRadius = circleRadius;
     }
+
+    private LocalShape(ShapeKind kind, FxVec2 halfExtents, uint baseAngle)
+    {
+        this = default;
+        Kind = kind;
+        _boxHalfExtents = halfExtents;
+        _obbBaseAngle = baseAngle;
+    }
+
+    private LocalShape(FxVec2 a, FxVec2 b, long radius)
+    {
+        this = default;
+        Kind = ShapeKind.Capsule;
+        _capsuleA = a;
+        _capsuleB = b;
+        _capsuleRadius = radius;
+    }
+
+    private LocalShape(Polygon polygon, uint baseAngle)
+    {
+        this = default;
+        Kind = ShapeKind.Polygon;
+        _polygon = polygon;
+        _polygonBaseAngle = baseAngle;
+    }
+
+    internal long CircleRadius => _circleRadius;
+    internal FxVec2 BoxHalfExtents => _boxHalfExtents;
+    internal uint ObbBaseAngle => _obbBaseAngle;
+    internal FxVec2 CapsuleA => _capsuleA;
+    internal FxVec2 CapsuleB => _capsuleB;
+    internal long CapsuleRadius => _capsuleRadius;
+    internal uint PolygonBaseAngle => _polygonBaseAngle;
+    internal Polygon Polygon => _polygon!;
 
     // Reduce a world-placed shape to its local form plus the transform that
     // reproduces it (Materialize(result, initial) == shape). The initial rotation
@@ -115,22 +153,21 @@ internal readonly struct LocalShape
                 Circle circle = shape.Circle;
                 FxVec2 center = FxVec2.From(circle.Center);
                 initial = new FxTransform(center, 0, Fx.ScaleOne);
-                return new LocalShape(ShapeKind.Circle, Fx.From(circle.Radius),
-                    FxVec2.Zero, 0, FxVec2.Zero, FxVec2.Zero, null);
+                return new LocalShape(Fx.From(circle.Radius));
             }
             case ShapeKind.Aabb:
             {
                 Aabb aabb = shape.Aabb;
                 initial = new FxTransform(FxVec2.From(aabb.Center), 0, Fx.ScaleOne);
-                return new LocalShape(ShapeKind.Aabb, 0, FxVec2.From(aabb.HalfExtents),
-                    0, FxVec2.Zero, FxVec2.Zero, null);
+                return new LocalShape(
+                    ShapeKind.Aabb, FxVec2.From(aabb.HalfExtents), 0);
             }
             case ShapeKind.Obb:
             {
                 Obb obb = shape.Obb;
                 initial = new FxTransform(FxVec2.From(obb.Center), 0, Fx.ScaleOne);
-                return new LocalShape(ShapeKind.Obb, 0, FxVec2.From(obb.HalfExtents),
-                    obb.Angle.Raw, FxVec2.Zero, FxVec2.Zero, null);
+                return new LocalShape(
+                    ShapeKind.Obb, FxVec2.From(obb.HalfExtents), obb.Angle.Raw);
             }
             case ShapeKind.Capsule:
             {
@@ -139,15 +176,13 @@ internal readonly struct LocalShape
                 FxVec2 b = FxVec2.From(capsule.B);
                 var mid = new FxVec2((a.X + b.X) / 2, (a.Y + b.Y) / 2);
                 initial = new FxTransform(mid, 0, Fx.ScaleOne);
-                return new LocalShape(ShapeKind.Capsule, Fx.From(capsule.Radius),
-                    FxVec2.Zero, 0, a - mid, b - mid, null);
+                return new LocalShape(a - mid, b - mid, Fx.From(capsule.Radius));
             }
             case ShapeKind.Polygon:
             {
                 initial = new FxTransform(
                     FxVec2.From(shape.PolygonTranslation), 0, Fx.ScaleOne);
-                return new LocalShape(ShapeKind.Polygon, 0, FxVec2.Zero,
-                    shape.PolygonRotation.Raw, FxVec2.Zero, FxVec2.Zero, shape.Polygon);
+                return new LocalShape(shape.Polygon, shape.PolygonRotation.Raw);
             }
             default:
                 throw new InvalidOperationException("Invalid shape kind.");
@@ -173,31 +208,31 @@ internal static class ShapeTransform
         {
             case ShapeKind.Circle:
             {
-                long radius = Fx.MulScale(local.Radius, transform.Scale16);
+                long radius = Fx.MulScale(local.CircleRadius, transform.Scale16);
                 return new Result(
                     new Circle(position.ToVec2(), Fx.To(radius)),
                     BpBounds.FromFixedCircle(position, radius));
             }
             case ShapeKind.Aabb:
             {
-                FxVec2 half = Scale(local.HalfExtents, transform.Scale16);
+                FxVec2 half = Scale(local.BoxHalfExtents, transform.Scale16);
                 return new Result(
                     new Aabb(position.ToVec2(), half.ToVec2()),
                     BpBounds.FromFixedAabb(position, half));
             }
             case ShapeKind.Obb:
             {
-                FxVec2 half = Scale(local.HalfExtents, transform.Scale16);
-                var angle = new Angle32(unchecked(local.BaseAngle + transform.Rotation));
+                FxVec2 half = Scale(local.BoxHalfExtents, transform.Scale16);
+                var angle = new Angle32(unchecked(local.ObbBaseAngle + transform.Rotation));
                 return new Result(
                     new Obb(position.ToVec2(), half.ToVec2(), angle),
                     BpBounds.FromFixedObb(position, half, angle));
             }
             case ShapeKind.Capsule:
             {
-                FxVec2 a = position + RotateScale(local.LocalA, transform);
-                FxVec2 b = position + RotateScale(local.LocalB, transform);
-                long radius = Fx.MulScale(local.Radius, transform.Scale16);
+                FxVec2 a = position + RotateScale(local.CapsuleA, transform);
+                FxVec2 b = position + RotateScale(local.CapsuleB, transform);
+                long radius = Fx.MulScale(local.CapsuleRadius, transform.Scale16);
                 return new Result(
                     new Capsule(a.ToVec2(), b.ToVec2(), Fx.To(radius)),
                     BpBounds.FromFixedCapsule(a, b, radius));
@@ -205,8 +240,9 @@ internal static class ShapeTransform
             case ShapeKind.Polygon:
             {
                 Polygon polygon = transform.Scale16 == Fx.ScaleOne
-                    ? local.Polygon! : Scaled(local.Polygon!, transform.Scale16);
-                var angle = new Angle32(unchecked(local.BaseAngle + transform.Rotation));
+                    ? local.Polygon : Scaled(local.Polygon, transform.Scale16);
+                var angle = new Angle32(
+                    unchecked(local.PolygonBaseAngle + transform.Rotation));
                 return new Result(
                     new Shape(polygon, position.ToVec2(), angle),
                     BpBounds.FromFixedPolygon(polygon, position, angle));

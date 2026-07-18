@@ -76,15 +76,91 @@ struct FixedTransform {
     int64_t scale16 = arc::TOne;
 };
 
+// Immutable local collider geometry as a tagged union. Primitive payloads are
+// fixed-point only; polygon geometry is shared and reference-counted. Capsule is
+// the largest member (40 bytes), so LocalShape stays 48 bytes on supported
+// 64-bit targets instead of reserving storage for every shape representation.
 struct LocalShape {
+    struct CircleData { int64_t radius = 0; };
+    struct BoxData { arc::Vec half; };
+    struct ObbData { arc::Vec half; uint32_t base_angle = 0; };
+    struct CapsuleData { arc::Vec a; arc::Vec b; int64_t radius = 0; };
+    struct PolygonData {
+        arc_polygon* geometry = nullptr;
+        uint32_t base_angle = 0;
+    };
+
+    union Payload {
+        CircleData circle;
+        BoxData aabb;
+        ObbData obb;
+        CapsuleData capsule;
+        PolygonData polygon;
+
+        Payload() : circle{} {}
+    } payload;
+
     int32_t kind = ARC_SHAPE_CIRCLE;
-    int64_t radius = 0;
-    arc::Vec half;
-    uint32_t base_angle = 0;
-    arc::Vec a;
-    arc::Vec b;
-    StoredShape polygon;
+
+    LocalShape() = default;
+
+    LocalShape(const LocalShape& other)
+        : payload(other.payload), kind(other.kind) {
+        retain_polygon();
+    }
+
+    LocalShape(LocalShape&& other) noexcept
+        : payload(other.payload), kind(other.kind) {
+        other.kind = ARC_SHAPE_CIRCLE;
+        other.payload.circle = {};
+    }
+
+    LocalShape& operator=(const LocalShape& other) {
+        if (this != &other) {
+            if (other.kind == ARC_SHAPE_POLYGON && other.payload.polygon.geometry)
+                arc_polygon_retain(other.payload.polygon.geometry);
+            release_polygon();
+            payload = other.payload;
+            kind = other.kind;
+        }
+        return *this;
+    }
+
+    LocalShape& operator=(LocalShape&& other) noexcept {
+        if (this != &other) {
+            release_polygon();
+            payload = other.payload;
+            kind = other.kind;
+            other.kind = ARC_SHAPE_CIRCLE;
+            other.payload.circle = {};
+        }
+        return *this;
+    }
+
+    ~LocalShape() { release_polygon(); }
+
+    void set_polygon(arc_polygon* geometry, uint32_t base_angle) {
+        // Retain first so replacing a polygon with the same geometry is safe.
+        if (geometry) arc_polygon_retain(geometry);
+        release_polygon();
+        kind = ARC_SHAPE_POLYGON;
+        payload.polygon = {geometry, base_angle};
+    }
+
+private:
+    void retain_polygon() const {
+        if (kind == ARC_SHAPE_POLYGON && payload.polygon.geometry)
+            arc_polygon_retain(payload.polygon.geometry);
+    }
+
+    void release_polygon() const {
+        if (kind == ARC_SHAPE_POLYGON && payload.polygon.geometry)
+            arc_polygon_release(payload.polygon.geometry);
+    }
 };
+
+static_assert(sizeof(LocalShape) == 48,
+              "LocalShape union layout must remain cache-dense");
 
 struct Slot {
     StoredShape shape;       // materialized world shape (for narrowphase)
@@ -337,38 +413,39 @@ arc::Vec rotate_scale(const arc::Vec& value, const FixedTransform& transform) {
 
 LocalShape to_local(const arc_shape& shape, FixedTransform& initial) {
     LocalShape local;
-    local.kind = shape.kind;
     switch (shape.kind) {
-    case ARC_SHAPE_CIRCLE:
+    case ARC_SHAPE_CIRCLE: {
+        local.kind = ARC_SHAPE_CIRCLE;
         initial = {arc::Vec::from(shape.circle.center), 0u, arc::TOne};
-        local.radius = arc::from_float(shape.circle.radius);
+        local.payload.circle = {arc::from_float(shape.circle.radius)};
         break;
-    case ARC_SHAPE_AABB:
+    }
+    case ARC_SHAPE_AABB: {
+        local.kind = ARC_SHAPE_AABB;
         initial = {arc::Vec::from(shape.aabb.center), 0u, arc::TOne};
-        local.half = arc::Vec::from(shape.aabb.half_extents);
+        local.payload.aabb = {arc::Vec::from(shape.aabb.half_extents)};
         break;
-    case ARC_SHAPE_OBB:
+    }
+    case ARC_SHAPE_OBB: {
+        local.kind = ARC_SHAPE_OBB;
         initial = {arc::Vec::from(shape.obb.center), 0u, arc::TOne};
-        local.half = arc::Vec::from(shape.obb.half_extents);
-        local.base_angle = shape.obb.angle;
+        local.payload.obb = {
+            arc::Vec::from(shape.obb.half_extents), shape.obb.angle};
         break;
+    }
     case ARC_SHAPE_CAPSULE: {
+        local.kind = ARC_SHAPE_CAPSULE;
         const arc::Vec a = arc::Vec::from(shape.capsule.a);
         const arc::Vec b = arc::Vec::from(shape.capsule.b);
         const arc::Vec mid{(a.x + b.x) / 2, (a.y + b.y) / 2};
         initial = {mid, 0u, arc::TOne};
-        local.a = a - mid;
-        local.b = b - mid;
-        local.radius = arc::from_float(shape.capsule.radius);
+        local.payload.capsule = {
+            a - mid, b - mid, arc::from_float(shape.capsule.radius)};
         break;
     }
     case ARC_SHAPE_POLYGON: {
         initial = {arc::Vec::from(shape.polygon_translation), 0u, arc::TOne};
-        local.base_angle = shape.polygon_rotation;
-        arc_shape polygon_shape{};
-        polygon_shape.kind = ARC_SHAPE_POLYGON;
-        polygon_shape.polygon = shape.polygon;
-        local.polygon = StoredShape(polygon_shape);
+        local.set_polygon(shape.polygon, shape.polygon_rotation);
         break;
     }
     default:
@@ -410,7 +487,7 @@ MaterializedShape materialize(const LocalShape& local, const FixedTransform& t) 
     const arc_vec2 position = t.position.to_public();
     switch (local.kind) {
     case ARC_SHAPE_CIRCLE: {
-        const int64_t radius = mul_scale(local.radius, t.scale16);
+        const int64_t radius = mul_scale(local.payload.circle.radius, t.scale16);
         result.shape.circle = {position, arc::to_float(radius)};
         result.bounds = {static_cast<int32_t>(t.position.x - radius),
                          static_cast<int32_t>(t.position.y - radius),
@@ -419,7 +496,7 @@ MaterializedShape materialize(const LocalShape& local, const FixedTransform& t) 
         break;
     }
     case ARC_SHAPE_AABB: {
-        const arc::Vec half = scale_vec(local.half, t.scale16);
+        const arc::Vec half = scale_vec(local.payload.aabb.half, t.scale16);
         result.shape.aabb = {position, half.to_public()};
         result.bounds = {static_cast<int32_t>(t.position.x - half.x),
                          static_cast<int32_t>(t.position.y - half.y),
@@ -428,8 +505,8 @@ MaterializedShape materialize(const LocalShape& local, const FixedTransform& t) 
         break;
     }
     case ARC_SHAPE_OBB: {
-        const arc::Vec half = scale_vec(local.half, t.scale16);
-        const uint32_t angle = local.base_angle + t.rotation;
+        const arc::Vec half = scale_vec(local.payload.obb.half, t.scale16);
+        const uint32_t angle = local.payload.obb.base_angle + t.rotation;
         result.shape.obb = {position, half.to_public(), angle};
         const arc::Axis axis_x = arc::Axis::from_angle(angle);
         const arc::Axis axis_y = axis_x.perpendicular();
@@ -446,9 +523,10 @@ MaterializedShape materialize(const LocalShape& local, const FixedTransform& t) 
         break;
     }
     case ARC_SHAPE_CAPSULE: {
-        const arc::Vec a = t.position + rotate_scale(local.a, t);
-        const arc::Vec b = t.position + rotate_scale(local.b, t);
-        const int64_t radius = mul_scale(local.radius, t.scale16);
+        const arc::Vec a = t.position + rotate_scale(local.payload.capsule.a, t);
+        const arc::Vec b = t.position + rotate_scale(local.payload.capsule.b, t);
+        const int64_t radius =
+            mul_scale(local.payload.capsule.radius, t.scale16);
         result.shape.capsule = {a.to_public(), b.to_public(), arc::to_float(radius)};
         result.bounds = {
             static_cast<int32_t>(std::min(a.x, b.x) - radius),
@@ -458,9 +536,10 @@ MaterializedShape materialize(const LocalShape& local, const FixedTransform& t) 
         break;
     }
     case ARC_SHAPE_POLYGON: {
-        result.shape.polygon_rotation = local.base_angle + t.rotation;
+        result.shape.polygon_rotation =
+            local.payload.polygon.base_angle + t.rotation;
         result.shape.polygon_translation = position;
-        arc_polygon* polygon = local.polygon.value.polygon;
+        arc_polygon* polygon = local.payload.polygon.geometry;
         if (t.scale16 != arc::TOne) {
             std::vector<arc::Vec> vertices(polygon->fixed_vertices.size());
             for (size_t i = 0; i < vertices.size(); ++i)
