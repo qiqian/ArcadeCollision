@@ -147,6 +147,28 @@ Vec clamp_contact(Vec contact, const FxAabb& a, const FxAabb& b) {
             std::clamp(contact.y, min_y, max_y)};
 }
 
+// Rotated polygon proxies re-rotate every vertex on each access, and SAT touches
+// every vertex once per candidate axis. Materialize the rotation (and triangle
+// index indirection) once into a thread-local scratch and drop the transform
+// flag: the identical scale/add sequence runs once instead of vertices x axes
+// times, so the flattened values are bit-for-bit the on-the-fly ones.
+thread_local std::vector<Vec> flatten_scratch_a;
+thread_local std::vector<Vec> flatten_scratch_b;
+
+const Proxy& flatten_proxy(
+    const Proxy& proxy, std::vector<Vec>& scratch, Proxy& storage) {
+    if (!proxy.transformed) return proxy;
+    scratch.resize(static_cast<size_t>(proxy.count));
+    for (int i = 0; i < proxy.count; ++i)
+        scratch[static_cast<size_t>(i)] = proxy.vertex(i) - proxy.offset;
+    storage = proxy;
+    storage.borrowed_vertices = scratch.data();
+    storage.borrowed_indices = nullptr;
+    storage.borrowed_index_offset = 0;
+    storage.transformed = false;
+    return storage;
+}
+
 // Running minimum-penetration axis across all tested separating axes.
 struct SatState {
     int64_t depth = std::numeric_limits<int64_t>::max();
@@ -252,7 +274,10 @@ bool vertex_edge_axes_overlap(
     return true;
 }
 
-bool sat_overlaps(const Proxy& a, const Proxy& b) {
+bool sat_overlaps(const Proxy& raw_a, const Proxy& raw_b) {
+    Proxy storage_a, storage_b;
+    const Proxy& a = flatten_proxy(raw_a, flatten_scratch_a, storage_a);
+    const Proxy& b = flatten_proxy(raw_b, flatten_scratch_b, storage_b);
     bool has_axis = false;
     if (!edge_axes_overlap(a, a, b, has_axis)
         || !edge_axes_overlap(b, a, b, has_axis))
@@ -773,15 +798,16 @@ bool is_better_piece(const FxManifold& candidate, const FxManifold& best) {
 }
 
 // Deepest colliding (piece_a, piece_b) pair with shape A shifted by `offset`.
+// Pieces are pre-derived by the caller; only the translation varies per call.
 FxManifold deepest_piece(
-    const arc_shape& a, const arc_shape& b, int pieces_a, int pieces_b,
+    const std::vector<Proxy>& pieces_a, const std::vector<Proxy>& pieces_b,
     const Vec& offset, bool compute_contact) {
     FxManifold best;
-    for (int i = 0; i < pieces_a; ++i) {
-        const Proxy proxy_a = make_proxy(a, i).translated(offset);
-        for (int j = 0; j < pieces_b; ++j) {
+    for (const Proxy& piece : pieces_a) {
+        const Proxy proxy_a = piece.translated(offset);
+        for (const Proxy& proxy_b : pieces_b) {
             const FxManifold candidate = collide_proxy(
-                proxy_a, make_proxy(b, j), compute_contact);
+                proxy_a, proxy_b, compute_contact);
             if (candidate.colliding && is_better_piece(candidate, best))
                 best = candidate;
         }
@@ -817,14 +843,25 @@ Vec guaranteed_separation(const Bounds& a, const Bounds& b) {
 FxManifold concave_collision(
     const arc_shape& a, const arc_shape& b, int pieces_a, int pieces_b,
     bool compute_contact) {
+    // Derive every convex piece proxy once (make_proxy is deterministic, so this
+    // matches the previous per-iteration derivation bit for bit); the iteration
+    // loop then only re-translates shape A's pieces.
+    thread_local std::vector<Proxy> piece_proxies_a;
+    thread_local std::vector<Proxy> piece_proxies_b;
+    piece_proxies_a.clear();
+    piece_proxies_b.clear();
+    for (int i = 0; i < pieces_a; ++i)
+        piece_proxies_a.push_back(make_proxy(a, i));
+    for (int j = 0; j < pieces_b; ++j)
+        piece_proxies_b.push_back(make_proxy(b, j));
     Vec offset;
     const FxManifold first = deepest_piece(
-        a, b, pieces_a, pieces_b, offset, compute_contact);
+        piece_proxies_a, piece_proxies_b, offset, compute_contact);
     if (!first.colliding) return {};
     const int limit = std::min(64, 8 + 2 * (pieces_a + pieces_b));
     for (int iteration = 0; iteration < limit; ++iteration) {
-        const FxManifold candidate =
-            deepest_piece(a, b, pieces_a, pieces_b, offset, compute_contact);
+        const FxManifold candidate = deepest_piece(
+            piece_proxies_a, piece_proxies_b, offset, compute_contact);
         if (!candidate.colliding) {
             const int64_t depth = offset.length() + 2;
             return {true, Axis::from_vector(-offset, first.normal),
@@ -857,8 +894,11 @@ FxManifold collide_aabb_aabb(const FxAabb& a, const FxAabb& b) {
 // for the fully-contained case. Contact is the clamped local overlap of both
 // support features, so a face is never reduced to one arbitrary endpoint.
 FxManifold collide_proxy(
-    const Proxy& a, const Proxy& b, bool compute_contact) {
-    if (a.count == 0 || b.count == 0) return {};
+    const Proxy& raw_a, const Proxy& raw_b, bool compute_contact) {
+    if (raw_a.count == 0 || raw_b.count == 0) return {};
+    Proxy storage_a, storage_b;
+    const Proxy& a = flatten_proxy(raw_a, flatten_scratch_a, storage_a);
+    const Proxy& b = flatten_proxy(raw_b, flatten_scratch_b, storage_b);
     SatState state;
     if (!test_edge_axes(a, a, b, state)
         || !test_edge_axes(b, a, b, state))
@@ -886,44 +926,51 @@ FxManifold collide_proxy(
 // concave paths. The normal always points from `a` toward `b`.
 FxManifold collide_shapes(
     const arc_shape& a, const arc_shape& b, bool compute_contact) {
-    if (a.kind == ARC_SHAPE_CIRCLE && b.kind == ARC_SHAPE_CIRCLE)
+    // Fused kind pair -> one dense jump table instead of a chain of up to 16
+    // comparisons (which mispredicts under mixed-shape workloads). Polygon-
+    // containing pairs have no case and fall through to the SAT path below.
+    switch (a.kind * 8 + b.kind) {
+    case ARC_SHAPE_CIRCLE * 8 + ARC_SHAPE_CIRCLE:
         return circle_circle(
             fixed_circle(a.circle), fixed_circle(b.circle), compute_contact);
-    if (a.kind == ARC_SHAPE_AABB && b.kind == ARC_SHAPE_AABB)
+    case ARC_SHAPE_AABB * 8 + ARC_SHAPE_AABB:
         return aabb_aabb(
             fixed_aabb(a.aabb), fixed_aabb(b.aabb), compute_contact);
-    if (a.kind == ARC_SHAPE_CIRCLE && b.kind == ARC_SHAPE_AABB)
+    case ARC_SHAPE_CIRCLE * 8 + ARC_SHAPE_AABB:
         return circle_aabb(
             fixed_circle(a.circle), fixed_aabb(b.aabb), compute_contact);
-    if (a.kind == ARC_SHAPE_AABB && b.kind == ARC_SHAPE_CIRCLE)
+    case ARC_SHAPE_AABB * 8 + ARC_SHAPE_CIRCLE:
         return reverse(circle_aabb(
             fixed_circle(b.circle), fixed_aabb(a.aabb), compute_contact));
-    if (a.kind == ARC_SHAPE_CIRCLE && b.kind == ARC_SHAPE_CAPSULE)
+    case ARC_SHAPE_CIRCLE * 8 + ARC_SHAPE_CAPSULE:
         return circle_capsule(a.circle, b.capsule, compute_contact);
-    if (a.kind == ARC_SHAPE_CAPSULE && b.kind == ARC_SHAPE_CIRCLE)
+    case ARC_SHAPE_CAPSULE * 8 + ARC_SHAPE_CIRCLE:
         return reverse(circle_capsule(b.circle, a.capsule, compute_contact));
-    if (a.kind == ARC_SHAPE_CAPSULE && b.kind == ARC_SHAPE_CAPSULE)
+    case ARC_SHAPE_CAPSULE * 8 + ARC_SHAPE_CAPSULE:
         return capsule_capsule(a.capsule, b.capsule, compute_contact);
-    if (a.kind == ARC_SHAPE_CIRCLE && b.kind == ARC_SHAPE_OBB)
+    case ARC_SHAPE_CIRCLE * 8 + ARC_SHAPE_OBB:
         return circle_obb(a.circle, b.obb, compute_contact);
-    if (a.kind == ARC_SHAPE_OBB && b.kind == ARC_SHAPE_CIRCLE)
+    case ARC_SHAPE_OBB * 8 + ARC_SHAPE_CIRCLE:
         return reverse(circle_obb(b.circle, a.obb, compute_contact));
-    if (a.kind == ARC_SHAPE_AABB && b.kind == ARC_SHAPE_OBB)
+    case ARC_SHAPE_AABB * 8 + ARC_SHAPE_OBB:
         return box_box(make_box(a.aabb), make_box(b.obb), compute_contact);
-    if (a.kind == ARC_SHAPE_OBB && b.kind == ARC_SHAPE_AABB)
+    case ARC_SHAPE_OBB * 8 + ARC_SHAPE_AABB:
         return box_box(make_box(a.obb), make_box(b.aabb), compute_contact);
-    if (a.kind == ARC_SHAPE_OBB && b.kind == ARC_SHAPE_OBB)
+    case ARC_SHAPE_OBB * 8 + ARC_SHAPE_OBB:
         return box_box(make_box(a.obb), make_box(b.obb), compute_contact);
-    if (a.kind == ARC_SHAPE_CAPSULE && b.kind == ARC_SHAPE_AABB)
+    case ARC_SHAPE_CAPSULE * 8 + ARC_SHAPE_AABB:
         return capsule_box(a.capsule, make_box(b.aabb), compute_contact);
-    if (a.kind == ARC_SHAPE_AABB && b.kind == ARC_SHAPE_CAPSULE)
+    case ARC_SHAPE_AABB * 8 + ARC_SHAPE_CAPSULE:
         return reverse(capsule_box(
             b.capsule, make_box(a.aabb), compute_contact));
-    if (a.kind == ARC_SHAPE_CAPSULE && b.kind == ARC_SHAPE_OBB)
+    case ARC_SHAPE_CAPSULE * 8 + ARC_SHAPE_OBB:
         return capsule_box(a.capsule, make_box(b.obb), compute_contact);
-    if (a.kind == ARC_SHAPE_OBB && b.kind == ARC_SHAPE_CAPSULE)
+    case ARC_SHAPE_OBB * 8 + ARC_SHAPE_CAPSULE:
         return reverse(capsule_box(
             b.capsule, make_box(a.obb), compute_contact));
+    default:
+        break;
+    }
 
     const int pieces_a = piece_count(a);
     const int pieces_b = piece_count(b);
@@ -945,38 +992,43 @@ FxManifold collide_shapes(
 }
 
 bool overlap_shapes(const arc_shape& a, const arc_shape& b) {
-    if (a.kind == ARC_SHAPE_CIRCLE && b.kind == ARC_SHAPE_CIRCLE)
+    // Same dense kind-pair jump table as collide_shapes.
+    switch (a.kind * 8 + b.kind) {
+    case ARC_SHAPE_CIRCLE * 8 + ARC_SHAPE_CIRCLE:
         return circle_circle_overlap(a.circle, b.circle);
-    if (a.kind == ARC_SHAPE_CIRCLE && b.kind == ARC_SHAPE_AABB)
+    case ARC_SHAPE_CIRCLE * 8 + ARC_SHAPE_AABB:
         return circle_aabb_overlap(a.circle, b.aabb);
-    if (a.kind == ARC_SHAPE_AABB && b.kind == ARC_SHAPE_CIRCLE)
+    case ARC_SHAPE_AABB * 8 + ARC_SHAPE_CIRCLE:
         return circle_aabb_overlap(b.circle, a.aabb);
-    if (a.kind == ARC_SHAPE_CIRCLE && b.kind == ARC_SHAPE_CAPSULE)
+    case ARC_SHAPE_CIRCLE * 8 + ARC_SHAPE_CAPSULE:
         return circle_capsule_overlap(a.circle, b.capsule);
-    if (a.kind == ARC_SHAPE_CAPSULE && b.kind == ARC_SHAPE_CIRCLE)
+    case ARC_SHAPE_CAPSULE * 8 + ARC_SHAPE_CIRCLE:
         return circle_capsule_overlap(b.circle, a.capsule);
-    if (a.kind == ARC_SHAPE_CIRCLE && b.kind == ARC_SHAPE_OBB)
+    case ARC_SHAPE_CIRCLE * 8 + ARC_SHAPE_OBB:
         return circle_obb_overlap(a.circle, b.obb);
-    if (a.kind == ARC_SHAPE_OBB && b.kind == ARC_SHAPE_CIRCLE)
+    case ARC_SHAPE_OBB * 8 + ARC_SHAPE_CIRCLE:
         return circle_obb_overlap(b.circle, a.obb);
-    if (a.kind == ARC_SHAPE_AABB && b.kind == ARC_SHAPE_AABB)
+    case ARC_SHAPE_AABB * 8 + ARC_SHAPE_AABB:
         return aabb_aabb_overlap(a.aabb, b.aabb);
-    if (a.kind == ARC_SHAPE_AABB && b.kind == ARC_SHAPE_CAPSULE)
+    case ARC_SHAPE_AABB * 8 + ARC_SHAPE_CAPSULE:
         return capsule_box_overlap(b.capsule, make_box(a.aabb));
-    if (a.kind == ARC_SHAPE_CAPSULE && b.kind == ARC_SHAPE_AABB)
+    case ARC_SHAPE_CAPSULE * 8 + ARC_SHAPE_AABB:
         return capsule_box_overlap(a.capsule, make_box(b.aabb));
-    if (a.kind == ARC_SHAPE_AABB && b.kind == ARC_SHAPE_OBB)
+    case ARC_SHAPE_AABB * 8 + ARC_SHAPE_OBB:
         return boxes_overlap(make_box(a.aabb), make_box(b.obb));
-    if (a.kind == ARC_SHAPE_OBB && b.kind == ARC_SHAPE_AABB)
+    case ARC_SHAPE_OBB * 8 + ARC_SHAPE_AABB:
         return boxes_overlap(make_box(a.obb), make_box(b.aabb));
-    if (a.kind == ARC_SHAPE_CAPSULE && b.kind == ARC_SHAPE_OBB)
+    case ARC_SHAPE_CAPSULE * 8 + ARC_SHAPE_OBB:
         return capsule_box_overlap(a.capsule, make_box(b.obb));
-    if (a.kind == ARC_SHAPE_OBB && b.kind == ARC_SHAPE_CAPSULE)
+    case ARC_SHAPE_OBB * 8 + ARC_SHAPE_CAPSULE:
         return capsule_box_overlap(b.capsule, make_box(a.obb));
-    if (a.kind == ARC_SHAPE_OBB && b.kind == ARC_SHAPE_OBB)
+    case ARC_SHAPE_OBB * 8 + ARC_SHAPE_OBB:
         return boxes_overlap(make_box(a.obb), make_box(b.obb));
-    if (a.kind == ARC_SHAPE_CAPSULE && b.kind == ARC_SHAPE_CAPSULE)
+    case ARC_SHAPE_CAPSULE * 8 + ARC_SHAPE_CAPSULE:
         return capsule_capsule_overlap(a.capsule, b.capsule);
+    default:
+        break;
+    }
 
     // As in the managed dispatch, only polygon-containing pairs reach generic
     // SAT. Concave polygons return true as soon as any convex-piece pair overlaps.

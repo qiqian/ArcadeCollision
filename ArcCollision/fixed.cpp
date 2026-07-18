@@ -241,20 +241,20 @@ int64_t scale_product_operand(int64_t value, int shift) {
     return shift == 0 ? value : value >> shift;
 }
 
-// Exact floor integer square root. BSR/CLZ supplies a power-of-two upper bound,
-// then integer Newton iteration monotonically tightens it. Starting above the
-// root means the first non-decreasing step is exactly floor(sqrt(value)); all
-// operations are integer-only and therefore bit-identical across platforms.
+// Exact floor integer square root. The hardware double sqrt seeds an estimate
+// within +/-2 of the true root (value <= 2^62, so the root <= 2^31 and the
+// double rounding error stays far below 1); the integer correction below then
+// walks to the exact floor. The float only supplies the guess -- the integer
+// comparisons decide the result -- so the value is bit-identical across
+// platforms while skipping the division-heavy Newton iteration entirely.
 int64_t sqrt_i64(int64_t value) {
     if (value <= 0) return 0;
     const uint64_t input = static_cast<uint64_t>(value);
-    const int bits = bit_width_u64(input);
-    uint64_t estimate = uint64_t{1} << ((bits + 1) >> 1);
-    for (;;) {
-        const uint64_t next = (estimate + input / estimate) >> 1;
-        if (next >= estimate) return static_cast<int64_t>(estimate);
-        estimate = next;
-    }
+    uint64_t estimate =
+        static_cast<uint64_t>(std::sqrt(static_cast<double>(input)));
+    while (estimate != 0 && estimate * estimate > input) --estimate;
+    while ((estimate + 1) * (estimate + 1) <= input) ++estimate;
+    return static_cast<int64_t>(estimate);
 }
 
 Axis Axis::from_vector(const Vec& value, const Axis& fallback) {
@@ -290,6 +290,14 @@ Axis Axis::from_angle(uint32_t angle) {
     if (angle == 0x40000000u) return unit_y();
     if (angle == 0x80000000u) return -unit_x();
     if (angle == 0xC0000000u) return -unit_y();
+    // The same angle recurs constantly (every OBB / rotated polygon re-derives
+    // its axis for each narrowphase pair it participates in), so memoize the
+    // CORDIC result in a small direct-mapped, thread-local cache. A hit returns
+    // the stored CORDIC output verbatim -- bit-identical to recomputing it.
+    struct CachedAxis { uint32_t angle; Axis axis; bool valid; };
+    thread_local CachedAxis axis_cache[64] = {};
+    CachedAxis& cached = axis_cache[(angle * 2654435761u) >> 26];
+    if (cached.valid && cached.angle == angle) return cached.axis;
     const uint32_t quadrant = angle >> 30;
     const int64_t phase = angle & 0x3FFFFFFFu;
     const bool swap = phase > 0x20000000LL;   // fold the upper half of the quadrant
@@ -308,12 +316,15 @@ Axis Axis::from_angle(uint32_t angle) {
     }
     const int64_t cosine = swap ? y_value : x_value;
     const int64_t sine = swap ? x_value : y_value;
+    Axis result;
     switch (quadrant) {
-    case 0: return from_components(cosine, sine, unit_x());
-    case 1: return from_components(-sine, cosine, unit_y());
-    case 2: return from_components(-cosine, -sine, -unit_x());
-    default: return from_components(sine, -cosine, -unit_y());
+    case 0: result = from_components(cosine, sine, unit_x()); break;
+    case 1: result = from_components(-sine, cosine, unit_y()); break;
+    case 2: result = from_components(-cosine, -sine, -unit_x()); break;
+    default: result = from_components(sine, -cosine, -unit_y()); break;
     }
+    cached = {angle, result, true};
+    return result;
 }
 
 // Rotate a local-frame axis back into world space by the (basis_x, basis_y)
