@@ -22,6 +22,11 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ArcCollision.Tests.Wrapper"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ArcCollision.Benchmarks", "ArcCollision.Benchmarks\ArcCollision.Benchmarks.csproj", "{D0000001-0000-0000-0000-000000000001}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ArcCollision.Case", "ArcCollision\arc_tests.vcxproj", "{7E2A9C64-3B18-4D5F-9A1C-6F0B2E7D8C41}"
+	ProjectSection(ProjectDependencies) = postProject
+		{94245D1A-9560-4B6D-A46C-1EF616A247CD} = {94245D1A-9560-4B6D-A46C-1EF616A247CD}
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -128,6 +133,16 @@ Global
 		{D0000001-0000-0000-0000-000000000001}.Release|x64.Build.0 = Release|Any CPU
 		{D0000001-0000-0000-0000-000000000001}.Release|x86.ActiveCfg = Release|Any CPU
 		{D0000001-0000-0000-0000-000000000001}.Release|x86.Build.0 = Release|Any CPU
+		{7E2A9C64-3B18-4D5F-9A1C-6F0B2E7D8C41}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{7E2A9C64-3B18-4D5F-9A1C-6F0B2E7D8C41}.Debug|Any CPU.Build.0 = Debug|x64
+		{7E2A9C64-3B18-4D5F-9A1C-6F0B2E7D8C41}.Debug|x64.ActiveCfg = Debug|x64
+		{7E2A9C64-3B18-4D5F-9A1C-6F0B2E7D8C41}.Debug|x64.Build.0 = Debug|x64
+		{7E2A9C64-3B18-4D5F-9A1C-6F0B2E7D8C41}.Debug|x86.ActiveCfg = Debug|x64
+		{7E2A9C64-3B18-4D5F-9A1C-6F0B2E7D8C41}.Release|Any CPU.ActiveCfg = Release|x64
+		{7E2A9C64-3B18-4D5F-9A1C-6F0B2E7D8C41}.Release|Any CPU.Build.0 = Release|x64
+		{7E2A9C64-3B18-4D5F-9A1C-6F0B2E7D8C41}.Release|x64.ActiveCfg = Release|x64
+		{7E2A9C64-3B18-4D5F-9A1C-6F0B2E7D8C41}.Release|x64.Build.0 = Release|x64
+		{7E2A9C64-3B18-4D5F-9A1C-6F0B2E7D8C41}.Release|x86.ActiveCfg = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

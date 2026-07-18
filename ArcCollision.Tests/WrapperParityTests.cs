@@ -119,6 +119,55 @@ public class WrapperParityTests
     }
 
     [Fact]
+    public void ManifoldFieldsSelectTheSameWorkAndResultsInBothBackends()
+    {
+        foreach (var a in CreateShapes())
+        foreach (var b in CreateShapes())
+        {
+            Ref.Manifold refAll = Ref.Collide.ShapeVsShape(
+                a.Ref, b.Ref, Ref.ManifoldFields.All);
+            Native.Manifold nativeAll = Native.Collide.ShapeVsShape(
+                a.Native, b.Native, Native.ManifoldFields.All);
+            Ref.Manifold refNormalDepth = Ref.Collide.ShapeVsShape(
+                a.Ref, b.Ref, Ref.ManifoldFields.NormalDepth);
+            Native.Manifold nativeNormalDepth = Native.Collide.ShapeVsShape(
+                a.Native, b.Native, Native.ManifoldFields.NormalDepth);
+            Ref.Manifold refNone = Ref.Collide.ShapeVsShape(
+                a.Ref, b.Ref, Ref.ManifoldFields.None);
+            Native.Manifold nativeNone = Native.Collide.ShapeVsShape(
+                a.Native, b.Native, Native.ManifoldFields.None);
+
+            Assert.Equal(refAll.Colliding, refNormalDepth.Colliding);
+            Assert.Equal(nativeAll.Colliding, nativeNormalDepth.Colliding);
+            Assert.Equal(Ref.Collide.Overlaps(a.Ref, b.Ref), refNone.Colliding);
+            Assert.Equal(Native.Collide.Overlaps(a.Native, b.Native), nativeNone.Colliding);
+            Assert.Equal(refNone.Colliding, nativeNone.Colliding);
+
+            AssertFloatBits(refAll.Depth, refNormalDepth.Depth);
+            AssertFloatBits(nativeAll.Depth, nativeNormalDepth.Depth);
+            AssertFloatBits(refNormalDepth.Depth, nativeNormalDepth.Depth);
+            AssertFloatBits(refAll.Normal.X, refNormalDepth.Normal.X);
+            AssertFloatBits(refAll.Normal.Y, refNormalDepth.Normal.Y);
+            AssertVecBits(refNormalDepth.Normal, nativeNormalDepth.Normal);
+
+            Assert.Equal(Ref.Vec2.Zero, refNormalDepth.Contact);
+            Assert.Equal(Native.Vec2.Zero, nativeNormalDepth.Contact);
+            Assert.Equal(Ref.Vec2.Zero, refNone.Normal);
+            Assert.Equal(Native.Vec2.Zero, nativeNone.Normal);
+            Assert.Equal(0f, refNone.Depth);
+            Assert.Equal(0f, nativeNone.Depth);
+            Assert.Equal(Ref.Vec2.Zero, refNone.Contact);
+            Assert.Equal(Native.Vec2.Zero, nativeNone.Contact);
+        }
+
+        (Ref.Shape refShape, Native.Shape nativeShape) = CreateShapes()[0];
+        Assert.Throws<ArgumentOutOfRangeException>(() => Ref.Collide.ShapeVsShape(
+            refShape, refShape, (Ref.ManifoldFields)3));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Native.Collide.ShapeVsShape(
+            nativeShape, nativeShape, (Native.ManifoldFields)3));
+    }
+
+    [Fact]
     public void EveryOrderedShapePairMatchesReferenceCollisionState()
     {
         (Ref.Shape Ref, Native.Shape Native)[] shapes = CreateShapes();

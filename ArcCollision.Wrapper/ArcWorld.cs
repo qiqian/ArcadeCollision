@@ -62,7 +62,7 @@ public sealed unsafe class ArcWorld : IDisposable
     public ArcWorld(in ArcWorldOptions options)
     {
         _ = FixedValidation.From(options.FatMargin);
-        if (NativeMethods.GetAbiVersion() != 4) throw new InvalidOperationException("ArcCollision native ABI version mismatch.");
+        if (NativeMethods.GetAbiVersion() != 5) throw new InvalidOperationException("ArcCollision native ABI version mismatch.");
         NativeOptions native = new(options);
         _handle = NativeMethods.WorldCreate(native);
         if (_handle.IsInvalid)
@@ -215,21 +215,47 @@ public sealed unsafe class ArcWorld : IDisposable
         for (int i = 0; i < n; i++) GC.KeepAlive(queries[i].PolygonObject);
     }
 
-    public bool TryComputeContact(in CandidatePair pair, out ContactPair contact)
+    public bool TryComputeContact(
+        in CandidatePair pair,
+        out ContactPair contact,
+        ManifoldFields fields = ManifoldFields.All)
     {
-        NativeStatus status = NativeMethods.WorldContactPair(Handle, pair.Native, out NativeContact native, out int colliding);
+        FixedValidation.ManifoldMode(fields);
+        NativeStatus status = NativeMethods.WorldContactPair(
+            Handle, pair.Native, fields, out NativeContact native, out int colliding);
         if (status == NativeStatus.InvalidHandle) { contact = default; return false; }
         NativeMethods.Check(status); contact = colliding != 0 ? new ContactPair(native) : default; return colliding != 0;
     }
-    public bool TryComputeContact(in Shape query, ArcHandle target, out Manifold manifold) => ContactShape(query, null, target, out manifold);
-    public bool TryComputeContact(in Shape query, in CollisionFilter filter, ArcHandle target, out Manifold manifold) { CollisionFilter copy = filter; return ContactShape(query, &copy, target, out manifold); }
-    private bool ContactShape(in Shape query, CollisionFilter* filter, ArcHandle target, out Manifold manifold)
+    public bool TryComputeContact(
+        in Shape query, ArcHandle target, out Manifold manifold,
+        ManifoldFields fields = ManifoldFields.All) =>
+        ContactShape(query, null, target, out manifold, fields);
+    public bool TryComputeContact(
+        in Shape query, in CollisionFilter filter, ArcHandle target,
+        out Manifold manifold, ManifoldFields fields = ManifoldFields.All)
     {
+        CollisionFilter copy = filter;
+        return ContactShape(query, &copy, target, out manifold, fields);
+    }
+    private bool ContactShape(
+        in Shape query, CollisionFilter* filter, ArcHandle target,
+        out Manifold manifold, ManifoldFields fields)
+    {
+        FixedValidation.ManifoldMode(fields);
         _ = Handle;
         FixedValidation.Shape(query);
-        NativeShape native = query.ToNative(); NativeStatus status = NativeMethods.WorldContactShape(Handle, native, filter, target.Native, out manifold, out int colliding);
-        GC.KeepAlive(query.PolygonObject); if (status == NativeStatus.InvalidHandle) { manifold = Manifold.None; return false; }
-        NativeMethods.Check(status); return colliding != 0;
+        NativeShape native = query.ToNative();
+        NativeStatus status = NativeMethods.WorldContactShape(
+            Handle, native, filter, target.Native, fields,
+            out manifold, out int colliding);
+        GC.KeepAlive(query.PolygonObject);
+        if (status == NativeStatus.InvalidHandle)
+        {
+            manifold = Manifold.None;
+            return false;
+        }
+        NativeMethods.Check(status);
+        return colliding != 0;
     }
 
     public bool ShapeCast(in Shape mover, Vec2 motion, out WorldCastHit closest) => ShapeCastCore(mover, motion, null, out closest);

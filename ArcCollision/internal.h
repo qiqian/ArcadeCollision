@@ -297,8 +297,10 @@ int piece_count(const arc_shape& shape);
 Proxy make_proxy(const arc_shape& shape, int piece = 0);
 
 // Discrete + swept narrowphase (collide.cpp / sweep.cpp).
-FxManifold collide_proxy(const Proxy& a, const Proxy& b);
-FxManifold collide_shapes(const arc_shape& a, const arc_shape& b);
+FxManifold collide_proxy(
+    const Proxy& a, const Proxy& b, bool compute_contact = true);
+FxManifold collide_shapes(
+    const arc_shape& a, const arc_shape& b, bool compute_contact = true);
 // Fixed-point primitive collisions (no float round-trip) for the sweep t=0 paths.
 FxManifold collide_circle_circle(const FxCircle& a, const FxCircle& b);
 FxManifold collide_circle_aabb(const FxCircle& circle, const FxAabb& box);

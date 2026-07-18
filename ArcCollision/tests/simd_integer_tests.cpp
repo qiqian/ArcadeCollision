@@ -217,7 +217,7 @@ int check_pair(const Bounds& a, const Bounds& b) {
 
 } // namespace
 
-int main() {
+extern "C" int arc_run_simd_integer_tests() {
     const int32_t low = std::numeric_limits<int32_t>::min();
     const int32_t high = std::numeric_limits<int32_t>::max();
     const Bounds edge_cases[] = {

@@ -264,6 +264,17 @@ public readonly struct Shape
     public static implicit operator Shape(Polygon value) => new(value);
 }
 
+/// <summary>Selects how much collision information <see cref="Collide.ShapeVsShape"/> computes.</summary>
+public enum ManifoldFields : byte
+{
+    /// <summary>Only determine <see cref="Manifold.Colliding"/>.</summary>
+    None = 0,
+    /// <summary>Compute the collision normal and penetration depth, but not the contact point.</summary>
+    NormalDepth = 1,
+    /// <summary>Compute the complete manifold, including the contact point.</summary>
+    All = 2,
+}
+
 [StructLayout(LayoutKind.Sequential)]
 public readonly struct Manifold
 {

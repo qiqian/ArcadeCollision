@@ -33,7 +33,7 @@
 extern "C" {
 #endif
 
-#define ARC_ABI_VERSION 4u   /* Collider updates take a rigid transform, not a shape. */
+#define ARC_ABI_VERSION 5u   /* Manifold queries take an explicit detail mode. */
 #define ARC_MAX_WORLD_COUNT 15
 #define ARC_MAX_COLLIDER_COUNT 1048576
 #define ARC_MAX_ENTITY_ID 268435455
@@ -68,6 +68,14 @@ typedef struct arc_obb { arc_vec2 center, half_extents; uint32_t angle; } arc_ob
 typedef struct arc_manifold {
     arc_bool colliding; arc_vec2 normal; float depth; arc_vec2 contact;
 } arc_manifold;
+/* Fixed-width detail selector for arc_shape_vs_shape. These are mutually
+   exclusive modes, not combinable flags. Unrequested manifold fields are zero. */
+typedef uint8_t arc_manifold_fields;
+enum {
+    ARC_MANIFOLD_NONE = 0,
+    ARC_MANIFOLD_NORMAL_DEPTH = 1,
+    ARC_MANIFOLD_ALL = 2
+};
 typedef struct arc_sweep_hit {
     arc_bool hit; float time; arc_vec2 normal; arc_vec2 point;
 } arc_sweep_hit;
@@ -187,7 +195,8 @@ ARC_API arc_manifold ARC_CALL arc_circle_vs_aabb(arc_circle circle, arc_aabb box
 ARC_API arc_manifold ARC_CALL arc_circle_vs_capsule(arc_circle circle, arc_capsule capsule);
 ARC_API arc_manifold ARC_CALL arc_capsule_vs_capsule(arc_capsule a, arc_capsule b);
 ARC_API arc_manifold ARC_CALL arc_capsule_vs_aabb(arc_capsule capsule, arc_aabb box);
-ARC_API arc_manifold ARC_CALL arc_shape_vs_shape(const arc_shape* a, const arc_shape* b);
+ARC_API arc_manifold ARC_CALL arc_shape_vs_shape(
+    const arc_shape* a, const arc_shape* b, arc_manifold_fields fields);
 ARC_API arc_bool ARC_CALL arc_shapes_overlap(const arc_shape* a, const arc_shape* b);
 ARC_API arc_aabb ARC_CALL arc_shape_get_bounds(const arc_shape* shape);
 
@@ -252,8 +261,16 @@ ARC_API arc_status ARC_CALL arc_world_query(arc_world* world, const arc_shape* q
    sum of the earlier counts); out_total is the total handle count. query_count==0
    yields out_handles=NULL, out_counts=NULL, out_total=0. */
 ARC_API arc_status ARC_CALL arc_world_query_batch(arc_world* world, const arc_shape* queries, int32_t query_count, const arc_collision_filter* filter_or_null, const arc_handle** out_handles, const int32_t** out_counts, int32_t* out_total);
-ARC_API arc_status ARC_CALL arc_world_try_contact_pair(arc_world* world, arc_candidate_pair pair, arc_contact_pair* out_contact, arc_bool* out_colliding);
-ARC_API arc_status ARC_CALL arc_world_try_contact_shape(arc_world* world, const arc_shape* query, const arc_collision_filter* filter_or_null, arc_handle target, arc_manifold* out_manifold, arc_bool* out_colliding);
+/* Selected-contact narrowphase. `fields` has the same behavior as
+   arc_shape_vs_shape; unrequested manifold members are zero. */
+ARC_API arc_status ARC_CALL arc_world_try_contact_pair(
+    arc_world* world, arc_candidate_pair pair, arc_manifold_fields fields,
+    arc_contact_pair* out_contact, arc_bool* out_colliding);
+ARC_API arc_status ARC_CALL arc_world_try_contact_shape(
+    arc_world* world, const arc_shape* query,
+    const arc_collision_filter* filter_or_null, arc_handle target,
+    arc_manifold_fields fields, arc_manifold* out_manifold,
+    arc_bool* out_colliding);
 ARC_API arc_status ARC_CALL arc_world_shape_cast(arc_world* world, const arc_shape* mover, arc_vec2 motion, const arc_collision_filter* filter_or_null, arc_world_cast_hit* out_hit, arc_bool* out_found);
 ARC_API arc_status ARC_CALL arc_world_shape_cast_all(arc_world* world, const arc_shape* mover, arc_vec2 motion, const arc_collision_filter* filter_or_null, const arc_world_cast_hit** out_data, int32_t* out_count);
 ARC_API arc_status ARC_CALL arc_world_ray_cast(arc_world* world, arc_vec2 origin, arc_vec2 motion, const arc_collision_filter* filter_or_null, arc_world_cast_hit* out_hit, arc_bool* out_found);

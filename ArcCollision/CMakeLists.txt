@@ -84,19 +84,19 @@ if(ARC_BUILD_BENCHMARKS AND NOT CMAKE_CROSSCOMPILING)
 endif()
 
 if(BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
-    add_executable(arc_c_api_smoke tests/c_api_smoke.c)
-    target_link_libraries(arc_c_api_smoke PRIVATE ArcCollision)
-    target_include_directories(arc_c_api_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    add_test(NAME arc_c_api_smoke COMMAND arc_c_api_smoke)
-
-    # Compile the fixed core directly into this private test executable. Its C++
-    # symbols intentionally remain hidden from the shared library's C-only ABI.
-    add_executable(arc_simd_integer_tests
+    # Single entry point for the native algorithm tests: one runnable executable
+    # (test_runner.cpp) that invokes every C/C++ test suite and reports a pass/fail
+    # summary. Registered with CTest and also runnable directly. The fixed core is
+    # compiled in so the SIMD/fixed-point suite can reach the internal C++ symbols
+    # the shared library keeps hidden behind its C-only ABI.
+    add_executable(arc_tests
+        tests/test_runner.cpp
+        tests/c_api_smoke.c
         tests/simd_integer_tests.cpp
         fixed.cpp)
-    target_link_libraries(arc_simd_integer_tests PRIVATE ArcCollision)
-    target_include_directories(arc_simd_integer_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_compile_features(arc_simd_integer_tests PRIVATE cxx_std_17)
-    arc_enable_integer_simd(arc_simd_integer_tests)
-    add_test(NAME arc_simd_integer_tests COMMAND arc_simd_integer_tests)
+    target_link_libraries(arc_tests PRIVATE ArcCollision)
+    target_include_directories(arc_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_features(arc_tests PRIVATE cxx_std_17)
+    arc_enable_integer_simd(arc_tests)
+    add_test(NAME arc_tests COMMAND arc_tests)
 endif()

@@ -56,7 +56,8 @@ public static partial class Collide
     public static Manifold CircleVsCircle(Circle a, Circle b) =>
         CircleVsCircleFx(FxCircle.From(a), FxCircle.From(b)).ToManifold();
 
-    internal static FxManifold CircleVsCircleFx(FxCircle a, FxCircle b)
+    internal static FxManifold CircleVsCircleFx(
+        FxCircle a, FxCircle b, bool computeContact = true)
     {
         FxVec2 delta = b.Center - a.Center;
         long r = a.Radius + b.Radius;
@@ -70,7 +71,9 @@ public static partial class Collide
             ? FxAxis.FromVector(delta, FxAxis.UnitX)
             : FxAxis.UnitX;
         long depth = r - dist;
-        FxVec2 contact = a.Center + normal.Scale(a.Radius - depth / 2);
+        FxVec2 contact = computeContact
+            ? a.Center + normal.Scale(a.Radius - depth / 2)
+            : FxVec2.Zero;
         return new FxManifold(true, normal, depth, contact);
     }
 
@@ -79,7 +82,8 @@ public static partial class Collide
     public static Manifold AabbVsAabb(Aabb a, Aabb b) =>
         AabbVsAabbFx(FxAabb.From(a), FxAabb.From(b)).ToManifold();
 
-    internal static FxManifold AabbVsAabbFx(FxAabb a, FxAabb b)
+    internal static FxManifold AabbVsAabbFx(
+        FxAabb a, FxAabb b, bool computeContact = true)
     {
         FxVec2 delta = b.Center - a.Center;
         // Inclusive touch (overlap == 0 counts as colliding with Depth 0), to
@@ -97,7 +101,9 @@ public static partial class Collide
             long sign = delta.X < 0 ? -1 : 1;
             FxAxis normal = sign < 0 ? -FxAxis.UnitX : FxAxis.UnitX;
             long contactX = a.Center.X + sign * a.Half.X;
-            FxVec2 contact = ClampContact(new FxVec2(contactX, b.Center.Y), a, b);
+            FxVec2 contact = computeContact
+                ? ClampContact(new FxVec2(contactX, b.Center.Y), a, b)
+                : FxVec2.Zero;
             return new FxManifold(true, normal, overlapX, contact);
         }
         else
@@ -105,7 +111,9 @@ public static partial class Collide
             long sign = delta.Y < 0 ? -1 : 1;
             FxAxis normal = sign < 0 ? -FxAxis.UnitY : FxAxis.UnitY;
             long contactY = a.Center.Y + sign * a.Half.Y;
-            FxVec2 contact = ClampContact(new FxVec2(b.Center.X, contactY), a, b);
+            FxVec2 contact = computeContact
+                ? ClampContact(new FxVec2(b.Center.X, contactY), a, b)
+                : FxVec2.Zero;
             return new FxManifold(true, normal, overlapY, contact);
         }
     }
@@ -115,7 +123,8 @@ public static partial class Collide
     public static Manifold CircleVsAabb(Circle c, Aabb box) =>
         CircleVsAabbFx(FxCircle.From(c), FxAabb.From(box)).ToManifold();
 
-    internal static FxManifold CircleVsAabbFx(FxCircle c, FxAabb box)
+    internal static FxManifold CircleVsAabbFx(
+        FxCircle c, FxAabb box, bool computeContact = true)
     {
         FxVec2 closest = Distance.ClosestPointOnAabbFx(c.Center, box);
         FxVec2 delta = closest - c.Center;
@@ -130,7 +139,8 @@ public static partial class Collide
             long dist = Fx.Sqrt(distSq);
             FxAxis normal = FxAxis.FromVector(delta, FxAxis.UnitX);
             long depth = c.Radius - dist;
-            return new FxManifold(true, normal, depth, closest);
+            return new FxManifold(true, normal, depth,
+                computeContact ? closest : FxVec2.Zero);
         }
 
         // Center is inside the box: eject along the nearest face. `out` is the
@@ -145,7 +155,9 @@ public static partial class Collide
             long outSign = d.X < 0 ? -1 : 1;
             FxAxis normal = outSign < 0 ? FxAxis.UnitX : -FxAxis.UnitX;
             long depth = overlapX + c.Radius;
-            var contact = new FxVec2(box.Center.X + outSign * box.Half.X, c.Center.Y);
+            FxVec2 contact = computeContact
+                ? new FxVec2(box.Center.X + outSign * box.Half.X, c.Center.Y)
+                : FxVec2.Zero;
             return new FxManifold(true, normal, depth, contact);
         }
         else
@@ -153,14 +165,20 @@ public static partial class Collide
             long outSign = d.Y < 0 ? -1 : 1;
             FxAxis normal = outSign < 0 ? FxAxis.UnitY : -FxAxis.UnitY;
             long depth = overlapY + c.Radius;
-            var contact = new FxVec2(c.Center.X, box.Center.Y + outSign * box.Half.Y);
+            FxVec2 contact = computeContact
+                ? new FxVec2(c.Center.X, box.Center.Y + outSign * box.Half.Y)
+                : FxVec2.Zero;
             return new FxManifold(true, normal, depth, contact);
         }
     }
 
     // ------------------------------------------------------- Capsule variants
 
-    public static Manifold CircleVsCapsule(Circle c, Capsule cap)
+    public static Manifold CircleVsCapsule(Circle c, Capsule cap) =>
+        CircleVsCapsule(c, cap, computeContact: true);
+
+    private static Manifold CircleVsCapsule(
+        Circle c, Capsule cap, bool computeContact)
     {
         FxCircle cf = FxCircle.From(c);
         FxVec2 a = FxVec2.From(cap.A);
@@ -169,17 +187,23 @@ public static partial class Collide
         FxCircle spinePoint = new(closest, Math.Abs(Fx.From(cap.Radius)));
         FxVec2 delta = closest - cf.Center;
         if (delta.LengthSq != 0 || a.X == b.X && a.Y == b.Y)
-            return CircleVsCircleFx(cf, spinePoint).ToManifold();
+            return CircleVsCircleFx(cf, spinePoint, computeContact).ToManifold();
 
         long depth = Math.Abs(cf.Radius) + spinePoint.Radius;
         FxVec2 spine = b - a;
         FxAxis normal = FxAxis.FromVector(
             new FxVec2(-spine.Y, spine.X), FxAxis.UnitX);
-        FxVec2 contact = cf.Center + normal.Scale(Math.Abs(cf.Radius) - depth / 2);
+        FxVec2 contact = computeContact
+            ? cf.Center + normal.Scale(Math.Abs(cf.Radius) - depth / 2)
+            : FxVec2.Zero;
         return new FxManifold(true, normal, depth, contact).ToManifold();
     }
 
-    public static Manifold CapsuleVsCapsule(Capsule a, Capsule b)
+    public static Manifold CapsuleVsCapsule(Capsule a, Capsule b) =>
+        CapsuleVsCapsule(a, b, computeContact: true);
+
+    private static Manifold CapsuleVsCapsule(
+        Capsule a, Capsule b, bool computeContact)
     {
         FxVec2 a0 = FxVec2.From(a.A);
         FxVec2 a1 = FxVec2.From(a.B);
@@ -189,15 +213,18 @@ public static partial class Collide
         long radiusB = Math.Abs(Fx.From(b.Radius));
         var difference = new ConvexProxy(
             a0 - b0, a1 - b0, a1 - b1, a0 - b1, radiusA + radiusB);
+        // This intermediate manifold contributes only its normal/depth.
         FxManifold configuration = Sat(
-            difference, new ConvexProxy(FxVec2.Zero, 0));
+            difference, new ConvexProxy(FxVec2.Zero, 0), computeContact: false);
         if (!configuration.Colliding) return Manifold.None;
 
         FxAxis normal = configuration.Normal;
-        FxVec2 contact = ClampContact(
-            Midpoint(CapsuleSupport(a0, a1, radiusA, normal),
-                CapsuleSupport(b0, b1, radiusB, -normal)),
-            SegmentBounds(a0, a1, radiusA), SegmentBounds(b0, b1, radiusB));
+        FxVec2 contact = computeContact
+            ? ClampContact(
+                Midpoint(CapsuleSupport(a0, a1, radiusA, normal),
+                    CapsuleSupport(b0, b1, radiusB, -normal)),
+                SegmentBounds(a0, a1, radiusA), SegmentBounds(b0, b1, radiusB))
+            : FxVec2.Zero;
         return new FxManifold(true, normal, configuration.Depth, contact).ToManifold();
     }
 
@@ -206,28 +233,59 @@ public static partial class Collide
 
     // ======================================================== Generic Shape dispatch
 
-    /// <summary>Computes collision details for any supported shape pair.</summary>
-    public static Manifold ShapeVsShape(in Shape a, in Shape b)
+    /// <summary>
+    /// Computes the requested collision details for any supported shape pair.
+    /// <see cref="ManifoldFields.None"/> uses the boolean-only early-out path;
+    /// <see cref="ManifoldFields.NormalDepth"/> skips all contact-point work.
+    /// Fields that were not requested are returned as zero.
+    /// </summary>
+    public static Manifold ShapeVsShape(
+        in Shape a, in Shape b, ManifoldFields fields = ManifoldFields.All)
     {
+        if (fields is < ManifoldFields.None or > ManifoldFields.All)
+            throw new ArgumentOutOfRangeException(nameof(fields));
+        if (fields == ManifoldFields.None)
+            return new Manifold(Overlaps(a, b), Vec2.Zero, 0f, Vec2.Zero);
+
+        bool computeContact = fields == ManifoldFields.All;
         return (a.Kind, b.Kind) switch
         {
-            (ShapeKind.Circle, ShapeKind.Circle) => CircleVsCircle(a.Circle, b.Circle),
-            (ShapeKind.Circle, ShapeKind.Aabb) => CircleVsAabb(a.Circle, b.Aabb),
-            (ShapeKind.Aabb, ShapeKind.Circle) => Reverse(CircleVsAabb(b.Circle, a.Aabb)),
-            (ShapeKind.Circle, ShapeKind.Capsule) => CircleVsCapsule(a.Circle, b.Capsule),
-            (ShapeKind.Capsule, ShapeKind.Circle) => Reverse(CircleVsCapsule(b.Circle, a.Capsule)),
-            (ShapeKind.Circle, ShapeKind.Obb) => CircleVsObb(a.Circle, b.Obb),
-            (ShapeKind.Obb, ShapeKind.Circle) => Reverse(CircleVsObb(b.Circle, a.Obb)),
-            (ShapeKind.Aabb, ShapeKind.Aabb) => AabbVsAabb(a.Aabb, b.Aabb),
-            (ShapeKind.Aabb, ShapeKind.Capsule) => Reverse(CapsuleVsBox(b.Capsule, CreateBox(a.Aabb))),
-            (ShapeKind.Capsule, ShapeKind.Aabb) => CapsuleVsBox(a.Capsule, CreateBox(b.Aabb)),
-            (ShapeKind.Aabb, ShapeKind.Obb) => BoxVsBox(CreateBox(a.Aabb), CreateBox(b.Obb)),
-            (ShapeKind.Obb, ShapeKind.Aabb) => BoxVsBox(CreateBox(a.Obb), CreateBox(b.Aabb)),
-            (ShapeKind.Capsule, ShapeKind.Obb) => CapsuleVsBox(a.Capsule, CreateBox(b.Obb)),
-            (ShapeKind.Obb, ShapeKind.Capsule) => Reverse(CapsuleVsBox(b.Capsule, CreateBox(a.Obb))),
-            (ShapeKind.Obb, ShapeKind.Obb) => BoxVsBox(CreateBox(a.Obb), CreateBox(b.Obb)),
-            (ShapeKind.Capsule, ShapeKind.Capsule) => CapsuleVsCapsule(a.Capsule, b.Capsule),
-            _ when a.Kind == ShapeKind.Polygon || b.Kind == ShapeKind.Polygon => SatShapeVsShape(a, b),
+            (ShapeKind.Circle, ShapeKind.Circle) =>
+                CircleVsCircleFx(FxCircle.From(a.Circle), FxCircle.From(b.Circle),
+                    computeContact).ToManifold(),
+            (ShapeKind.Circle, ShapeKind.Aabb) =>
+                CircleVsAabbFx(FxCircle.From(a.Circle), FxAabb.From(b.Aabb),
+                    computeContact).ToManifold(),
+            (ShapeKind.Aabb, ShapeKind.Circle) => Reverse(
+                CircleVsAabbFx(FxCircle.From(b.Circle), FxAabb.From(a.Aabb),
+                    computeContact).ToManifold()),
+            (ShapeKind.Circle, ShapeKind.Capsule) =>
+                CircleVsCapsule(a.Circle, b.Capsule, computeContact),
+            (ShapeKind.Capsule, ShapeKind.Circle) => Reverse(
+                CircleVsCapsule(b.Circle, a.Capsule, computeContact)),
+            (ShapeKind.Circle, ShapeKind.Obb) => CircleVsObb(a.Circle, b.Obb, computeContact),
+            (ShapeKind.Obb, ShapeKind.Circle) => Reverse(CircleVsObb(b.Circle, a.Obb, computeContact)),
+            (ShapeKind.Aabb, ShapeKind.Aabb) =>
+                AabbVsAabbFx(FxAabb.From(a.Aabb), FxAabb.From(b.Aabb),
+                    computeContact).ToManifold(),
+            (ShapeKind.Aabb, ShapeKind.Capsule) => Reverse(
+                CapsuleVsBox(b.Capsule, CreateBox(a.Aabb), computeContact)),
+            (ShapeKind.Capsule, ShapeKind.Aabb) =>
+                CapsuleVsBox(a.Capsule, CreateBox(b.Aabb), computeContact),
+            (ShapeKind.Aabb, ShapeKind.Obb) =>
+                BoxVsBox(CreateBox(a.Aabb), CreateBox(b.Obb), computeContact),
+            (ShapeKind.Obb, ShapeKind.Aabb) =>
+                BoxVsBox(CreateBox(a.Obb), CreateBox(b.Aabb), computeContact),
+            (ShapeKind.Capsule, ShapeKind.Obb) =>
+                CapsuleVsBox(a.Capsule, CreateBox(b.Obb), computeContact),
+            (ShapeKind.Obb, ShapeKind.Capsule) => Reverse(
+                CapsuleVsBox(b.Capsule, CreateBox(a.Obb), computeContact)),
+            (ShapeKind.Obb, ShapeKind.Obb) =>
+                BoxVsBox(CreateBox(a.Obb), CreateBox(b.Obb), computeContact),
+            (ShapeKind.Capsule, ShapeKind.Capsule) =>
+                CapsuleVsCapsule(a.Capsule, b.Capsule, computeContact),
+            _ when a.Kind == ShapeKind.Polygon || b.Kind == ShapeKind.Polygon =>
+                SatShapeVsShape(a, b, computeContact),
             _ => throw new InvalidOperationException("Missing primitive collision dispatch."),
         };
     }
@@ -274,12 +332,13 @@ public static partial class Collide
         return false;
     }
 
-    private static Manifold SatShapeVsShape(in Shape a, in Shape b)
+    private static Manifold SatShapeVsShape(
+        in Shape a, in Shape b, bool computeContact)
     {
         int piecesA = PieceCount(a);
         int piecesB = PieceCount(b);
         if (piecesA > 1 || piecesB > 1)
-            return ConcaveShapeVsShape(a, b, piecesA, piecesB);
+            return ConcaveShapeVsShape(a, b, piecesA, piecesB, computeContact);
 
         FxManifold best = FxManifold.None;
 
@@ -288,7 +347,8 @@ public static partial class Collide
             ConvexProxy proxyA = CreateProxy(a, pieceA);
             for (int pieceB = 0; pieceB < piecesB; pieceB++)
             {
-                FxManifold candidate = Sat(proxyA, CreateProxy(b, pieceB));
+                FxManifold candidate = Sat(
+                    proxyA, CreateProxy(b, pieceB), computeContact);
                 if (candidate.Colliding && (!best.Colliding || candidate.Depth > best.Depth))
                     best = candidate;
             }
@@ -297,17 +357,18 @@ public static partial class Collide
     }
 
     private static Manifold ConcaveShapeVsShape(
-        in Shape a, in Shape b, int piecesA, int piecesB)
+        in Shape a, in Shape b, int piecesA, int piecesB, bool computeContact)
     {
         FxVec2 offset = FxVec2.Zero;
-        FxManifold first = FindDeepestPieceContact(a, b, piecesA, piecesB, offset);
+        FxManifold first = FindDeepestPieceContact(
+            a, b, piecesA, piecesB, offset, computeContact);
         if (!first.Colliding) return Manifold.None;
 
         int iterationLimit = Math.Min(64, 8 + 2 * (piecesA + piecesB));
         for (int iteration = 0; iteration < iterationLimit; iteration++)
         {
             FxManifold candidate = FindDeepestPieceContact(
-                a, b, piecesA, piecesB, offset);
+                a, b, piecesA, piecesB, offset, computeContact);
             if (!candidate.Colliding)
             {
                 long depth = offset.Length + 2;
@@ -351,7 +412,8 @@ public static partial class Collide
     }
 
     private static FxManifold FindDeepestPieceContact(
-        in Shape a, in Shape b, int piecesA, int piecesB, FxVec2 offsetA)
+        in Shape a, in Shape b, int piecesA, int piecesB,
+        FxVec2 offsetA, bool computeContact)
     {
         FxManifold best = FxManifold.None;
         for (int pieceA = 0; pieceA < piecesA; pieceA++)
@@ -359,7 +421,8 @@ public static partial class Collide
             ConvexProxy proxyA = CreateProxy(a, pieceA).Translated(offsetA);
             for (int pieceB = 0; pieceB < piecesB; pieceB++)
             {
-                FxManifold candidate = Sat(proxyA, CreateProxy(b, pieceB));
+                FxManifold candidate = Sat(
+                    proxyA, CreateProxy(b, pieceB), computeContact);
                 if (candidate.Colliding && IsBetterPieceContact(candidate, best))
                     best = candidate;
             }
@@ -452,7 +515,8 @@ public static partial class Collide
             Math.Abs(Fx.From(box.HalfExtents.X)), Math.Abs(Fx.From(box.HalfExtents.Y)));
     }
 
-    private static Manifold CircleVsObb(Circle circle, Obb box)
+    private static Manifold CircleVsObb(
+        Circle circle, Obb box, bool computeContact)
     {
         BoxProxy target = CreateBox(box);
         FxCircle source = FxCircle.From(circle);
@@ -462,14 +526,17 @@ public static partial class Collide
             Fx.RoundDiv(target.AxisY.Dot(delta), FxAxis.One));
         FxManifold local = CircleVsAabbFx(
             new FxCircle(localCenter, Math.Abs(source.Radius)),
-            new FxAabb(FxVec2.Zero, new FxVec2(target.HalfX, target.HalfY)));
+            new FxAabb(FxVec2.Zero, new FxVec2(target.HalfX, target.HalfY)),
+            computeContact);
         if (!local.Colliding)
             return Manifold.None;
 
         FxAxis normal = FxAxis.Transform(target.AxisX, target.AxisY, local.Normal);
-        FxVec2 contact = target.Center
-            + target.AxisX.Scale(local.Contact.X)
-            + target.AxisY.Scale(local.Contact.Y);
+        FxVec2 contact = computeContact
+            ? target.Center
+                + target.AxisX.Scale(local.Contact.X)
+                + target.AxisY.Scale(local.Contact.Y)
+            : FxVec2.Zero;
         return new FxManifold(true, normal, local.Depth, contact).ToManifold();
     }
 
@@ -488,7 +555,8 @@ public static partial class Collide
         return dx * dx + dy * dy <= radius * radius;
     }
 
-    private static Manifold BoxVsBox(in BoxProxy a, in BoxProxy b)
+    private static Manifold BoxVsBox(
+        in BoxProxy a, in BoxProxy b, bool computeContact)
     {
         long depth = long.MaxValue;
         long overlap = long.MaxValue;
@@ -500,8 +568,11 @@ public static partial class Collide
             return Manifold.None;
 
         FxAxis normalAxis = axis;
-        FxVec2 contact = ClampContact(
-            Midpoint(BoxSupport(a, normalAxis), BoxSupport(b, -normalAxis)), BoxBounds(a), BoxBounds(b));
+        FxVec2 contact = computeContact
+            ? ClampContact(
+                Midpoint(BoxSupport(a, normalAxis), BoxSupport(b, -normalAxis)),
+                BoxBounds(a), BoxBounds(b))
+            : FxVec2.Zero;
         return new FxManifold(true, normalAxis, depth, contact).ToManifold();
     }
 
@@ -558,7 +629,8 @@ public static partial class Collide
         return result;
     }
 
-    private static Manifold CapsuleVsBox(Capsule capsule, in BoxProxy box)
+    private static Manifold CapsuleVsBox(
+        Capsule capsule, in BoxProxy box, bool computeContact = true)
     {
         FxVec2 a = FxVec2.From(capsule.A);
         FxVec2 b = FxVec2.From(capsule.B);
@@ -589,9 +661,12 @@ public static partial class Collide
         }
 
         FxAxis normalAxis = axis;
-        FxVec2 contact = ClampContact(
-            Midpoint(CapsuleSupport(a, b, radius, normalAxis), BoxSupport(box, -normalAxis)),
-            SegmentBounds(a, b, radius), BoxBounds(box));
+        FxVec2 contact = computeContact
+            ? ClampContact(
+                Midpoint(CapsuleSupport(a, b, radius, normalAxis),
+                    BoxSupport(box, -normalAxis)),
+                SegmentBounds(a, b, radius), BoxBounds(box))
+            : FxVec2.Zero;
         return new FxManifold(true, normalAxis, depth, contact).ToManifold();
     }
 
@@ -900,7 +975,8 @@ public static partial class Collide
         }
     }
 
-    private static FxManifold Sat(in ConvexProxy a, in ConvexProxy b)
+    private static FxManifold Sat(
+        in ConvexProxy a, in ConvexProxy b, bool computeContact = true)
     {
         var state = new SatState { Depth = long.MaxValue, Overlap = long.MaxValue };
         if (!TestEdgeAxes(a, a, b, ref state) || !TestEdgeAxes(b, a, b, ref state))
@@ -922,10 +998,14 @@ public static partial class Collide
         }
 
         FxAxis normalAxis = state.Axis;
-        FxVec2 contact = IsCapsuleProxy(a) || IsCapsuleProxy(b)
-            ? CapsuleFeatureContact(a, b, normalAxis)
-            : Midpoint(Support(a, normalAxis), Support(b, -normalAxis));
-        contact = ClampContact(contact, ProxyBounds(a), ProxyBounds(b));
+        FxVec2 contact = FxVec2.Zero;
+        if (computeContact)
+        {
+            contact = IsCapsuleProxy(a) || IsCapsuleProxy(b)
+                ? CapsuleFeatureContact(a, b, normalAxis)
+                : Midpoint(Support(a, normalAxis), Support(b, -normalAxis));
+            contact = ClampContact(contact, ProxyBounds(a), ProxyBounds(b));
+        }
         return new FxManifold(true, normalAxis, state.Depth, contact);
     }
 

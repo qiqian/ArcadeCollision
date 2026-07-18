@@ -1285,9 +1285,11 @@ arc_status ARC_CALL arc_world_query_batch(
 }
 
 arc_status ARC_CALL arc_world_try_contact_pair(
-    arc_world* world, arc_candidate_pair pair,
+    arc_world* world, arc_candidate_pair pair, arc_manifold_fields fields,
     arc_contact_pair* output, arc_bool* colliding) {
-    if (!world || !output || !colliding) return ARC_STATUS_INVALID_ARGUMENT;
+    if (!world || !output || !colliding || fields > ARC_MANIFOLD_ALL)
+        return ARC_STATUS_INVALID_ARGUMENT;
+    *output = {};
     *colliding = 0;
     Slot* a = get_slot(world, pair.a);
     Slot* b = get_slot(world, pair.b);
@@ -1295,8 +1297,15 @@ arc_status ARC_CALL arc_world_try_contact_pair(
     if (!a->enabled || !b->enabled
         || !arc::filter_allows(a->filter, b->filter))
         return ARC_STATUS_OK;
-    const arc_manifold manifold =
-        arc::collide_shapes(a->shape.value, b->shape.value).to_public();
+    arc_manifold manifold{};
+    if (fields == ARC_MANIFOLD_NONE) {
+        manifold.colliding = arc::overlap_shapes(
+            a->shape.value, b->shape.value) ? 1 : 0;
+    } else {
+        manifold = arc::collide_shapes(
+            a->shape.value, b->shape.value,
+            fields == ARC_MANIFOLD_ALL).to_public();
+    }
     if (manifold.colliding) {
         *colliding = 1;
         *output = {pair.a, pair.b, manifold};
@@ -1307,17 +1316,25 @@ arc_status ARC_CALL arc_world_try_contact_pair(
 arc_status ARC_CALL arc_world_try_contact_shape(
     arc_world* world, const arc_shape* query,
     const arc_collision_filter* filter, arc_handle target,
-    arc_manifold* output, arc_bool* colliding) {
+    arc_manifold_fields fields, arc_manifold* output, arc_bool* colliding) {
     if (!world || !query || !output || !colliding
-        || !arc::validate_shape(*query))
+        || fields > ARC_MANIFOLD_ALL || !arc::validate_shape(*query))
         return ARC_STATUS_INVALID_ARGUMENT;
+    *output = {};
     *colliding = 0;
     Slot* slot = get_slot(world, target);
     if (!slot) return ARC_STATUS_INVALID_HANDLE;
     if (!slot->enabled
         || (filter && !arc::filter_allows(*filter, slot->filter)))
         return ARC_STATUS_OK;
-    *output = arc::collide_shapes(*query, slot->shape.value).to_public();
+    if (fields == ARC_MANIFOLD_NONE) {
+        output->colliding = arc::overlap_shapes(
+            *query, slot->shape.value) ? 1 : 0;
+    } else {
+        *output = arc::collide_shapes(
+            *query, slot->shape.value,
+            fields == ARC_MANIFOLD_ALL).to_public();
+    }
     *colliding = output->colliding;
     return ARC_STATUS_OK;
 }

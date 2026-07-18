@@ -84,12 +84,14 @@ public static class Collide
         FixedValidation.Aabb(box);
         return NativeMethods.CapsuleAabb(cap, box);
     }
-    public static Manifold ShapeVsShape(in Shape a, in Shape b)
+    public static Manifold ShapeVsShape(
+        in Shape a, in Shape b, ManifoldFields fields = ManifoldFields.All)
     {
+        FixedValidation.ManifoldMode(fields);
         FixedValidation.Shape(a);
         FixedValidation.Shape(b);
         NativeShape na = a.ToNative(), nb = b.ToNative();
-        Manifold result = NativeMethods.ShapeShape(na, nb);
+        Manifold result = NativeMethods.ShapeShape(na, nb, fields);
         GC.KeepAlive(a.PolygonObject); GC.KeepAlive(b.PolygonObject);
         return result;
     }

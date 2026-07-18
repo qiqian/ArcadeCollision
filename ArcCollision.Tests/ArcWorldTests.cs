@@ -256,6 +256,48 @@ public class ArcWorldTests
     }
 
     [Fact]
+    public void TryComputeContactHonorsRequestedManifoldFields()
+    {
+        using var world = new ArcWorld(2f);
+        ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 1f));
+        ArcHandle second = world.Add(2, new Circle(new Vec2(1.5f, 0), 1f));
+        var candidates = new List<CandidatePair>();
+        world.ComputePairs(candidates);
+        CandidatePair pair = Assert.Single(candidates);
+
+        Assert.True(world.TryComputeContact(
+            pair, out ContactPair all, ManifoldFields.All));
+        Assert.True(world.TryComputeContact(
+            pair, out ContactPair normalDepth, ManifoldFields.NormalDepth));
+        Assert.True(world.TryComputeContact(
+            pair, out ContactPair overlapOnly, ManifoldFields.None));
+
+        Assert.Equal(all.Manifold.Normal, normalDepth.Manifold.Normal);
+        Assert.Equal(all.Manifold.Depth, normalDepth.Manifold.Depth);
+        Assert.Equal(Vec2.Zero, normalDepth.Manifold.Contact);
+        Assert.Equal(Vec2.Zero, overlapOnly.Manifold.Normal);
+        Assert.Equal(0f, overlapOnly.Manifold.Depth);
+        Assert.Equal(Vec2.Zero, overlapOnly.Manifold.Contact);
+
+        Shape query = new Circle(Vec2.Zero, 1f);
+        Assert.True(world.TryComputeContact(
+            query, second, out Manifold queryNormalDepth,
+            ManifoldFields.NormalDepth));
+        Assert.Equal(Vec2.Zero, queryNormalDepth.Contact);
+        Assert.True(world.TryComputeContact(
+            query, CollisionFilter.Default, second, out Manifold queryOverlapOnly,
+            ManifoldFields.None));
+        Assert.Equal(Vec2.Zero, queryOverlapOnly.Normal);
+        Assert.Equal(0f, queryOverlapOnly.Depth);
+        Assert.Equal(Vec2.Zero, queryOverlapOnly.Contact);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => world.TryComputeContact(
+            pair, out _, (ManifoldFields)3));
+        Assert.Throws<ArgumentOutOfRangeException>(() => world.TryComputeContact(
+            query, first, out _, (ManifoldFields)3));
+    }
+
+    [Fact]
     public void DefaultFiltersPreserveExistingPairBehaviour()
     {
         using var world = new ArcWorld();

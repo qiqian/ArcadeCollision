@@ -1,5 +1,16 @@
 namespace ArcCollision.Ref;
 
+/// <summary>Selects how much collision information <see cref="Collide.ShapeVsShape"/> computes.</summary>
+public enum ManifoldFields : byte
+{
+    /// <summary>Only determine <see cref="Manifold.Colliding"/>.</summary>
+    None = 0,
+    /// <summary>Compute the collision normal and penetration depth, but not the contact point.</summary>
+    NormalDepth = 1,
+    /// <summary>Compute the complete manifold, including the contact point.</summary>
+    All = 2,
+}
+
 /// <summary>
 /// Result of a discrete (static) overlap test.
 ///
@@ -18,6 +29,9 @@ namespace ArcCollision.Ref;
 /// rather than a point on either original surface. SAT contacts are additionally
 /// clamped into the operands' overlapping world bounds. Compute a clipped contact
 /// manifold externally if exact surface anchors are required.</para>
+///
+/// <para>When produced with a partial <see cref="ManifoldFields"/> mode, fields
+/// that were not requested are zero.</para>
 /// </summary>
 public readonly struct Manifold
 {

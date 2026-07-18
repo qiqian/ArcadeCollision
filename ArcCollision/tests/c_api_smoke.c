@@ -70,7 +70,8 @@ static int locked_hash_smoke(void)
         hash = add_hash(hash, pairs[i].a.packed_entity_id & 0x0fffffffu);
         hash = add_hash(hash, pairs[i].b.packed_entity_id & 0x0fffffffu);
         if (arc_world_try_contact_pair(
-                world, pairs[i], &contact, &colliding) != ARC_STATUS_OK)
+                world, pairs[i], ARC_MANIFOLD_ALL,
+                &contact, &colliding) != ARC_STATUS_OK)
             return 36;
         if (!colliding) continue;
         hash = add_hash(hash, float_bits(contact.manifold.depth));
@@ -199,15 +200,38 @@ static int broadphase_stress(void)
     return 0;
 }
 
-int main(void)
+int arc_run_c_api_smoke(void)
 {
     if (arc_get_abi_version() != ARC_ABI_VERSION) return 1;
     if (sizeof(arc_status) != sizeof(int32_t)) return 13;
+    if (sizeof(arc_manifold_fields) != sizeof(uint8_t)) return 14;
 
     arc_circle a = {{0.0f, 0.0f}, 1.0f};
     arc_circle b = {{1.5f, 0.0f}, 1.0f};
     arc_manifold manifold = arc_circle_vs_circle(a, b);
     if (!manifold.colliding || manifold.depth != 0.5f) return 2;
+
+    {
+        arc_shape first = {0}, second = {0};
+        arc_manifold normal_depth, overlap_only;
+        first.kind = ARC_SHAPE_CIRCLE;
+        first.circle = a;
+        second.kind = ARC_SHAPE_CIRCLE;
+        second.circle = b;
+        normal_depth = arc_shape_vs_shape(
+            &first, &second, ARC_MANIFOLD_NORMAL_DEPTH);
+        overlap_only = arc_shape_vs_shape(
+            &first, &second, ARC_MANIFOLD_NONE);
+        if (!normal_depth.colliding || normal_depth.depth != manifold.depth
+            || normal_depth.normal.x != manifold.normal.x
+            || normal_depth.normal.y != manifold.normal.y
+            || normal_depth.contact.x != 0 || normal_depth.contact.y != 0)
+            return 15;
+        if (!overlap_only.colliding || overlap_only.depth != 0
+            || overlap_only.normal.x != 0 || overlap_only.normal.y != 0
+            || overlap_only.contact.x != 0 || overlap_only.contact.y != 0)
+            return 16;
+    }
 
     {
         arc_vec2 c1, c2;

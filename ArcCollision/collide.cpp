@@ -278,7 +278,8 @@ bool sat_overlaps(const Proxy& a, const Proxy& b) {
 // Circle/circle: exact. Touch (distance == radius) counts as colliding, depth 0.
 // Contact is the overlap midpoint along the centre line; the many other pairs
 // reduce to this (closest points expanded by their radii).
-FxManifold circle_circle(const FxCircle& a, const FxCircle& b) {
+FxManifold circle_circle(
+    const FxCircle& a, const FxCircle& b, bool compute_contact) {
     const Vec delta = b.center - a.center;
     const int64_t radius = a.radius + b.radius;
     const int64_t distance_sq = delta.length_sq();
@@ -287,13 +288,15 @@ FxManifold circle_circle(const FxCircle& a, const FxCircle& b) {
     const Axis normal = distance > 0
         ? Axis::from_vector(delta, Axis::unit_x()) : Axis::unit_x();
     const int64_t depth = radius - distance;
-    return {true, normal, depth,
-            a.center + normal.scale(a.radius - depth / 2)};
+    const Vec contact = compute_contact
+        ? a.center + normal.scale(a.radius - depth / 2) : Vec{};
+    return {true, normal, depth, contact};
 }
 
 // AABB/AABB: exact. Inclusive touch (overlap == 0 is colliding, depth 0) to match
 // circle_circle and the boolean predicates. Ejects along the shallower axis.
-FxManifold aabb_aabb(const FxAabb& a, const FxAabb& b) {
+FxManifold aabb_aabb(
+    const FxAabb& a, const FxAabb& b, bool compute_contact) {
     const Vec delta = b.center - a.center;
     const int64_t overlap_x = a.half.x + b.half.x - std::abs(delta.x);
     if (overlap_x < 0) return {};
@@ -302,20 +305,25 @@ FxManifold aabb_aabb(const FxAabb& a, const FxAabb& b) {
     if (overlap_x < overlap_y) {
         const int64_t sign = delta.x < 0 ? -1 : 1;
         const Axis normal = sign < 0 ? -Axis::unit_x() : Axis::unit_x();
-        const Vec contact = clamp_contact(
-            {a.center.x + sign * a.half.x, b.center.y}, a, b);
+        const Vec contact = compute_contact
+            ? clamp_contact(
+                {a.center.x + sign * a.half.x, b.center.y}, a, b)
+            : Vec{};
         return {true, normal, overlap_x, contact};
     }
     const int64_t sign = delta.y < 0 ? -1 : 1;
     const Axis normal = sign < 0 ? -Axis::unit_y() : Axis::unit_y();
-    const Vec contact = clamp_contact(
-        {b.center.x, a.center.y + sign * a.half.y}, a, b);
+    const Vec contact = compute_contact
+        ? clamp_contact(
+            {b.center.x, a.center.y + sign * a.half.y}, a, b)
+        : Vec{};
     return {true, normal, overlap_y, contact};
 }
 
 // Circle/AABB: exact. If the centre is outside, the closest box point gives the
 // normal/depth; if inside (distance 0), eject through the nearest face.
-FxManifold circle_aabb(const FxCircle& circle, const FxAabb& box) {
+FxManifold circle_aabb(
+    const FxCircle& circle, const FxAabb& box, bool compute_contact) {
     const Vec min = box.min();
     const Vec max = box.max();
     const Vec closest{std::clamp(circle.center.x, min.x, max.x),
@@ -326,7 +334,7 @@ FxManifold circle_aabb(const FxCircle& circle, const FxAabb& box) {
     if (distance_sq > 0) {
         const int64_t distance = sqrt_i64(distance_sq);
         return {true, Axis::from_vector(delta, Axis::unit_x()),
-                circle.radius - distance, closest};
+                circle.radius - distance, compute_contact ? closest : Vec{}};
     }
     const Vec local = circle.center - box.center;
     const int64_t overlap_x = box.half.x - std::abs(local.x);
@@ -334,13 +342,15 @@ FxManifold circle_aabb(const FxCircle& circle, const FxAabb& box) {
     if (overlap_x < overlap_y) {
         const int64_t out = local.x < 0 ? -1 : 1;
         const Axis normal = out < 0 ? Axis::unit_x() : -Axis::unit_x();
-        return {true, normal, overlap_x + circle.radius,
-                {box.center.x + out * box.half.x, circle.center.y}};
+        const Vec contact = compute_contact
+            ? Vec{box.center.x + out * box.half.x, circle.center.y} : Vec{};
+        return {true, normal, overlap_x + circle.radius, contact};
     }
     const int64_t out = local.y < 0 ? -1 : 1;
     const Axis normal = out < 0 ? Axis::unit_y() : -Axis::unit_y();
-    return {true, normal, overlap_y + circle.radius,
-            {circle.center.x, box.center.y + out * box.half.y}};
+    const Vec contact = compute_contact
+        ? Vec{circle.center.x, box.center.y + out * box.half.y} : Vec{};
+    return {true, normal, overlap_y + circle.radius, contact};
 }
 
 // A box as centre + two Q1.30 axes + half-extents. AABBs use the cardinal axes;
@@ -419,7 +429,8 @@ bool test_box_axis(
 
 // AABB/OBB/OBB SAT: four axes (each box's two edge normals) suffice for boxes.
 // Contact is the clamped midpoint of the two support points along the min axis.
-FxManifold box_box(const BoxProxy& a, const BoxProxy& b) {
+FxManifold box_box(
+    const BoxProxy& a, const BoxProxy& b, bool compute_contact) {
     int64_t overlap = std::numeric_limits<int64_t>::max();
     int64_t depth = std::numeric_limits<int64_t>::max();
     Axis axis = Axis::unit_x();
@@ -428,15 +439,18 @@ FxManifold box_box(const BoxProxy& a, const BoxProxy& b) {
         || !test_box_axis(b.axis_x, a, b, overlap, depth, axis)
         || !test_box_axis(b.axis_y, a, b, overlap, depth, axis))
         return {};
-    return {true, axis, depth,
-            clamp_contact(midpoint(
-                box_support(a, axis), box_support(b, -axis)),
-                box_bounds(a), box_bounds(b))};
+    const Vec contact = compute_contact
+        ? clamp_contact(midpoint(
+            box_support(a, axis), box_support(b, -axis)),
+            box_bounds(a), box_bounds(b))
+        : Vec{};
+    return {true, axis, depth, contact};
 }
 
 // Circle/OBB: rotate the circle into the box's local frame (reducing to
 // circle/AABB), solve there, then rotate the normal/contact back to world space.
-FxManifold circle_obb(const arc_circle& circle, const arc_obb& box) {
+FxManifold circle_obb(
+    const arc_circle& circle, const arc_obb& box, bool compute_contact) {
     const BoxProxy target = make_box(box);
     const FxCircle source = fixed_circle(circle);
     const Vec delta = source.center - target.center;
@@ -444,13 +458,15 @@ FxManifold circle_obb(const arc_circle& circle, const arc_obb& box) {
         round_axis(target.axis_x.dot(delta)),
         round_axis(target.axis_y.dot(delta))}, std::abs(source.radius)};
     const FxManifold result = circle_aabb(
-        local, {{0, 0}, {target.half_x, target.half_y}});
+        local, {{0, 0}, {target.half_x, target.half_y}}, compute_contact);
     if (!result.colliding) return {};
     const Axis normal =
         Axis::transform(target.axis_x, target.axis_y, result.normal);
-    const Vec contact = target.center
-        + target.axis_x.scale(result.contact.x)
-        + target.axis_y.scale(result.contact.y);
+    const Vec contact = compute_contact
+        ? target.center
+            + target.axis_x.scale(result.contact.x)
+            + target.axis_y.scale(result.contact.y)
+        : Vec{};
     return {true, normal, result.depth, contact};
 }
 
@@ -507,7 +523,8 @@ bool test_capsule_box_axis(
 // Capsule/box SAT: the box's two face normals, the spine-perpendicular, and the
 // four corner-to-spine closest axes (the rounded-hull axes) together separate a
 // capsule from a box.
-FxManifold capsule_box(const arc_capsule& capsule, const BoxProxy& box) {
+FxManifold capsule_box(
+    const arc_capsule& capsule, const BoxProxy& box, bool compute_contact) {
     const Vec a = Vec::from(capsule.a);
     const Vec b = Vec::from(capsule.b);
     const int64_t radius = std::abs(from_float(capsule.radius));
@@ -535,16 +552,19 @@ FxManifold capsule_box(const arc_capsule& capsule, const BoxProxy& box) {
                 a, b, radius, box, overlap, depth, axis))
             return {};
     }
-    return {true, axis, depth,
-            clamp_contact(midpoint(
-                capsule_support(a, b, radius, axis),
-                box_support(box, -axis)),
-                segment_bounds(a, b, radius), box_bounds(box))};
+    const Vec contact = compute_contact
+        ? clamp_contact(midpoint(
+            capsule_support(a, b, radius, axis), box_support(box, -axis)),
+            segment_bounds(a, b, radius), box_bounds(box))
+        : Vec{};
+    return {true, axis, depth, contact};
 }
 
 // Circle/capsule: reduce to circle/circle against the closest point on the spine.
 // The degenerate case (circle centred on the spine) picks the spine-perpendicular.
-FxManifold circle_capsule(const arc_circle& circle, const arc_capsule& capsule) {
+FxManifold circle_capsule(
+    const arc_circle& circle, const arc_capsule& capsule,
+    bool compute_contact) {
     const FxCircle fixed = fixed_circle(circle);
     const Vec a = Vec::from(capsule.a);
     const Vec b = Vec::from(capsule.b);
@@ -552,13 +572,15 @@ FxManifold circle_capsule(const arc_circle& circle, const arc_capsule& capsule) 
     const int64_t capsule_radius = std::abs(from_float(capsule.radius));
     const Vec delta = closest - fixed.center;
     if (delta.length_sq() != 0 || (a.x == b.x && a.y == b.y))
-        return circle_circle(fixed, {closest, capsule_radius});
+        return circle_circle(fixed, {closest, capsule_radius}, compute_contact);
     const int64_t depth = std::abs(fixed.radius) + capsule_radius;
     const Vec spine = b - a;
     const Axis normal = Axis::from_vector(
         {-spine.y, spine.x}, Axis::unit_x());
-    return {true, normal, depth,
-            fixed.center + normal.scale(std::abs(fixed.radius) - depth / 2)};
+    const Vec contact = compute_contact
+        ? fixed.center + normal.scale(std::abs(fixed.radius) - depth / 2)
+        : Vec{};
+    return {true, normal, depth, contact};
 }
 
 // Swap the operand order of a manifold: flip the normal and re-derive the
@@ -580,7 +602,8 @@ FxManifold reverse(FxManifold value) {
 // (4 points) inflated by the summed radii, tested against the origin. SAT on that
 // gives the true MTV even when the spines cross, where a naive closest-point
 // reduction would saturate. Contact is the clamped support-point midpoint.
-FxManifold capsule_capsule(const arc_capsule& first, const arc_capsule& second) {
+FxManifold capsule_capsule(
+    const arc_capsule& first, const arc_capsule& second, bool compute_contact) {
     const Vec a0 = Vec::from(first.a), a1 = Vec::from(first.b);
     const Vec b0 = Vec::from(second.a), b1 = Vec::from(second.b);
     const int64_t radius_a = std::abs(from_float(first.radius));
@@ -595,7 +618,9 @@ FxManifold capsule_capsule(const arc_capsule& first, const arc_capsule& second) 
     Proxy origin;
     origin.count = 1;
     origin.inline_vertices[0] = {0, 0};
-    const FxManifold configuration = collide_proxy(difference, origin);
+    // The intermediate Minkowski manifold contributes only its normal/depth.
+    const FxManifold configuration = collide_proxy(
+        difference, origin, false);
     if (!configuration.colliding) return {};
     const Axis normal = configuration.normal;
     auto capsule_support = [](Vec a, Vec b, int64_t radius, Axis direction) {
@@ -610,10 +635,12 @@ FxManifold capsule_capsule(const arc_capsule& first, const arc_capsule& second) 
         return FxAabb{{(min_x + max_x) / 2, (min_y + max_y) / 2},
                       {(max_x - min_x) / 2, (max_y - min_y) / 2}};
     };
-    const Vec contact = clamp_contact(
-        midpoint(capsule_support(a0, a1, radius_a, normal),
-                 capsule_support(b0, b1, radius_b, -normal)),
-        segment_bounds(a0, a1, radius_a), segment_bounds(b0, b1, radius_b));
+    const Vec contact = compute_contact
+        ? clamp_contact(
+            midpoint(capsule_support(a0, a1, radius_a, normal),
+                     capsule_support(b0, b1, radius_b, -normal)),
+            segment_bounds(a0, a1, radius_a), segment_bounds(b0, b1, radius_b))
+        : Vec{};
     return {true, normal, configuration.depth, contact};
 }
 
@@ -743,12 +770,14 @@ bool is_better_piece(const FxManifold& candidate, const FxManifold& best) {
 
 // Deepest colliding (piece_a, piece_b) pair with shape A shifted by `offset`.
 FxManifold deepest_piece(
-    const arc_shape& a, const arc_shape& b, int pieces_a, int pieces_b, const Vec& offset) {
+    const arc_shape& a, const arc_shape& b, int pieces_a, int pieces_b,
+    const Vec& offset, bool compute_contact) {
     FxManifold best;
     for (int i = 0; i < pieces_a; ++i) {
         const Proxy proxy_a = make_proxy(a, i).translated(offset);
         for (int j = 0; j < pieces_b; ++j) {
-            const FxManifold candidate = collide_proxy(proxy_a, make_proxy(b, j));
+            const FxManifold candidate = collide_proxy(
+                proxy_a, make_proxy(b, j), compute_contact);
             if (candidate.colliding && is_better_piece(candidate, best))
                 best = candidate;
         }
@@ -782,14 +811,16 @@ Vec guaranteed_separation(const Bounds& a, const Bounds& b) {
 // total offset is the true separation. Falls back to guaranteed_separation if the
 // iteration doesn't converge within the (piece-count-scaled) budget.
 FxManifold concave_collision(
-    const arc_shape& a, const arc_shape& b, int pieces_a, int pieces_b) {
+    const arc_shape& a, const arc_shape& b, int pieces_a, int pieces_b,
+    bool compute_contact) {
     Vec offset;
-    const FxManifold first = deepest_piece(a, b, pieces_a, pieces_b, offset);
+    const FxManifold first = deepest_piece(
+        a, b, pieces_a, pieces_b, offset, compute_contact);
     if (!first.colliding) return {};
     const int limit = std::min(64, 8 + 2 * (pieces_a + pieces_b));
     for (int iteration = 0; iteration < limit; ++iteration) {
         const FxManifold candidate =
-            deepest_piece(a, b, pieces_a, pieces_b, offset);
+            deepest_piece(a, b, pieces_a, pieces_b, offset, compute_contact);
         if (!candidate.colliding) {
             const int64_t depth = offset.length() + 2;
             return {true, Axis::from_vector(-offset, first.normal),
@@ -807,15 +838,22 @@ FxManifold concave_collision(
 // Fixed-point primitive collisions exposed for the sweep's "already overlapping
 // at t=0" branches, so they resolve the initial contact from the fixed values
 // directly -- no arc_shape/float round-trip, bit-identical to the C# reference.
-FxManifold collide_circle_circle(const FxCircle& a, const FxCircle& b) { return circle_circle(a, b); }
-FxManifold collide_circle_aabb(const FxCircle& circle, const FxAabb& box) { return circle_aabb(circle, box); }
-FxManifold collide_aabb_aabb(const FxAabb& a, const FxAabb& b) { return aabb_aabb(a, b); }
+FxManifold collide_circle_circle(const FxCircle& a, const FxCircle& b) {
+    return circle_circle(a, b, true);
+}
+FxManifold collide_circle_aabb(const FxCircle& circle, const FxAabb& box) {
+    return circle_aabb(circle, box, true);
+}
+FxManifold collide_aabb_aabb(const FxAabb& a, const FxAabb& b) {
+    return aabb_aabb(a, b, true);
+}
 
 // Generic convex-vs-convex SAT: test both hulls' edge normals, add vertex/edge
 // axes when either shape is rounded (a radius), and fall back to the centre delta
 // for the fully-contained case. The result uses a clamped support-midpoint
 // contact, with a feature-aware tangent selection whenever a capsule is involved.
-FxManifold collide_proxy(const Proxy& a, const Proxy& b) {
+FxManifold collide_proxy(
+    const Proxy& a, const Proxy& b, bool compute_contact) {
     if (a.count == 0 || b.count == 0) return {};
     SatState state;
     if (!test_edge_axes(a, a, b, state)
@@ -831,59 +869,71 @@ FxManifold collide_proxy(const Proxy& a, const Proxy& b) {
         if (fallback.length_sq() == 0) fallback = {FxOne, 0};
         if (!test_axis(fallback, a, b, state)) return {};
     }
-    Vec contact = is_capsule_proxy(a) || is_capsule_proxy(b)
-        ? capsule_feature_contact(a, b, state.axis)
-        : midpoint(support(a, state.axis), support(b, -state.axis));
-    contact = clamp_contact(contact, proxy_bounds(a), proxy_bounds(b));
+    Vec contact;
+    if (compute_contact) {
+        contact = is_capsule_proxy(a) || is_capsule_proxy(b)
+            ? capsule_feature_contact(a, b, state.axis)
+            : midpoint(support(a, state.axis), support(b, -state.axis));
+        contact = clamp_contact(contact, proxy_bounds(a), proxy_bounds(b));
+    }
     return {true, state.axis, state.depth, contact};
 }
 
 // Top-level narrowphase dispatch: route each shape-kind pair to its dedicated
 // closed form where one exists, otherwise fall through to the proxy/SAT and
 // concave paths. The normal always points from `a` toward `b`.
-FxManifold collide_shapes(const arc_shape& a, const arc_shape& b) {
+FxManifold collide_shapes(
+    const arc_shape& a, const arc_shape& b, bool compute_contact) {
     if (a.kind == ARC_SHAPE_CIRCLE && b.kind == ARC_SHAPE_CIRCLE)
-        return circle_circle(fixed_circle(a.circle), fixed_circle(b.circle));
+        return circle_circle(
+            fixed_circle(a.circle), fixed_circle(b.circle), compute_contact);
     if (a.kind == ARC_SHAPE_AABB && b.kind == ARC_SHAPE_AABB)
-        return aabb_aabb(fixed_aabb(a.aabb), fixed_aabb(b.aabb));
+        return aabb_aabb(
+            fixed_aabb(a.aabb), fixed_aabb(b.aabb), compute_contact);
     if (a.kind == ARC_SHAPE_CIRCLE && b.kind == ARC_SHAPE_AABB)
-        return circle_aabb(fixed_circle(a.circle), fixed_aabb(b.aabb));
+        return circle_aabb(
+            fixed_circle(a.circle), fixed_aabb(b.aabb), compute_contact);
     if (a.kind == ARC_SHAPE_AABB && b.kind == ARC_SHAPE_CIRCLE)
-        return reverse(circle_aabb(fixed_circle(b.circle), fixed_aabb(a.aabb)));
+        return reverse(circle_aabb(
+            fixed_circle(b.circle), fixed_aabb(a.aabb), compute_contact));
     if (a.kind == ARC_SHAPE_CIRCLE && b.kind == ARC_SHAPE_CAPSULE)
-        return circle_capsule(a.circle, b.capsule);
+        return circle_capsule(a.circle, b.capsule, compute_contact);
     if (a.kind == ARC_SHAPE_CAPSULE && b.kind == ARC_SHAPE_CIRCLE)
-        return reverse(circle_capsule(b.circle, a.capsule));
+        return reverse(circle_capsule(b.circle, a.capsule, compute_contact));
     if (a.kind == ARC_SHAPE_CAPSULE && b.kind == ARC_SHAPE_CAPSULE)
-        return capsule_capsule(a.capsule, b.capsule);
+        return capsule_capsule(a.capsule, b.capsule, compute_contact);
     if (a.kind == ARC_SHAPE_CIRCLE && b.kind == ARC_SHAPE_OBB)
-        return circle_obb(a.circle, b.obb);
+        return circle_obb(a.circle, b.obb, compute_contact);
     if (a.kind == ARC_SHAPE_OBB && b.kind == ARC_SHAPE_CIRCLE)
-        return reverse(circle_obb(b.circle, a.obb));
+        return reverse(circle_obb(b.circle, a.obb, compute_contact));
     if (a.kind == ARC_SHAPE_AABB && b.kind == ARC_SHAPE_OBB)
-        return box_box(make_box(a.aabb), make_box(b.obb));
+        return box_box(make_box(a.aabb), make_box(b.obb), compute_contact);
     if (a.kind == ARC_SHAPE_OBB && b.kind == ARC_SHAPE_AABB)
-        return box_box(make_box(a.obb), make_box(b.aabb));
+        return box_box(make_box(a.obb), make_box(b.aabb), compute_contact);
     if (a.kind == ARC_SHAPE_OBB && b.kind == ARC_SHAPE_OBB)
-        return box_box(make_box(a.obb), make_box(b.obb));
+        return box_box(make_box(a.obb), make_box(b.obb), compute_contact);
     if (a.kind == ARC_SHAPE_CAPSULE && b.kind == ARC_SHAPE_AABB)
-        return capsule_box(a.capsule, make_box(b.aabb));
+        return capsule_box(a.capsule, make_box(b.aabb), compute_contact);
     if (a.kind == ARC_SHAPE_AABB && b.kind == ARC_SHAPE_CAPSULE)
-        return reverse(capsule_box(b.capsule, make_box(a.aabb)));
+        return reverse(capsule_box(
+            b.capsule, make_box(a.aabb), compute_contact));
     if (a.kind == ARC_SHAPE_CAPSULE && b.kind == ARC_SHAPE_OBB)
-        return capsule_box(a.capsule, make_box(b.obb));
+        return capsule_box(a.capsule, make_box(b.obb), compute_contact);
     if (a.kind == ARC_SHAPE_OBB && b.kind == ARC_SHAPE_CAPSULE)
-        return reverse(capsule_box(b.capsule, make_box(a.obb)));
+        return reverse(capsule_box(
+            b.capsule, make_box(a.obb), compute_contact));
 
     const int pieces_a = piece_count(a);
     const int pieces_b = piece_count(b);
     if (pieces_a > 1 || pieces_b > 1)
-        return concave_collision(a, b, pieces_a, pieces_b);
+        return concave_collision(
+            a, b, pieces_a, pieces_b, compute_contact);
     FxManifold best;
     for (int i = 0; i < pieces_a; ++i) {
         const Proxy proxy_a = make_proxy(a, i);
         for (int j = 0; j < pieces_b; ++j) {
-            const FxManifold candidate = collide_proxy(proxy_a, make_proxy(b, j));
+            const FxManifold candidate = collide_proxy(
+                proxy_a, make_proxy(b, j), compute_contact);
             if (candidate.colliding
                 && (!best.colliding || candidate.depth > best.depth))
                 best = candidate;
@@ -961,13 +1011,24 @@ arc_shape shape_capsule(const arc_capsule& value) {
     return shape;
 }
 
-arc_manifold collide_checked(const arc_shape* a, const arc_shape* b) {
+arc_manifold collide_checked(
+    const arc_shape* a, const arc_shape* b, arc_manifold_fields fields) {
     if (!a || !b || !arc::validate_shape(*a) || !arc::validate_shape(*b)) {
         arc::set_error("Invalid shape.");
         return {};
     }
+    if (fields > ARC_MANIFOLD_ALL) {
+        arc::set_error("Invalid manifold fields.");
+        return {};
+    }
     try {
-        return arc::collide_shapes(*a, *b).to_public();
+        if (fields == ARC_MANIFOLD_NONE) {
+            arc_manifold result{};
+            result.colliding = arc::overlap_shapes(*a, *b) ? 1 : 0;
+            return result;
+        }
+        return arc::collide_shapes(
+            *a, *b, fields == ARC_MANIFOLD_ALL).to_public();
     } catch (const std::exception& exception) {
         arc::set_error(exception.what());
         return {};
@@ -1008,8 +1069,9 @@ arc_bool ARC_CALL arc_point_in_capsule(arc_vec2 point, arc_capsule capsule) {
     } catch (...) { return 0; }
 }
 
-arc_manifold ARC_CALL arc_shape_vs_shape(const arc_shape* a, const arc_shape* b) {
-    return collide_checked(a, b);
+arc_manifold ARC_CALL arc_shape_vs_shape(
+    const arc_shape* a, const arc_shape* b, arc_manifold_fields fields) {
+    return collide_checked(a, b, fields);
 }
 
 arc_bool ARC_CALL arc_shapes_overlap(const arc_shape* a, const arc_shape* b) {
@@ -1083,27 +1145,27 @@ arc_aabb ARC_CALL arc_shape_get_bounds(const arc_shape* shape) {
 
 arc_manifold ARC_CALL arc_circle_vs_circle(arc_circle a, arc_circle b) {
     const arc_shape first = shape_circle(a), second = shape_circle(b);
-    return collide_checked(&first, &second);
+    return collide_checked(&first, &second, ARC_MANIFOLD_ALL);
 }
 arc_manifold ARC_CALL arc_aabb_vs_aabb(arc_aabb a, arc_aabb b) {
     const arc_shape first = shape_aabb(a), second = shape_aabb(b);
-    return collide_checked(&first, &second);
+    return collide_checked(&first, &second, ARC_MANIFOLD_ALL);
 }
 arc_manifold ARC_CALL arc_circle_vs_aabb(arc_circle a, arc_aabb b) {
     const arc_shape first = shape_circle(a), second = shape_aabb(b);
-    return collide_checked(&first, &second);
+    return collide_checked(&first, &second, ARC_MANIFOLD_ALL);
 }
 arc_manifold ARC_CALL arc_circle_vs_capsule(arc_circle a, arc_capsule b) {
     const arc_shape first = shape_circle(a), second = shape_capsule(b);
-    return collide_checked(&first, &second);
+    return collide_checked(&first, &second, ARC_MANIFOLD_ALL);
 }
 arc_manifold ARC_CALL arc_capsule_vs_capsule(arc_capsule a, arc_capsule b) {
     const arc_shape first = shape_capsule(a), second = shape_capsule(b);
-    return collide_checked(&first, &second);
+    return collide_checked(&first, &second, ARC_MANIFOLD_ALL);
 }
 arc_manifold ARC_CALL arc_capsule_vs_aabb(arc_capsule a, arc_aabb b) {
     const arc_shape first = shape_capsule(a), second = shape_aabb(b);
-    return collide_checked(&first, &second);
+    return collide_checked(&first, &second, ARC_MANIFOLD_ALL);
 }
 
 } // extern "C"

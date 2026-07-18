@@ -2,6 +2,12 @@ namespace ArcCollision.Wrapper;
 
 internal static class FixedValidation
 {
+    internal static void ManifoldMode(ManifoldFields fields)
+    {
+        if (fields is < ManifoldFields.None or > ManifoldFields.All)
+            throw new ArgumentOutOfRangeException(nameof(fields));
+    }
+
     internal static long From(float value)
     {
         if (!float.IsFinite(value)

@@ -747,9 +747,14 @@ public sealed class ArcWorld : IDisposable
     /// Computes narrowphase only for the selected candidate using current slot
     /// state. Returns false when either handle is invalid or disabled, the
     /// current filters reject one another, or the shapes no longer collide.
+    /// Unrequested manifold fields are zero.
     /// </summary>
-    public bool TryComputeContact(in CandidatePair pair, out ContactPair contact)
+    public bool TryComputeContact(
+        in CandidatePair pair,
+        out ContactPair contact,
+        ManifoldFields fields = ManifoldFields.All)
     {
+        ValidateManifoldFields(fields);
         ThrowIfDisposed();
         if (!IsValid(pair.A) || !IsValid(pair.B)
             || !_slots[pair.A.Index].Enabled || !_slots[pair.B.Index].Enabled)
@@ -765,7 +770,7 @@ public sealed class ArcWorld : IDisposable
         }
 
         Manifold manifold = Collide.ShapeVsShape(
-            _slots[pair.A.Index].Shape, _slots[pair.B.Index].Shape);
+            _slots[pair.A.Index].Shape, _slots[pair.B.Index].Shape, fields);
         if (!manifold.Colliding)
         {
             contact = default;
@@ -776,30 +781,41 @@ public sealed class ArcWorld : IDisposable
         return true;
     }
 
-    /// <summary>Computes a transient query shape against one selected handle.</summary>
+    /// <summary>
+    /// Computes a transient query shape against one selected handle.
+    /// Unrequested manifold fields are zero.
+    /// </summary>
     public bool TryComputeContact(
-        in Shape query, ArcHandle target, out Manifold manifold)
+        in Shape query,
+        ArcHandle target,
+        out Manifold manifold,
+        ManifoldFields fields = ManifoldFields.All)
     {
+        ValidateManifoldFields(fields);
         ThrowIfDisposed();
         if (!IsValid(target) || !_slots[target.Index].Enabled)
         {
             manifold = Manifold.None;
             return false;
         }
-        manifold = Collide.ShapeVsShape(query, _slots[target.Index].Shape);
+        manifold = Collide.ShapeVsShape(
+            query, _slots[target.Index].Shape, fields);
         return manifold.Colliding;
     }
 
     /// <summary>
     /// Computes a transient query contact only when its filter and the target's
-    /// current filter mutually accept one another.
+    /// current filter mutually accept one another. Unrequested manifold fields
+    /// are zero.
     /// </summary>
     public bool TryComputeContact(
         in Shape query,
         in CollisionFilter filter,
         ArcHandle target,
-        out Manifold manifold)
+        out Manifold manifold,
+        ManifoldFields fields = ManifoldFields.All)
     {
+        ValidateManifoldFields(fields);
         ThrowIfDisposed();
         if (!IsValid(target)
             || !_slots[target.Index].Enabled
@@ -808,8 +824,15 @@ public sealed class ArcWorld : IDisposable
             manifold = Manifold.None;
             return false;
         }
-        manifold = Collide.ShapeVsShape(query, _slots[target.Index].Shape);
+        manifold = Collide.ShapeVsShape(
+            query, _slots[target.Index].Shape, fields);
         return manifold.Colliding;
+    }
+
+    private static void ValidateManifoldFields(ManifoldFields fields)
+    {
+        if (fields is < ManifoldFields.None or > ManifoldFields.All)
+            throw new ArgumentOutOfRangeException(nameof(fields));
     }
 
     private ArcHandle AddCore(
