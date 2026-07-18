@@ -922,9 +922,10 @@ public static partial class Collide
         }
 
         FxAxis normalAxis = state.Axis;
-        FxVec2 pointA = Support(a, normalAxis);
-        FxVec2 pointB = Support(b, -normalAxis);
-        FxVec2 contact = ClampContact(Midpoint(pointA, pointB), ProxyBounds(a), ProxyBounds(b));
+        FxVec2 contact = IsCapsuleProxy(a) || IsCapsuleProxy(b)
+            ? CapsuleFeatureContact(a, b, normalAxis)
+            : Midpoint(Support(a, normalAxis), Support(b, -normalAxis));
+        contact = ClampContact(contact, ProxyBounds(a), ProxyBounds(b));
         return new FxManifold(true, normalAxis, state.Depth, contact);
     }
 
@@ -1108,12 +1109,90 @@ public static partial class Collide
         return best + direction.Scale(proxy.Radius);
     }
 
+    private const long SupportFeatureTolerance = 4 * FxAxis.One;
+
+    private readonly struct SupportFeature
+    {
+        public readonly long Normal;
+        public readonly long TangentMin;
+        public readonly long TangentMax;
+
+        public SupportFeature(long normal, long tangentMin, long tangentMax)
+        {
+            Normal = normal;
+            TangentMin = tangentMin;
+            TangentMax = tangentMax;
+        }
+    }
+
+    private static bool IsCapsuleProxy(in ConvexProxy proxy) =>
+        proxy.Count == 2 && proxy.Radius != 0;
+
+    // A capsule side is an entire support feature, not one arbitrary endpoint.
+    // Q24.8 closest-point and Q1.30 normal rounding can make the two endpoint
+    // projections differ by a few grid cells even when the selected SAT axis is
+    // geometrically perpendicular to the spine. Build both shapes' support
+    // features and choose the middle of their tangential overlap (or the nearest
+    // feature endpoints for a corner contact) so that tiny projection noise cannot
+    // move the reported contact to the far capsule cap.
+    private static FxVec2 CapsuleFeatureContact(
+        in ConvexProxy a, in ConvexProxy b, FxAxis normal)
+    {
+        FxAxis tangent = normal.Perpendicular;
+        SupportFeature featureA = FindSupportFeature(a, normal, tangent, maximum: true);
+        SupportFeature featureB = FindSupportFeature(b, normal, tangent, maximum: false);
+
+        long normalA = featureA.Normal + a.Radius * FxAxis.One;
+        long normalB = featureB.Normal - b.Radius * FxAxis.One;
+        long contactNormal = ProjectionMidpoint(normalA, normalB);
+
+        long contactTangent;
+        long overlapMin = Math.Max(featureA.TangentMin, featureB.TangentMin);
+        long overlapMax = Math.Min(featureA.TangentMax, featureB.TangentMax);
+        if (overlapMin <= overlapMax)
+            contactTangent = ProjectionMidpoint(overlapMin, overlapMax);
+        else if (featureA.TangentMax < featureB.TangentMin)
+            contactTangent = ProjectionMidpoint(featureA.TangentMax, featureB.TangentMin);
+        else
+            contactTangent = ProjectionMidpoint(featureB.TangentMax, featureA.TangentMin);
+
+        return normal.Scale(Fx.RoundDiv(contactNormal, FxAxis.One))
+            + tangent.Scale(Fx.RoundDiv(contactTangent, FxAxis.One));
+    }
+
+    private static SupportFeature FindSupportFeature(
+        in ConvexProxy proxy, FxAxis normal, FxAxis tangent, bool maximum)
+    {
+        long extreme = normal.Dot(proxy.Vertex(0));
+        for (int i = 1; i < proxy.Count; i++)
+        {
+            long projection = normal.Dot(proxy.Vertex(i));
+            extreme = maximum ? Math.Max(extreme, projection) : Math.Min(extreme, projection);
+        }
+
+        long tangentMin = long.MaxValue;
+        long tangentMax = long.MinValue;
+        for (int i = 0; i < proxy.Count; i++)
+        {
+            FxVec2 vertex = proxy.Vertex(i);
+            long projection = normal.Dot(vertex);
+            long distance = maximum ? extreme - projection : projection - extreme;
+            if (distance > SupportFeatureTolerance) continue;
+            long tangentProjection = tangent.Dot(vertex);
+            tangentMin = Math.Min(tangentMin, tangentProjection);
+            tangentMax = Math.Max(tangentMax, tangentProjection);
+        }
+        return new SupportFeature(extreme, tangentMin, tangentMax);
+    }
+
+    private static long ProjectionMidpoint(long a, long b) => a + ((b - a) >> 1);
+
     private static FxVec2 Midpoint(FxVec2 a, FxVec2 b) =>
         new(a.X + ((b.X - a.X) >> 1), a.Y + ((b.Y - a.Y) >> 1));
 
-    // The midpoint of two support points can fall outside the shapes' overlap;
-    // clamp it into the intersection of the operands' world AABBs so the reported
-    // SAT contact is always at least within both bounding boxes.
+    // A SAT contact hint can fall just outside the shapes' overlap; clamp it into
+    // the intersection of the operands' world AABBs so it is always at least
+    // within both bounding boxes.
     private static FxVec2 ClampContact(FxVec2 contact, in FxAabb a, in FxAabb b)
     {
         long minX = Math.Max(a.Min.X, b.Min.X), maxX = Math.Min(a.Max.X, b.Max.X);

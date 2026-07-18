@@ -74,6 +74,51 @@ public class WrapperParityTests
     }
 
     [Fact]
+    public void CapsulePolygonContactUsesTheLocalCapsuleSideFeature()
+    {
+        // Regression for test/capsule-vs-polygon.arc-case.json. The SAT normal is
+        // perpendicular to the capsule spine, so both spine endpoints belong to
+        // the support feature. Choosing one endpoint from a tiny Q1.30 projection
+        // difference used to report a contact near (465,445), far from the actual
+        // polygon corner at (438,415).
+        var refCapsule = new Ref.Capsule(
+            new Ref.Vec2(406, 422), new Ref.Vec2(461, 568), 34);
+        var nativeCapsule = new Native.Capsule(
+            new Native.Vec2(406, 422), new Native.Vec2(461, 568), 34);
+        var refPolygon = new Ref.Polygon(
+            new Ref.Vec2(448, 290), new Ref.Vec2(578, 275),
+            new Ref.Vec2(628, 365), new Ref.Vec2(573, 445),
+            new Ref.Vec2(438, 415));
+        var nativePolygon = new Native.Polygon(
+            new Native.Vec2(448, 290), new Native.Vec2(578, 275),
+            new Native.Vec2(628, 365), new Native.Vec2(573, 445),
+            new Native.Vec2(438, 415));
+
+        Ref.Manifold expected = Ref.Collide.ShapeVsShape(
+            new Ref.Shape(refCapsule), new Ref.Shape(refPolygon));
+        Native.Manifold actual = Native.Collide.ShapeVsShape(
+            new Native.Shape(nativeCapsule), new Native.Shape(nativePolygon));
+        Ref.Manifold reverseExpected = Ref.Collide.ShapeVsShape(
+            new Ref.Shape(refPolygon), new Ref.Shape(refCapsule));
+        Native.Manifold reverseActual = Native.Collide.ShapeVsShape(
+            new Native.Shape(nativePolygon), new Native.Shape(nativeCapsule));
+
+        Assert.True(expected.Colliding && actual.Colliding);
+        Assert.InRange(expected.Contact.X, 437f, 440f);
+        Assert.InRange(expected.Contact.Y, 413f, 416f);
+        AssertFloatBits(expected.Depth, actual.Depth);
+        AssertVecBits(expected.Normal, actual.Normal);
+        AssertVecBits(expected.Contact, actual.Contact);
+
+        Assert.True(reverseExpected.Colliding && reverseActual.Colliding);
+        Assert.InRange(reverseExpected.Contact.X, 437f, 440f);
+        Assert.InRange(reverseExpected.Contact.Y, 413f, 416f);
+        AssertFloatBits(reverseExpected.Depth, reverseActual.Depth);
+        AssertVecBits(reverseExpected.Normal, reverseActual.Normal);
+        AssertVecBits(reverseExpected.Contact, reverseActual.Contact);
+    }
+
+    [Fact]
     public void EveryOrderedShapePairMatchesReferenceCollisionState()
     {
         (Ref.Shape Ref, Native.Shape Native)[] shapes = CreateShapes();

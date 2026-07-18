@@ -63,8 +63,83 @@ Vec support(const Proxy& proxy, Axis direction) {
     return best + direction.scale(proxy.radius);
 }
 
-// The SAT contact (midpoint of two support points) can fall outside the shapes;
-// clamp it into the intersection of the operand AABBs so it stays a usable hint.
+constexpr int64_t SupportFeatureTolerance = 4 * AxisOne;
+
+struct SupportFeature {
+    int64_t normal;
+    int64_t tangent_min;
+    int64_t tangent_max;
+};
+
+bool is_capsule_proxy(const Proxy& proxy) {
+    return proxy.count == 2 && proxy.radius != 0;
+}
+
+SupportFeature find_support_feature(
+    const Proxy& proxy, Axis normal, Axis tangent, bool maximum) {
+    int64_t extreme = normal.dot(proxy.vertex(0));
+    for (int i = 1; i < proxy.count; ++i) {
+        const int64_t projection = normal.dot(proxy.vertex(i));
+        extreme = maximum
+            ? std::max(extreme, projection) : std::min(extreme, projection);
+    }
+
+    int64_t tangent_min = std::numeric_limits<int64_t>::max();
+    int64_t tangent_max = std::numeric_limits<int64_t>::min();
+    for (int i = 0; i < proxy.count; ++i) {
+        const Vec vertex = proxy.vertex(i);
+        const int64_t projection = normal.dot(vertex);
+        const int64_t distance = maximum
+            ? extreme - projection : projection - extreme;
+        if (distance > SupportFeatureTolerance) continue;
+        const int64_t tangent_projection = tangent.dot(vertex);
+        tangent_min = std::min(tangent_min, tangent_projection);
+        tangent_max = std::max(tangent_max, tangent_projection);
+    }
+    return {extreme, tangent_min, tangent_max};
+}
+
+int64_t projection_midpoint(int64_t a, int64_t b) {
+    return a + ((b - a) >> 1);
+}
+
+// A capsule side is an entire support feature, not one arbitrary endpoint.
+// Fixed closest-point and unit-normal rounding can otherwise make geometrically
+// tied spine endpoints differ by a few projection cells and send the contact to
+// the far cap. Select the middle of the support features' tangential overlap, or
+// the nearest feature endpoints when a capsule meets a polygon corner.
+Vec capsule_feature_contact(const Proxy& a, const Proxy& b, Axis normal) {
+    const Axis tangent = normal.perpendicular();
+    const SupportFeature feature_a =
+        find_support_feature(a, normal, tangent, true);
+    const SupportFeature feature_b =
+        find_support_feature(b, normal, tangent, false);
+
+    const int64_t normal_a = feature_a.normal + a.radius * AxisOne;
+    const int64_t normal_b = feature_b.normal - b.radius * AxisOne;
+    const int64_t contact_normal = projection_midpoint(normal_a, normal_b);
+
+    int64_t contact_tangent;
+    const int64_t overlap_min =
+        std::max(feature_a.tangent_min, feature_b.tangent_min);
+    const int64_t overlap_max =
+        std::min(feature_a.tangent_max, feature_b.tangent_max);
+    if (overlap_min <= overlap_max) {
+        contact_tangent = projection_midpoint(overlap_min, overlap_max);
+    } else if (feature_a.tangent_max < feature_b.tangent_min) {
+        contact_tangent = projection_midpoint(
+            feature_a.tangent_max, feature_b.tangent_min);
+    } else {
+        contact_tangent = projection_midpoint(
+            feature_b.tangent_max, feature_a.tangent_min);
+    }
+
+    return normal.scale(round_axis(contact_normal))
+        + tangent.scale(round_axis(contact_tangent));
+}
+
+// A SAT contact hint can fall just outside the shapes; clamp it into the
+// intersection of the operand AABBs so it stays usable.
 Vec clamp_contact(Vec contact, const FxAabb& a, const FxAabb& b) {
     const Vec amin = a.min(), amax = a.max();
     const Vec bmin = b.min(), bmax = b.max();
@@ -738,8 +813,8 @@ FxManifold collide_aabb_aabb(const FxAabb& a, const FxAabb& b) { return aabb_aab
 
 // Generic convex-vs-convex SAT: test both hulls' edge normals, add vertex/edge
 // axes when either shape is rounded (a radius), and fall back to the centre delta
-// for the fully-contained case. Result is the minimum-penetration axis + clamped
-// support-midpoint contact.
+// for the fully-contained case. The result uses a clamped support-midpoint
+// contact, with a feature-aware tangent selection whenever a capsule is involved.
 FxManifold collide_proxy(const Proxy& a, const Proxy& b) {
     if (a.count == 0 || b.count == 0) return {};
     SatState state;
@@ -756,9 +831,10 @@ FxManifold collide_proxy(const Proxy& a, const Proxy& b) {
         if (fallback.length_sq() == 0) fallback = {FxOne, 0};
         if (!test_axis(fallback, a, b, state)) return {};
     }
-    const Vec contact = clamp_contact(
-        midpoint(support(a, state.axis), support(b, -state.axis)),
-        proxy_bounds(a), proxy_bounds(b));
+    Vec contact = is_capsule_proxy(a) || is_capsule_proxy(b)
+        ? capsule_feature_contact(a, b, state.axis)
+        : midpoint(support(a, state.axis), support(b, -state.axis));
+    contact = clamp_contact(contact, proxy_bounds(a), proxy_bounds(b));
     return {true, state.axis, state.depth, contact};
 }
 
