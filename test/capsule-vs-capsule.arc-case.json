@@ -1,0 +1,54 @@
+{
+  "Version": 1,
+  "SavedAtUtc": "2026-07-18T13:04:37.1387423+00:00",
+  "GenericSweep": false,
+  "Scene": "CapsuleCapsule",
+  "SweepMover": "Circle",
+  "SweepTarget": "Circle",
+  "ShowContacts": true,
+  "CanvasWidth": 940,
+  "CanvasHeight": 860,
+  "ResultText": "Scene: CapsuleCapsule\n\nCOLLIDING\n\ndepth  :    0.21\nnormal : ( 0.92,  0.39)\ncontact: (566.2, 384.0)",
+  "Handles": [
+    {
+      "Name": "A.a",
+      "X": 481,
+      "Y": 210
+    },
+    {
+      "Name": "A.b",
+      "X": 561,
+      "Y": 350
+    },
+    {
+      "Name": "A.c",
+      "X": 521,
+      "Y": 280
+    },
+    {
+      "Name": "A.r",
+      "X": 451.47974,
+      "Y": 226.86871
+    },
+    {
+      "Name": "B.a",
+      "X": 637,
+      "Y": 360
+    },
+    {
+      "Name": "B.b",
+      "X": 577,
+      "Y": 500
+    },
+    {
+      "Name": "B.c",
+      "X": 607,
+      "Y": 430
+    },
+    {
+      "Name": "B.r",
+      "X": 600.2342,
+      "Y": 344.24323
+    }
+  ]
+}

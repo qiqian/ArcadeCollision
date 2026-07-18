@@ -476,11 +476,6 @@ void project_capsule(
     max = std::max(first, second) + radius_projection;
 }
 
-Vec capsule_support(const Vec& a, const Vec& b, int64_t radius, const Axis& direction) {
-    const Vec endpoint = direction.dot(a) >= direction.dot(b) ? a : b;
-    return endpoint + direction.scale(radius);
-}
-
 Vec box_vertex(const BoxProxy& box, int index) {
     const int64_t x = index == 1 || index == 2 ? box.half_x : -box.half_x;
     const int64_t y = index >= 2 ? box.half_y : -box.half_y;
@@ -621,7 +616,7 @@ FxManifold reverse(FxManifold value) {
 // Capsule/capsule via the Minkowski difference: the two spines' difference hull
 // (4 points) inflated by the summed radii, tested against the origin. SAT on that
 // gives the true MTV even when the spines cross, where a naive closest-point
-// reduction would saturate. Contact is the clamped support-point midpoint.
+// reduction would saturate. Contact comes from the two local support features.
 FxManifold capsule_capsule(
     const arc_capsule& first, const arc_capsule& second, bool compute_contact) {
     const Vec a0 = Vec::from(first.a), a1 = Vec::from(first.b);
@@ -643,22 +638,11 @@ FxManifold capsule_capsule(
         difference, origin, false);
     if (!configuration.colliding) return {};
     const Axis normal = configuration.normal;
-    auto capsule_support = [](Vec a, Vec b, int64_t radius, Axis direction) {
-        const Vec endpoint = direction.dot(a) >= direction.dot(b) ? a : b;
-        return endpoint + direction.scale(radius);
-    };
-    auto segment_bounds = [](Vec a, Vec b, int64_t radius) {
-        const int64_t min_x = std::min(a.x, b.x) - radius;
-        const int64_t min_y = std::min(a.y, b.y) - radius;
-        const int64_t max_x = std::max(a.x, b.x) + radius;
-        const int64_t max_y = std::max(a.y, b.y) + radius;
-        return FxAabb{{(min_x + max_x) / 2, (min_y + max_y) / 2},
-                      {(max_x - min_x) / 2, (max_y - min_y) / 2}};
-    };
     const Vec contact = compute_contact
         ? clamp_contact(
-            midpoint(capsule_support(a0, a1, radius_a, normal),
-                     capsule_support(b0, b1, radius_b, -normal)),
+            support_feature_contact(
+                capsule_contact_proxy(a0, a1, radius_a),
+                capsule_contact_proxy(b0, b1, radius_b), normal),
             segment_bounds(a0, a1, radius_a), segment_bounds(b0, b1, radius_b))
         : Vec{};
     return {true, normal, configuration.depth, contact};

@@ -221,8 +221,10 @@ public static partial class Collide
         FxAxis normal = configuration.Normal;
         FxVec2 contact = computeContact
             ? ClampContact(
-                Midpoint(CapsuleSupport(a0, a1, radiusA, normal),
-                    CapsuleSupport(b0, b1, radiusB, -normal)),
+                SupportFeatureContact(
+                    new ConvexProxy(a0, a1, radiusA),
+                    new ConvexProxy(b0, b1, radiusB),
+                    normal),
                 SegmentBounds(a0, a1, radiusA), SegmentBounds(b0, b1, radiusB))
             : FxVec2.Zero;
         return new FxManifold(true, normal, configuration.Depth, contact).ToManifold();
@@ -748,13 +750,6 @@ public static partial class Collide
         long radiusProjection = radius * FxAxis.One;
         min = Math.Min(first, second) - radiusProjection;
         max = Math.Max(first, second) + radiusProjection;
-    }
-
-    private static FxVec2 CapsuleSupport(
-        FxVec2 a, FxVec2 b, long radius, FxAxis direction)
-    {
-        FxVec2 endpoint = direction.Dot(a) >= direction.Dot(b) ? a : b;
-        return endpoint + direction.Scale(radius);
     }
 
     private static FxVec2 BoxVertex(in BoxProxy box, int index)

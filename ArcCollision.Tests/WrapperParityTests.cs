@@ -238,6 +238,50 @@ public class WrapperParityTests
     }
 
     [Fact]
+    public void CapsuleCapsuleContactUsesTheLocalSupportFeatures()
+    {
+        // Regression for test/capsule-vs-capsule.arc-case.json. Capsule A's
+        // lower cap grazes capsule B's long side. A tiny endpoint projection
+        // difference selected B's far cap and reported (566.2,384) instead of
+        // the local contact near (592.2,363.4).
+        var refA = new Ref.Capsule(
+            new Ref.Vec2(481, 210), new Ref.Vec2(561, 350), 34);
+        var nativeA = new Native.Capsule(
+            new Native.Vec2(481, 210), new Native.Vec2(561, 350), 34);
+        var refB = new Ref.Capsule(
+            new Ref.Vec2(637, 360), new Ref.Vec2(577, 500), 40);
+        var nativeB = new Native.Capsule(
+            new Native.Vec2(637, 360), new Native.Vec2(577, 500), 40);
+
+        Ref.Manifold expected = Ref.Collide.CapsuleVsCapsule(refA, refB);
+        Native.Manifold actual = Native.Collide.CapsuleVsCapsule(nativeA, nativeB);
+        Ref.Manifold genericExpected = Ref.Collide.ShapeVsShape(
+            new Ref.Shape(refA), new Ref.Shape(refB));
+        Native.Manifold genericActual = Native.Collide.ShapeVsShape(
+            new Native.Shape(nativeA), new Native.Shape(nativeB));
+        Ref.Manifold reverseExpected = Ref.Collide.ShapeVsShape(
+            new Ref.Shape(refB), new Ref.Shape(refA));
+        Native.Manifold reverseActual = Native.Collide.ShapeVsShape(
+            new Native.Shape(nativeB), new Native.Shape(nativeA));
+
+        Assert.True(expected.Colliding && actual.Colliding);
+        Assert.InRange(expected.Contact.X, 591f, 593f);
+        Assert.InRange(expected.Contact.Y, 362f, 365f);
+        AssertFloatBits(expected.Depth, actual.Depth);
+        AssertVecBits(expected.Normal, actual.Normal);
+        AssertVecBits(expected.Contact, actual.Contact);
+        AssertFloatBits(expected.Contact.X, genericExpected.Contact.X);
+        AssertFloatBits(expected.Contact.Y, genericExpected.Contact.Y);
+        AssertFloatBits(actual.Contact.X, genericActual.Contact.X);
+        AssertFloatBits(actual.Contact.Y, genericActual.Contact.Y);
+
+        Assert.True(reverseExpected.Colliding && reverseActual.Colliding);
+        AssertFloatBits(expected.Contact.X, reverseExpected.Contact.X);
+        AssertFloatBits(expected.Contact.Y, reverseExpected.Contact.Y);
+        AssertVecBits(reverseExpected.Contact, reverseActual.Contact);
+    }
+
+    [Fact]
     public void ManifoldFieldsSelectTheSameWorkAndResultsInBothBackends()
     {
         foreach (var a in CreateShapes())
