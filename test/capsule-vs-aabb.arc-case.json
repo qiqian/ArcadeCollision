@@ -1,0 +1,44 @@
+{
+  "Version": 1,
+  "SavedAtUtc": "2026-07-18T10:38:57.7336048+00:00",
+  "GenericSweep": false,
+  "Scene": "CapsuleAabb",
+  "SweepMover": "Circle",
+  "SweepTarget": "Circle",
+  "ShowContacts": true,
+  "CanvasWidth": 940,
+  "CanvasHeight": 860,
+  "ResultText": "Scene: CapsuleAabb\n\nCOLLIDING\n\ndepth  :    0.59\nnormal : (-0.76,  0.65)\ncontact: (379.5, 482.0)",
+  "Handles": [
+    {
+      "Name": "A.a",
+      "X": 367,
+      "Y": 370
+    },
+    {
+      "Name": "A.b",
+      "X": 477,
+      "Y": 500
+    },
+    {
+      "Name": "A.c",
+      "X": 422,
+      "Y": 435
+    },
+    {
+      "Name": "A.r",
+      "X": 341.04486,
+      "Y": 391.96204
+    },
+    {
+      "Name": "B.c",
+      "X": 338,
+      "Y": 572
+    },
+    {
+      "Name": "B.e",
+      "X": 418,
+      "Y": 662
+    }
+  ]
+}

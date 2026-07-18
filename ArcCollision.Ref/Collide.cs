@@ -663,8 +663,12 @@ public static partial class Collide
         FxAxis normalAxis = axis;
         FxVec2 contact = computeContact
             ? ClampContact(
-                Midpoint(CapsuleSupport(a, b, radius, normalAxis),
-                    BoxSupport(box, -normalAxis)),
+                CapsuleFeatureContact(
+                    new ConvexProxy(a, b, radius),
+                    new ConvexProxy(
+                        BoxVertex(box, 0), BoxVertex(box, 1),
+                        BoxVertex(box, 2), BoxVertex(box, 3)),
+                    normalAxis),
                 SegmentBounds(a, b, radius), BoxBounds(box))
             : FxVec2.Zero;
         return new FxManifold(true, normalAxis, depth, contact).ToManifold();

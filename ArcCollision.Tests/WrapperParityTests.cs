@@ -119,6 +119,41 @@ public class WrapperParityTests
     }
 
     [Fact]
+    public void CapsuleAabbContactUsesTheLocalCapsuleSideFeature()
+    {
+        // Regression for test/capsule-vs-aabb.arc-case.json. The capsule side
+        // grazes the box's top-right corner. Selecting one support endpoint
+        // reported (379.5, 482), on the far side of the overlap, instead of the
+        // actual local feature near (418, 482).
+        var refCapsule = new Ref.Capsule(
+            new Ref.Vec2(367, 370), new Ref.Vec2(477, 500), 34);
+        var nativeCapsule = new Native.Capsule(
+            new Native.Vec2(367, 370), new Native.Vec2(477, 500), 34);
+        var refBox = new Ref.Aabb(
+            new Ref.Vec2(338, 572), new Ref.Vec2(80, 90));
+        var nativeBox = new Native.Aabb(
+            new Native.Vec2(338, 572), new Native.Vec2(80, 90));
+
+        Ref.Manifold expected = Ref.Collide.CapsuleVsAabb(refCapsule, refBox);
+        Native.Manifold actual = Native.Collide.CapsuleVsAabb(nativeCapsule, nativeBox);
+        Ref.Manifold genericExpected = Ref.Collide.ShapeVsShape(
+            new Ref.Shape(refCapsule), new Ref.Shape(refBox));
+        Native.Manifold genericActual = Native.Collide.ShapeVsShape(
+            new Native.Shape(nativeCapsule), new Native.Shape(nativeBox));
+
+        Assert.True(expected.Colliding && actual.Colliding);
+        Assert.InRange(expected.Contact.X, 417f, 419f);
+        Assert.InRange(expected.Contact.Y, 481f, 483f);
+        AssertFloatBits(expected.Depth, actual.Depth);
+        AssertVecBits(expected.Normal, actual.Normal);
+        AssertVecBits(expected.Contact, actual.Contact);
+        AssertFloatBits(expected.Contact.X, genericExpected.Contact.X);
+        AssertFloatBits(expected.Contact.Y, genericExpected.Contact.Y);
+        AssertFloatBits(actual.Contact.X, genericActual.Contact.X);
+        AssertFloatBits(actual.Contact.Y, genericActual.Contact.Y);
+    }
+
+    [Fact]
     public void ManifoldFieldsSelectTheSameWorkAndResultsInBothBackends()
     {
         foreach (var a in CreateShapes())

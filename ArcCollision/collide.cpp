@@ -490,6 +490,29 @@ Vec box_vertex(const BoxProxy& box, int index) {
     return box.center + box.axis_x.scale(x) + box.axis_y.scale(y);
 }
 
+// Adapt the dedicated primitive proxies to the same support-feature contact
+// representation used by generic SAT. This prevents a near-perpendicular
+// capsule side from selecting an arbitrary far spine endpoint after Q1.30
+// projection rounding.
+Proxy capsule_contact_proxy(const Vec& a, const Vec& b, int64_t radius) {
+    Proxy proxy;
+    proxy.inline_vertices[0] = a;
+    proxy.inline_vertices[1] = b;
+    proxy.count = 2;
+    proxy.radius = radius;
+    proxy.center = midpoint(a, b);
+    return proxy;
+}
+
+Proxy box_contact_proxy(const BoxProxy& box) {
+    Proxy proxy;
+    for (int i = 0; i < 4; ++i)
+        proxy.inline_vertices[static_cast<size_t>(i)] = box_vertex(box, i);
+    proxy.count = 4;
+    proxy.center = box.center;
+    return proxy;
+}
+
 FxAabb segment_bounds(const Vec& a, const Vec& b, int64_t radius) {
     const int64_t min_x = std::min(a.x, b.x) - radius;
     const int64_t min_y = std::min(a.y, b.y) - radius;
@@ -553,8 +576,8 @@ FxManifold capsule_box(
             return {};
     }
     const Vec contact = compute_contact
-        ? clamp_contact(midpoint(
-            capsule_support(a, b, radius, axis), box_support(box, -axis)),
+        ? clamp_contact(capsule_feature_contact(
+            capsule_contact_proxy(a, b, radius), box_contact_proxy(box), axis),
             segment_bounds(a, b, radius), box_bounds(box))
         : Vec{};
     return {true, axis, depth, contact};
