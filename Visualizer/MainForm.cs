@@ -21,13 +21,19 @@ public sealed class MainForm : Form
     private readonly ShapeLegendGlyph _legendTarget = new();
     private readonly ShapeLegendGlyph _legendEnd = new();
     private readonly ShapeLegendGlyph _legendImpact = new();
+    private bool _restoringCase;
 
     public MainForm()
     {
         Text = "ArcCollision Visualizer";
         BackColor = Color.FromArgb(24, 26, 32);
-        ClientSize = new Size(1100, 720);
-        MinimumSize = new Size(820, 640);
+        StartPosition = FormStartPosition.CenterScreen;
+        Rectangle workingArea = Screen.PrimaryScreen?.WorkingArea
+            ?? new Rectangle(0, 0, 1366, 768);
+        ClientSize = new Size(
+            Math.Min(1280, Math.Max(900, workingArea.Width - 80)),
+            Math.Min(860, Math.Max(720, workingArea.Height - 80)));
+        MinimumSize = new Size(900, 720);
         DoubleBuffered = true;
 
         _canvas = new CanvasControl { Dock = DockStyle.Fill };
@@ -96,6 +102,7 @@ public sealed class MainForm : Form
         _sceneBox.SelectedIndex = 0;
         _sceneBox.SelectedIndexChanged += (_, _) =>
         {
+            if (_restoringCase) return;
             int index = _sceneBox.SelectedIndex;
             int fixedScenes = (int)SceneKind.RayAabb + 1;
             if (index < fixedScenes)
@@ -125,26 +132,31 @@ public sealed class MainForm : Form
             _canvas.Invalidate();
         };
 
+        var saveButton = CreateCaseButton("Save current test…", Point.Empty);
+        saveButton.Click += (_, _) => SaveCurrentTest();
+        var loadButton = CreateCaseButton("Load test…", Point.Empty);
+        loadButton.Click += (_, _) => LoadTest();
+
         _info.ForeColor = Color.FromArgb(200, 220, 235);
         _info.Font = new Font("Consolas", 9f);
         _info.AutoSize = false;
-        _info.Location = new Point(16, 288);
         _info.Size = new Size(304, 300);
 
         var legend = new Panel
         {
-            Location = new Point(16, 180),
-            Size = new Size(304, 96),
+            Size = new Size(304, 1),
             BackColor = Color.Transparent,
         };
-        AddLegendRow(legend, 0, _legendStart,
+        int legendY = 0;
+        legendY += AddLegendRow(legend, legendY, _legendStart,
             Color.FromArgb(90, 200, 255), "A 起点 / start");
-        AddLegendRow(legend, 22, _legendTarget,
+        legendY += AddLegendRow(legend, legendY, _legendTarget,
             Color.FromArgb(255, 170, 90), "B 目标 / target");
-        AddLegendRow(legend, 44, _legendEnd,
+        legendY += AddLegendRow(legend, legendY, _legendEnd,
             Color.FromArgb(55, 115, 145), "A 终点虚影 / end ghost");
-        AddLegendRow(legend, 66, _legendImpact,
+        legendY += AddLegendRow(legend, legendY, _legendImpact,
             Color.FromArgb(255, 90, 110), "A 碰撞位置 / at TOI");
+        legend.Height = legendY;
 
         var help = new Label
         {
@@ -155,12 +167,48 @@ public sealed class MainForm : Form
             ForeColor = Color.Gray,
             Font = new Font("Segoe UI", 8.5f),
             AutoSize = false,
-            Size = new Size(304, 90),
             Dock = DockStyle.Bottom,
         };
 
+        // Font point sizes grow with the system DPI, while this hand-built form
+        // intentionally keeps a compact 340px sidebar. Lay controls out from
+        // their runtime preferred heights so 125-200% DPI cannot make adjacent
+        // controls paint over the lower half of each other's text.
+        const int left = 16;
+        const int contentWidth = 300;
+        int y = 16;
+        title.Location = new Point(left, y);
+        y += title.PreferredSize.Height;
+        subtitle.Location = new Point(left, y);
+        y += subtitle.PreferredSize.Height + 12;
+        sceneLabel.Location = new Point(left, y);
+        y += sceneLabel.PreferredSize.Height + 4;
+        _sceneBox.Location = new Point(left, y);
+        y += _sceneBox.PreferredHeight + 8;
+        _showContacts.Location = new Point(left, y);
+        y += _showContacts.PreferredSize.Height + 8;
+        saveButton.Location = new Point(left, y);
+        saveButton.Size = new Size(contentWidth,
+            saveButton.GetPreferredSize(new Size(contentWidth, 0)).Height);
+        y = saveButton.Bottom + 6;
+        loadButton.Location = new Point(left, y);
+        loadButton.Size = new Size(contentWidth,
+            loadButton.GetPreferredSize(new Size(contentWidth, 0)).Height);
+        y = loadButton.Bottom + 10;
+        legend.Location = new Point(left, y);
+        y = legend.Bottom + 8;
+        _info.Location = new Point(left, y);
+
+        int helpLineHeight = TextRenderer.MeasureText(
+            "Ag国", help.Font, Size.Empty, TextFormatFlags.NoPadding).Height;
+        int helpLineCount = help.Text.Count(character => character == '\n') + 1;
+        int helpHeight = helpLineHeight * helpLineCount + 8;
+        help.Size = new Size(contentWidth, helpHeight);
+
         side.Controls.Add(_info);
         side.Controls.Add(legend);
+        side.Controls.Add(loadButton);
+        side.Controls.Add(saveButton);
         side.Controls.Add(_showContacts);
         side.Controls.Add(_sceneBox);
         side.Controls.Add(sceneLabel);
@@ -182,23 +230,138 @@ public sealed class MainForm : Form
         Controls.Add(side);
     }
 
-    private static void AddLegendRow(
+    private static Button CreateCaseButton(string text, Point location)
+    {
+        var button = new Button
+        {
+            Text = text,
+            Location = location,
+            Size = new Size(300, 32),
+            Padding = new Padding(8, 6, 8, 6),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(45, 50, 61),
+            ForeColor = Color.Gainsboro,
+            UseVisualStyleBackColor = false,
+        };
+        button.FlatAppearance.BorderColor = Color.FromArgb(75, 85, 100);
+        return button;
+    }
+
+    private void SaveCurrentTest()
+    {
+        string sceneName = _sceneBox.SelectedItem?.ToString() ?? "scene";
+        string safeName = string.Concat(sceneName.Select(character =>
+            char.IsLetterOrDigit(character)
+                ? char.ToLowerInvariant(character)
+                : '-')).Trim('-');
+        using var dialog = new SaveFileDialog
+        {
+            Title = "Save ArcCollision visualizer test",
+            Filter = "ArcCollision test (*.arc-case.json)|*.arc-case.json|JSON file (*.json)|*.json",
+            DefaultExt = "arc-case.json",
+            AddExtension = true,
+            FileName = $"{safeName}-{DateTime.Now:yyyyMMdd-HHmmss}.arc-case.json",
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+        try
+        {
+            VisualizerCase testCase = _canvas.CaptureCase(
+                _showContacts.Checked, _info.Text);
+            VisualizerCaseSerializer.Save(dialog.FileName, testCase);
+            MessageBox.Show(this, $"Saved reproducible test case:\n{dialog.FileName}",
+                "ArcCollision Visualizer", MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException
+                                     or ArgumentException)
+        {
+            ShowCaseError("Could not save the test case.", error);
+        }
+    }
+
+    private void LoadTest()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Load ArcCollision visualizer test",
+            Filter = "ArcCollision test (*.arc-case.json)|*.arc-case.json|JSON file (*.json)|*.json|All files (*.*)|*.*",
+            CheckFileExists = true,
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+        try
+        {
+            VisualizerCase testCase = VisualizerCaseSerializer.Load(dialog.FileName);
+            int index = SceneIndex(testCase);
+            _restoringCase = true;
+            try
+            {
+                _sceneBox.SelectedIndex = index;
+                _showContacts.Checked = testCase.ShowContacts;
+            }
+            finally
+            {
+                _restoringCase = false;
+            }
+
+            _canvas.RestoreCase(testCase);
+            _canvas.ShowContacts = testCase.ShowContacts;
+            UpdateLegend(index);
+            _canvas.Invalidate();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException
+                                     or InvalidDataException or System.Text.Json.JsonException
+                                     or ArgumentException)
+        {
+            ShowCaseError("Could not load the test case.", error);
+        }
+    }
+
+    private static int SceneIndex(VisualizerCase testCase)
+    {
+        if (!testCase.GenericSweep)
+        {
+            if (!Enum.IsDefined(testCase.Scene))
+                throw new InvalidDataException($"Unknown scene: {testCase.Scene}.");
+            return (int)testCase.Scene;
+        }
+
+        if (!Enum.IsDefined(testCase.SweepMover)
+            || !Enum.IsDefined(testCase.SweepTarget))
+            throw new InvalidDataException("The saved sweep contains an unknown shape kind.");
+        int fixedScenes = (int)SceneKind.RayAabb + 1;
+        int shapeCount = Enum.GetValues<ShapeKind>().Length;
+        return fixedScenes + (int)testCase.SweepMover * shapeCount
+            + (int)testCase.SweepTarget;
+    }
+
+    private void ShowCaseError(string message, Exception error) =>
+        MessageBox.Show(this, $"{message}\n\n{error.Message}",
+            "ArcCollision Visualizer", MessageBoxButtons.OK, MessageBoxIcon.Error);
+
+    private static int AddLegendRow(
         Control parent, int y, ShapeLegendGlyph glyph, Color color, string text)
     {
-        glyph.Location = new Point(0, y);
         glyph.Size = new Size(20, 20);
         glyph.GlyphColor = color;
         var label = new Label
         {
-            Location = new Point(28, y),
             Text = text,
             ForeColor = Color.Gainsboro,
             Font = new Font("Segoe UI", 9f),
             AutoSize = true,
-            MaximumSize = new Size(278, 0),
+            TextAlign = ContentAlignment.MiddleLeft,
         };
+        int rowHeight = Math.Max(glyph.Height, label.PreferredSize.Height) + 4;
+        glyph.Location = new Point(0, y + (rowHeight - glyph.Height) / 2);
+        label.AutoSize = false;
+        label.Location = new Point(28, y);
+        label.Size = new Size(
+            Math.Max(0, parent.ClientSize.Width - 28), rowHeight);
         parent.Controls.Add(glyph);
         parent.Controls.Add(label);
+        return rowHeight;
     }
 
     private void UpdateLegend(int selectedIndex)
@@ -503,6 +666,76 @@ internal sealed class CanvasControl : Control
         AddVisualShape("B", target, center + new Vec2(95, 0));
         AddMotion("A", center + new Vec2(250, 0));
     }
+
+    public VisualizerCase CaptureCase(bool showContacts, string resultText)
+    {
+        return new VisualizerCase
+        {
+            GenericSweep = _genericSweep,
+            Scene = _scene,
+            SweepMover = _sweepMoverKind,
+            SweepTarget = _sweepTargetKind,
+            ShowContacts = showContacts,
+            CanvasWidth = ClientSize.Width,
+            CanvasHeight = ClientSize.Height,
+            ResultText = resultText,
+            Handles = _handles.Values
+                .OrderBy(handle => handle.Name, StringComparer.Ordinal)
+                .Select(handle => new VisualizerHandleState
+                {
+                    Name = handle.Name,
+                    X = handle.Pos.X,
+                    Y = handle.Pos.Y,
+                })
+                .ToList(),
+        };
+    }
+
+    public void RestoreCase(VisualizerCase testCase)
+    {
+        ArgumentNullException.ThrowIfNull(testCase);
+        if (testCase.GenericSweep)
+            SetSweptScene(testCase.SweepMover, testCase.SweepTarget);
+        else
+            SetScene(testCase.Scene);
+
+        List<VisualizerHandleState> saved = testCase.Handles
+            ?? throw new InvalidDataException("The visualizer test has no handles.");
+        var byName = new Dictionary<string, VisualizerHandleState>(
+            saved.Count, StringComparer.Ordinal);
+        foreach (VisualizerHandleState handle in saved)
+        {
+            if (string.IsNullOrWhiteSpace(handle.Name)
+                || !byName.TryAdd(handle.Name, handle))
+                throw new InvalidDataException(
+                    "The visualizer test contains duplicate or unnamed handles.");
+            if (!float.IsFinite(handle.X) || !float.IsFinite(handle.Y))
+                throw new InvalidDataException(
+                    $"Handle '{handle.Name}' has a non-finite position.");
+        }
+
+        string[] missing = _handles.Keys
+            .Except(byName.Keys, StringComparer.Ordinal).ToArray();
+        string[] unexpected = byName.Keys
+            .Except(_handles.Keys, StringComparer.Ordinal).ToArray();
+        if (missing.Length != 0 || unexpected.Length != 0)
+        {
+            throw new InvalidDataException(
+                "The saved handles do not match this scene. " +
+                $"Missing: {FormatNames(missing)}; " +
+                $"unexpected: {FormatNames(unexpected)}.");
+        }
+
+        foreach ((string name, Handle handle) in _handles)
+        {
+            VisualizerHandleState state = byName[name];
+            handle.Pos = new Vec2(state.X, state.Y);
+        }
+        _dragging = null;
+    }
+
+    private static string FormatNames(string[] names) =>
+        names.Length == 0 ? "none" : string.Join(", ", names);
 
     private void AddCircle(string key, Vec2 center, float radius)
     {
