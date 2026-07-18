@@ -12,9 +12,9 @@ namespace ArcCollision.Tests;
 /// </summary>
 public class ContactIdTests
 {
-    private static ContactPair FindContact(ArcWorld world, List<CandidatePair> pairs)
+    private static ContactPair FindContact(ArcWorld world)
     {
-        world.ComputePairs(pairs);
+        ReadOnlySpan<CandidatePair> pairs = world.ComputePairs();
         foreach (CandidatePair pair in pairs)
             if (world.TryComputeContact(pair, out ContactPair contact))
                 return contact;
@@ -29,14 +29,13 @@ public class ContactIdTests
         ArcHandle a = world.Add(1, new Circle(new Vec2(0f, 0f), 1f));
         _ = world.Add(2, new Circle(new Vec2(1.5f, 0f), 1f)); // overlaps `a`
 
-        var pairs = new List<CandidatePair>();
-        ulong id0 = FindContact(world, pairs).Id;
+        ulong id0 = FindContact(world).Id;
 
         // Nudge `a` each frame; it stays overlapping. The id must not change.
         for (int frame = 1; frame <= 5; frame++)
         {
             world.UpdateTransform(a, new Transform(new Vec2(0.1f * frame, 0f)));
-            Assert.Equal(id0, FindContact(world, pairs).Id);
+            Assert.Equal(id0, FindContact(world).Id);
         }
     }
 
@@ -74,8 +73,7 @@ public class ContactIdTests
         world.Add(1, new Circle(Vec2.Zero, 1f));
         world.Add(2, new Circle(new Vec2(1.5f, 0f), 1f));
 
-        var pairs = new List<CandidatePair>();
-        Assert.Equal(0, FindContact(world, pairs).Frame);
+        Assert.Equal(0, FindContact(world).Frame);
     }
 
     [Fact]
@@ -84,15 +82,13 @@ public class ContactIdTests
         using var world = new ArcWorld { TrackContacts = true };
         ArcHandle a = world.Add(1, new Circle(Vec2.Zero, 1f));
         world.Add(2, new Circle(new Vec2(1.5f, 0f), 1f));
-        var pairs = new List<CandidatePair>();
-
-        Assert.Equal(1, FindContact(world, pairs).Frame); // first collision frame
-        Assert.Equal(2, FindContact(world, pairs).Frame);
-        Assert.Equal(3, FindContact(world, pairs).Frame);
+        Assert.Equal(1, FindContact(world).Frame); // first collision frame
+        Assert.Equal(2, FindContact(world).Frame);
+        Assert.Equal(3, FindContact(world).Frame);
 
         // Separate for a frame: no contact resolved.
         world.UpdateTransform(a, new Transform(new Vec2(100f, 0f)));
-        world.ComputePairs(pairs);
+        ReadOnlySpan<CandidatePair> pairs = world.ComputePairs();
         bool anyContact = false;
         foreach (CandidatePair pair in pairs)
             if (world.TryComputeContact(pair, out _))
@@ -101,7 +97,7 @@ public class ContactIdTests
 
         // Touch again: the frame count starts over at 1 (a new collision).
         world.UpdateTransform(a, Transform.Identity);
-        Assert.Equal(1, FindContact(world, pairs).Frame);
+        Assert.Equal(1, FindContact(world).Frame);
     }
 
     [Fact]

@@ -255,12 +255,11 @@ public class BroadphaseTests
         var world = new ArcWorld(10f);
         world.Add(1, new Aabb(new Vec2(0, 0), new Vec2(2, 2)));
         world.Add(2, new Aabb(new Vec2(50, 50), new Vec2(2, 2)));
-        var results = new List<ArcHandle>();
+        ReadOnlySpan<ArcHandle> results = world.Query(
+            new Aabb(new Vec2(0, 0), new Vec2(3, 3)));
 
-        world.Query(new Aabb(new Vec2(0, 0), new Vec2(3, 3)), results);
-
-        Assert.Contains(results, handle => handle.EntityId == 1);
-        Assert.DoesNotContain(results, handle => handle.EntityId == 2);
+        Assert.Contains(results.ToArray(), handle => handle.EntityId == 1);
+        Assert.DoesNotContain(results.ToArray(), handle => handle.EntityId == 2);
     }
 
     [Fact]
@@ -270,11 +269,10 @@ public class BroadphaseTests
         world.Add(1, new Aabb(new Vec2(0, 0), new Vec2(3, 3)));
         world.Add(2, new Aabb(new Vec2(2, 0), new Vec2(3, 3)));
         world.Add(3, new Aabb(new Vec2(500, 500), new Vec2(3, 3)));
-        var pairs = new List<CandidatePair>();
+        ReadOnlySpan<CandidatePair> pairs = world.ComputePairs();
 
-        world.ComputePairs(pairs);
-
-        CandidatePair pair = Assert.Single(pairs);
+        Assert.Equal(1, pairs.Length);
+        CandidatePair pair = pairs[0];
         Assert.Equal(1, pair.A.EntityId);
         Assert.Equal(2, pair.B.EntityId);
         Assert.True(world.TryComputeContact(pair, out _));
@@ -290,20 +288,19 @@ public class BroadphaseTests
         world.Add(4, new Aabb(new Vec2(100, 100), new Vec2(2, 2)));
         var polygon = new Polygon(new Vec2(-2, -2), new Vec2(4, -1), new Vec2(0, 3));
         ArcHandle polygonHandle = world.Add(5, polygon);
-        var results = new List<ArcHandle>();
-
-        world.Query(new Circle(Vec2.Zero, 5), results);
-        Assert.Contains(results, handle => handle.EntityId == 1);
-        Assert.Contains(results, handle => handle.EntityId == 2);
-        Assert.Contains(results, handle => handle.EntityId == 3);
-        Assert.Contains(results, handle => handle.EntityId == 5);
-        Assert.DoesNotContain(results, handle => handle.EntityId == 4);
+        ReadOnlySpan<ArcHandle> results = world.Query(new Circle(Vec2.Zero, 5));
+        ArcHandle[] resultArray = results.ToArray();
+        Assert.Contains(resultArray, handle => handle.EntityId == 1);
+        Assert.Contains(resultArray, handle => handle.EntityId == 2);
+        Assert.Contains(resultArray, handle => handle.EntityId == 3);
+        Assert.Contains(resultArray, handle => handle.EntityId == 5);
+        Assert.DoesNotContain(resultArray, handle => handle.EntityId == 4);
 
         Polygon moved = polygon.Moved(new Vec2(200, 0));
         world.UpdateTransformDelta(
             polygonHandle, new Transform(new Vec2(200, 0)));
-        world.Query(moved, results);
-        Assert.Contains(results, handle => handle.EntityId == 5);
+        results = world.Query(moved);
+        Assert.Contains(results.ToArray(), handle => handle.EntityId == 5);
     }
 
     [Fact]
@@ -315,12 +312,11 @@ public class BroadphaseTests
         var world = new ArcWorld(4f);
         world.AddStatic(77, polygon);
         world.BuildStatic();
-        var results = new List<ArcHandle>();
-
-        world.Query(polygon, results);
-        Assert.Contains(results, handle => handle.EntityId == 77);
-        world.Query(new Aabb(new Vec2(-10_000, -10_000), new Vec2(1, 1)), results);
-        Assert.DoesNotContain(results, handle => handle.EntityId == 77);
+        ReadOnlySpan<ArcHandle> results = world.Query(polygon);
+        Assert.Contains(results.ToArray(), handle => handle.EntityId == 77);
+        results = world.Query(
+            new Aabb(new Vec2(-10_000, -10_000), new Vec2(1, 1)));
+        Assert.DoesNotContain(results.ToArray(), handle => handle.EntityId == 77);
         Assert.Throws<ArgumentException>(() =>
             new Polygon(new Vec2(0, 0), new Vec2(1, 1)));
     }
@@ -368,7 +364,6 @@ public class BroadphaseTests
         }
         world.BuildStatic();
 
-        var actualHandles = new List<ArcHandle>();
         for (int step = 0; step < 200; step++)
         {
             int id = random.Next(0, 100);
@@ -378,8 +373,9 @@ public class BroadphaseTests
             world.UpdateTransform(handles[id], new Transform(moved.Center));
 
             Aabb query = RandomBox(random).Expanded(150);
-            world.Query(query, actualHandles);
-            var actual = new HashSet<int>(actualHandles.Select(handle => handle.EntityId));
+            ReadOnlySpan<ArcHandle> actualHandles = world.Query(query);
+            var actual = new HashSet<int>();
+            foreach (ArcHandle handle in actualHandles) actual.Add(handle.EntityId);
             var expected = new HashSet<int>();
             foreach (KeyValuePair<int, Aabb> item in dynamic)
                 if (item.Value.Overlaps(query)) expected.Add(item.Key);

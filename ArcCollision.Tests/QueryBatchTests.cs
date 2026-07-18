@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using Xunit;
 
 namespace ArcCollision.Tests;
@@ -49,21 +47,21 @@ public class QueryBatchTests
         using ArcWorld world = BuildPopulatedWorld();
         Shape[] queries = SampleQueries();
 
-        var batch = new List<ArcHandle>();
-        var counts = new List<int>();
-        world.QueryBatch(queries, batch, counts);
+        QueryBatchResult batch = world.QueryBatch(queries);
 
-        Assert.Equal(queries.Length, counts.Count);
-        Assert.Equal(batch.Count, counts.Sum());
+        Assert.Equal(queries.Length, batch.Counts.Length);
+        int total = 0;
+        foreach (int count in batch.Counts) total += count;
+        Assert.Equal(batch.Handles.Length, total);
 
-        var single = new List<ArcHandle>();
         int offset = 0;
         for (int i = 0; i < queries.Length; i++)
         {
-            world.Query(queries[i], single);
-            List<ArcHandle> slice = batch.GetRange(offset, counts[i]);
-            Assert.Equal(single, slice);
-            offset += counts[i];
+            ReadOnlySpan<ArcHandle> single = world.Query(queries[i]);
+            ReadOnlySpan<ArcHandle> slice =
+                batch.Handles.Slice(offset, batch.Counts[i]);
+            Assert.Equal(single.ToArray(), slice.ToArray());
+            offset += batch.Counts[i];
         }
     }
 
@@ -97,21 +95,21 @@ public class QueryBatchTests
         var filter = new CollisionFilter(probe, collidesWith: solid);
         Shape[] queries = SampleQueries();
 
-        var batch = new List<ArcHandle>();
-        var counts = new List<int>();
-        world.QueryBatch(queries, filter, batch, counts);
+        QueryBatchResult batch = world.QueryBatch(queries, filter);
 
-        Assert.Equal(queries.Length, counts.Count);
-        Assert.Equal(batch.Count, counts.Sum());
+        Assert.Equal(queries.Length, batch.Counts.Length);
+        int total = 0;
+        foreach (int count in batch.Counts) total += count;
+        Assert.Equal(batch.Handles.Length, total);
 
-        var single = new List<ArcHandle>();
         int offset = 0;
         for (int i = 0; i < queries.Length; i++)
         {
-            world.Query(queries[i], filter, single);
-            List<ArcHandle> slice = batch.GetRange(offset, counts[i]);
-            Assert.Equal(single, slice);
-            offset += counts[i];
+            ReadOnlySpan<ArcHandle> single = world.Query(queries[i], filter);
+            ReadOnlySpan<ArcHandle> slice =
+                batch.Handles.Slice(offset, batch.Counts[i]);
+            Assert.Equal(single.ToArray(), slice.ToArray());
+            offset += batch.Counts[i];
         }
     }
 
@@ -119,13 +117,10 @@ public class QueryBatchTests
     public void EmptyBatch_ClearsOutputsAndReturnsNothing()
     {
         using ArcWorld world = BuildPopulatedWorld();
-        var batch = new List<ArcHandle> { default };
-        var counts = new List<int> { 99 };
+        QueryBatchResult batch = world.QueryBatch(ReadOnlySpan<Shape>.Empty);
 
-        world.QueryBatch(ReadOnlySpan<Shape>.Empty, batch, counts);
-
-        Assert.Empty(batch);
-        Assert.Empty(counts);
+        Assert.Equal(0, batch.Handles.Length);
+        Assert.Equal(0, batch.Counts.Length);
     }
 
     [Fact]
@@ -134,15 +129,12 @@ public class QueryBatchTests
         using ArcWorld world = BuildPopulatedWorld();
         Shape[] queries = { new Aabb(new Vec2(25, 25), new Vec2(100, 100)) };
 
-        var batch = new List<ArcHandle>();
-        var counts = new List<int>();
-        world.QueryBatch(queries, batch, counts);
+        QueryBatchResult batch = world.QueryBatch(queries);
 
-        var single = new List<ArcHandle>();
-        world.Query(queries[0], single);
+        ReadOnlySpan<ArcHandle> single = world.Query(queries[0]);
 
-        Assert.Single(counts);
-        Assert.Equal(single.Count, counts[0]);
-        Assert.Equal(single, batch);
+        Assert.Equal(1, batch.Counts.Length);
+        Assert.Equal(single.Length, batch.Counts[0]);
+        Assert.Equal(single.ToArray(), batch.Handles.ToArray());
     }
 }

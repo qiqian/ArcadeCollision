@@ -252,15 +252,24 @@ ARC_API arc_status ARC_CALL arc_world_set_filter(arc_world* world, arc_handle ha
 ARC_API arc_status ARC_CALL arc_world_get_enabled(const arc_world* world, arc_handle handle, arc_bool* out_enabled);
 ARC_API arc_status ARC_CALL arc_world_set_enabled(arc_world* world, arc_handle handle, arc_bool enabled);
 ARC_API arc_status ARC_CALL arc_world_shift_origin(arc_world* world, arc_vec2 origin_delta);
+/* Broadphase candidates only; no manifolds are computed. The returned array is
+   borrowed world-owned storage and must be consumed before the next
+   arc_world_compute_pairs, arc_world_clear, arc_world_ensure_capacity, or
+   arc_world_destroy call for that world. Do not retain or free it. */
 ARC_API arc_status ARC_CALL arc_world_compute_pairs(arc_world* world, const arc_candidate_pair** out_data, int32_t* out_count);
+/* Broadphase-only query. The returned array is borrowed thread-local storage and
+   remains valid only until the next arc_world_query call on the same thread.
+   Consume it immediately; do not retain or free it. */
 ARC_API arc_status ARC_CALL arc_world_query(arc_world* world, const arc_shape* query, const arc_collision_filter* filter_or_null, const arc_handle** out_data, int32_t* out_count);
 /* Batched box query: queries[0..query_count) are resolved in one native call.
    Small batches use a scalar loop, large sparse batches use unsorted 4-wide SIMD,
    and dense batches use Morton-coherent SIMD. out_handles receives all results
-   concatenated (borrowed, like arc_world_query); out_counts receives query_count
-   per-query counts (query k's handles are the out_counts[k] entries following the
-   sum of the earlier counts); out_total is the total handle count. query_count==0
-   yields out_handles=NULL, out_counts=NULL, out_total=0. */
+   concatenated; out_counts receives query_count per-query counts (query k's
+   handles are the out_counts[k] entries following the sum of the earlier counts);
+   out_total is the total handle count. Both arrays are borrowed world-owned
+   storage and must be consumed before the next arc_world_query_batch,
+   arc_world_clear, arc_world_ensure_capacity, or arc_world_destroy call for that
+   world. query_count==0 yields out_handles=NULL, out_counts=NULL, out_total=0. */
 ARC_API arc_status ARC_CALL arc_world_query_batch(arc_world* world, const arc_shape* queries, int32_t query_count, const arc_collision_filter* filter_or_null, const arc_handle** out_handles, const int32_t** out_counts, int32_t* out_total);
 /* Selected-contact narrowphase. `fields` has the same behavior as
    arc_shape_vs_shape; unrequested manifold members are zero. */

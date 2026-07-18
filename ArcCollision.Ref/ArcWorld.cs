@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace ArcCollision.Ref;
@@ -130,6 +131,25 @@ public readonly struct WorldCastHit
 }
 
 /// <summary>
+/// Borrowed zero-copy views returned by <see cref="ArcWorld.QueryBatch(ReadOnlySpan{Shape})"/>.
+/// Handles for query <c>i</c> occupy <c>Counts[i]</c> entries after all earlier
+/// queries' entries. Consume both spans before the next QueryBatch, Clear,
+/// EnsureCapacity, or disposal of this world.
+/// </summary>
+public readonly ref struct QueryBatchResult
+{
+    public readonly ReadOnlySpan<ArcHandle> Handles;
+    public readonly ReadOnlySpan<int> Counts;
+
+    internal QueryBatchResult(
+        ReadOnlySpan<ArcHandle> handles, ReadOnlySpan<int> counts)
+    {
+        Handles = handles;
+        Counts = counts;
+    }
+}
+
+/// <summary>
 /// Owns collider shapes and their broadphase proxies. Logic submits shapes on
 /// add/update, receives lightweight handles from broadphase, filters candidates,
 /// then selectively asks the world to compute final manifolds.
@@ -211,6 +231,7 @@ public sealed class ArcWorld : IDisposable
     private readonly uint _worldId;
     private readonly List<int> _candidates;
     private readonly List<(int A, int B)> _broadphasePairs;
+    private readonly List<CandidatePair> _pairValues;
     private Slot[] _slots;
     private int _slotCount;
     private int _freeList = -1;
@@ -248,6 +269,7 @@ public sealed class ArcWorld : IDisposable
         _slots = new Slot[colliderCapacity];
         _candidates = new List<int>(colliderCapacity);
         _broadphasePairs = new List<(int A, int B)>(options.InitialPairCapacity);
+        _pairValues = new List<CandidatePair>(options.InitialPairCapacity);
         _broadphase = new SpatialHash(options.FatMargin);
         _broadphase.EnsureCapacity(colliderCapacity);
         _worldId = AllocateWorldId(this);
@@ -300,6 +322,7 @@ public sealed class ArcWorld : IDisposable
             EnsureGenerationCapacity(colliderCapacity - 1);
         _candidates.EnsureCapacity(colliderCapacity);
         _broadphasePairs.EnsureCapacity(pairCapacity);
+        _pairValues.EnsureCapacity(pairCapacity);
         _broadphase.EnsureCapacity(colliderCapacity);
     }
 
@@ -525,6 +548,7 @@ public sealed class ArcWorld : IDisposable
         _broadphase.Clear();
         _candidates.Clear();
         _broadphasePairs.Clear();
+        _pairValues.Clear();
         _contactFrames.Clear();
         _contactTick = 0;
         _activeCount = _enabledCount = _dynamicCount = 0;
@@ -548,11 +572,16 @@ public sealed class ArcWorld : IDisposable
         }
     }
 
-    /// <summary>Collects broadphase candidates only; no manifolds are computed.</summary>
-    public void ComputePairs(List<CandidatePair> results)
+    /// <summary>
+    /// Returns broadphase candidates in borrowed world-owned storage; no
+    /// manifolds are computed. Consume the span before the next
+    /// <c>ComputePairs</c>, <c>Clear</c>, <c>EnsureCapacity</c>, or disposal of
+    /// this world; do not retain it.
+    /// </summary>
+    public ReadOnlySpan<CandidatePair> ComputePairs()
     {
         ThrowIfDisposed();
-        results.Clear();
+        _pairValues.Clear();
         if (TrackContacts) AdvanceContactFrame();
         _broadphase.ComputePairs(_broadphasePairs);
         for (int i = 0; i < _broadphasePairs.Count; i++)
@@ -562,85 +591,75 @@ public sealed class ArcWorld : IDisposable
                 && _slots[a].Enabled && _slots[b].Enabled
                 && _slots[a].Filter.CanCollideWith(_slots[b].Filter)
                 && _slots[a].Bounds.Overlaps(_slots[b].Bounds))
-                results.Add(CreatePair(a, b));
+                _pairValues.Add(CreatePair(a, b));
         }
-        InPlaceSort.Sort(results, CandidateComparer.Instance);
+        InPlaceSort.Sort(_pairValues, CandidateComparer.Instance);
+        return CollectionsMarshal.AsSpan(_pairValues);
     }
 
-    /// <summary>Returns broadphase handles overlapping a transient query shape.</summary>
-    public void Query(in Shape query, List<ArcHandle> results)
+    [ThreadStatic]
+    private static List<ArcHandle>? s_queryResults;
+
+    /// <summary>
+    /// Returns broadphase handles in borrowed thread-local storage. Consume the
+    /// span before the next <c>Query</c> call on the same thread; do not retain it.
+    /// </summary>
+    public ReadOnlySpan<ArcHandle> Query(in Shape query)
     {
+        List<ArcHandle> results = s_queryResults ??= new List<ArcHandle>();
         QueryCore(query, default, applyFilter: false, results);
+        return CollectionsMarshal.AsSpan(results);
     }
 
     /// <summary>
-    /// Returns broadphase handles overlapping a transient query shape whose
-    /// collision filter mutually accepts the target collider's filter.
+    /// Returns mutually filtered broadphase handles in borrowed thread-local
+    /// storage. Consume the span before the next <c>Query</c> call on the same
+    /// thread; do not retain it.
     /// </summary>
-    public void Query(
-        in Shape query, in CollisionFilter filter, List<ArcHandle> results)
+    public ReadOnlySpan<ArcHandle> Query(
+        in Shape query, in CollisionFilter filter)
     {
+        List<ArcHandle> results = s_queryResults ??= new List<ArcHandle>();
         QueryCore(query, filter, applyFilter: true, results);
+        return CollectionsMarshal.AsSpan(results);
     }
 
     /// <summary>
-    /// Resolves several query shapes together, mirroring the native batch API.
-    /// Results are concatenated into <paramref name="results"/>, and counts[k] is
-    /// the number of handles belonging to queries[k] (its slice follows the sum of
-    /// the earlier counts). This reference backend simply loops over the queries.
+    /// Resolves several query shapes and returns borrowed zero-copy views. Consume
+    /// the result within the lifetime documented by <see cref="QueryBatchResult"/>.
     /// </summary>
-    /// <param name="queries">Query shapes in input order.</param>
-    /// <param name="results">Cleared, then filled with every query's handles concatenated in input order.</param>
-    /// <param name="counts">
-    /// Cleared, then filled with one value per query. <c>counts[i]</c> is the
-    /// number of handles produced by <c>queries[i]</c>; its slice in
-    /// <paramref name="results"/> starts after the sum of
-    /// <c>counts[0]</c> through <c>counts[i - 1]</c> (zero when <c>i == 0</c>).
-    /// </param>
-    public void QueryBatch(
-        ReadOnlySpan<Shape> queries, List<ArcHandle> results, List<int> counts)
-    {
-        QueryBatchCore(queries, default, applyFilter: false, results, counts);
-    }
+    public QueryBatchResult QueryBatch(ReadOnlySpan<Shape> queries) =>
+        QueryBatchCore(queries, default, applyFilter: false);
 
-    /// <summary>Mutually filtered batch query; result grouping matches the unfiltered overload.</summary>
-    /// <param name="queries">Query shapes in input order.</param>
-    /// <param name="filter">Filter applied mutually between every query and candidate collider.</param>
-    /// <param name="results">Cleared, then filled with every query's handles concatenated in input order.</param>
-    /// <param name="counts">
-    /// Cleared, then filled with one value per query. <c>counts[i]</c> is the
-    /// number of handles produced by <c>queries[i]</c>; its slice in
-    /// <paramref name="results"/> starts after the sum of
-    /// <c>counts[0]</c> through <c>counts[i - 1]</c> (zero when <c>i == 0</c>).
-    /// </param>
-    public void QueryBatch(
-        ReadOnlySpan<Shape> queries,
-        in CollisionFilter filter,
-        List<ArcHandle> results,
-        List<int> counts)
-    {
-        QueryBatchCore(queries, filter, applyFilter: true, results, counts);
-    }
+    /// <summary>
+    /// Mutually filtered batch query returning borrowed zero-copy views. Consume
+    /// the result within the lifetime documented by <see cref="QueryBatchResult"/>.
+    /// </summary>
+    public QueryBatchResult QueryBatch(
+        ReadOnlySpan<Shape> queries, in CollisionFilter filter) =>
+        QueryBatchCore(queries, filter, applyFilter: true);
 
+    private readonly List<ArcHandle> _queryBatchResults = new();
+    private readonly List<int> _queryBatchCounts = new();
     private readonly List<ArcHandle> _queryBatchScratch = new();
 
-    private void QueryBatchCore(
+    private QueryBatchResult QueryBatchCore(
         ReadOnlySpan<Shape> queries,
-        in CollisionFilter filter,
-        bool applyFilter,
-        List<ArcHandle> results,
-        List<int> counts)
+        CollisionFilter filter,
+        bool applyFilter)
     {
         ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(counts);
-        results.Clear();
-        counts.Clear();
+        _queryBatchResults.Clear();
+        _queryBatchCounts.Clear();
         for (int i = 0; i < queries.Length; i++)
         {
             QueryCore(queries[i], filter, applyFilter, _queryBatchScratch);
-            results.AddRange(_queryBatchScratch);
-            counts.Add(_queryBatchScratch.Count);
+            _queryBatchResults.AddRange(_queryBatchScratch);
+            _queryBatchCounts.Add(_queryBatchScratch.Count);
         }
+        return new QueryBatchResult(
+            CollectionsMarshal.AsSpan(_queryBatchResults),
+            CollectionsMarshal.AsSpan(_queryBatchCounts));
     }
 
     /// <summary>Returns the earliest unfiltered hit along a translation.</summary>

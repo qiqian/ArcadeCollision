@@ -75,10 +75,6 @@ internal sealed class Game : IDisposable
     // pairs, and an attack Query only ever returns opposing hurtboxes. The fat
     // margin only tunes broadphase re-insertion frequency, not results.
     private readonly ArcWorld _world = new(128f);
-    private readonly List<CandidatePair> _bodyPairs = new();
-    private readonly List<ArcHandle> _hitCandidates = new();
-    private readonly List<ArcHandle> _poisonCandidates = new();
-    private readonly List<int> _poisonCandidateCounts = new();
     private Shape[] _poisonStandingQueries = new Shape[16];
     private Fighter?[] _poisonQueryFighters = new Fighter?[16];
     private Fighter?[] _entitiesById = new Fighter?[32];
@@ -109,10 +105,6 @@ internal sealed class Game : IDisposable
         Fighters.Clear();
         _world.Clear();
         PoisonPools.Clear();
-        _bodyPairs.Clear();
-        _hitCandidates.Clear();
-        _poisonCandidates.Clear();
-        _poisonCandidateCounts.Clear();
         Array.Clear(_poisonQueryFighters);
         DebugManifolds.Clear();
         Array.Clear(_entitiesById);
@@ -1169,11 +1161,11 @@ internal sealed class Game : IDisposable
             }
         }
 
-        _world.ComputePairs(_bodyPairs);
+        ReadOnlySpan<CandidatePair> bodyPairs = _world.ComputePairs();
         Array.Clear(_bodyCorrections, 0, _nextEntityId);
-        for (int pairIndex = 0; pairIndex < _bodyPairs.Count; pairIndex++)
+        for (int pairIndex = 0; pairIndex < bodyPairs.Length; pairIndex++)
         {
-            CandidatePair pair = _bodyPairs[pairIndex];
+            CandidatePair pair = bodyPairs[pairIndex];
             Fighter a = FighterFor(pair.A);
             Fighter b = FighterFor(pair.B);
             if (a.Dead || b.Dead || !a.CombatActive || !b.CombatActive) continue;
@@ -1263,18 +1255,13 @@ internal sealed class Game : IDisposable
         }
 
         if (queryCount == 0)
-        {
-            _poisonCandidates.Clear();
-            _poisonCandidateCounts.Clear();
             return;
-        }
 
         // One native call performs the static-BVH broadphase for every active
         // fighter. Results are flattened; counts maps each contiguous range
         // back to its standing collider.
-        _world.QueryBatch(
-            _poisonStandingQueries.AsSpan(0, queryCount), poisonProbe,
-            _poisonCandidates, _poisonCandidateCounts);
+        QueryBatchResult poisonCandidates = _world.QueryBatch(
+            _poisonStandingQueries.AsSpan(0, queryCount), poisonProbe);
 
         int candidateOffset = 0;
         for (int queryIndex = 0; queryIndex < queryCount; queryIndex++)
@@ -1282,7 +1269,7 @@ internal sealed class Game : IDisposable
             Fighter fighter = _poisonQueryFighters[queryIndex]!;
             _poisonQueryFighters[queryIndex] = null;
             Shape standingCollider = _poisonStandingQueries[queryIndex];
-            int candidateCount = _poisonCandidateCounts[queryIndex];
+            int candidateCount = poisonCandidates.Counts[queryIndex];
             bool touching = false;
             int candidateEnd = candidateOffset + candidateCount;
             for (int candidateIndex = candidateOffset;
@@ -1291,7 +1278,7 @@ internal sealed class Game : IDisposable
             {
                 if (_world.TryComputeContact(
                         standingCollider, poisonProbe,
-                        _poisonCandidates[candidateIndex],
+                        poisonCandidates.Handles[candidateIndex],
                         out _, ManifoldFields.None))
                 {
                     touching = true;
@@ -1335,11 +1322,12 @@ internal sealed class Game : IDisposable
             Shape attackShape = CreateHitShape(attacker, hit, hitCenter);
             CollisionFilter attackFilter =
                 BattlefieldCollisionFilters.Attack(attacker.Faction);
-            _world.Query(attackShape, attackFilter, _hitCandidates);
+            ReadOnlySpan<ArcHandle> hitCandidates =
+                _world.Query(attackShape, attackFilter);
 
-            for (int candidateIndex = 0; candidateIndex < _hitCandidates.Count; candidateIndex++)
+            for (int candidateIndex = 0; candidateIndex < hitCandidates.Length; candidateIndex++)
             {
-                ArcHandle targetHandle = _hitCandidates[candidateIndex];
+                ArcHandle targetHandle = hitCandidates[candidateIndex];
                 if (!_world.TryComputeContact(
                         attackShape, attackFilter, targetHandle, out Manifold manifold))
                     continue;

@@ -115,6 +115,87 @@ public class WrapperParityTests
     }
 
     [Fact]
+    public void WorldQueryReturnsAllocationFreeBorrowedSpans()
+    {
+        using var reference = new Ref.ArcWorld(4f);
+        using var native = new Native.ArcWorld(4f);
+        for (int i = 0; i < 32; i++)
+        {
+            var refShape = new Ref.Circle(new Ref.Vec2(i, 0f), 1f);
+            var nativeShape = new Native.Circle(new Native.Vec2(i, 0f), 1f);
+            reference.Add(i, refShape);
+            native.Add(i, nativeShape);
+        }
+
+        var refQuery = new Ref.Aabb(new Ref.Vec2(16f, 0f), new Ref.Vec2(20f, 2f));
+        var nativeQuery = new Native.Aabb(
+            new Native.Vec2(16f, 0f), new Native.Vec2(20f, 2f));
+        reference.Query(refQuery);
+        native.Query(nativeQuery);
+
+        int checksum = 0;
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 100; i++)
+        {
+            ReadOnlySpan<Ref.ArcHandle> hits = reference.Query(refQuery);
+            foreach (Ref.ArcHandle hit in hits) checksum += hit.EntityId;
+        }
+        long referenceAllocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 100; i++)
+        {
+            ReadOnlySpan<Native.ArcHandle> hits = native.Query(nativeQuery);
+            foreach (Native.ArcHandle hit in hits) checksum += hit.EntityId;
+        }
+        long nativeAllocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.NotEqual(0, checksum);
+        Assert.Equal(0, referenceAllocated);
+        Assert.Equal(0, nativeAllocated);
+    }
+
+    [Fact]
+    public void WorldComputePairsReturnsAllocationFreeBorrowedSpans()
+    {
+        var refOptions = new Ref.ArcWorldOptions(4f, 32, 512);
+        var nativeOptions = new Native.ArcWorldOptions(4f, 32, 512);
+        using var reference = new Ref.ArcWorld(refOptions);
+        using var native = new Native.ArcWorld(nativeOptions);
+        for (int i = 0; i < 32; i++)
+        {
+            reference.Add(i, new Ref.Circle(new Ref.Vec2(i * .5f, 0f), 1f));
+            native.Add(i, new Native.Circle(new Native.Vec2(i * .5f, 0f), 1f));
+        }
+
+        reference.ComputePairs();
+        native.ComputePairs();
+
+        int checksum = 0;
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 100; i++)
+        {
+            ReadOnlySpan<Ref.CandidatePair> pairs = reference.ComputePairs();
+            foreach (Ref.CandidatePair pair in pairs)
+                checksum += pair.A.EntityId + pair.B.EntityId;
+        }
+        long referenceAllocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 100; i++)
+        {
+            ReadOnlySpan<Native.CandidatePair> pairs = native.ComputePairs();
+            foreach (Native.CandidatePair pair in pairs)
+                checksum += pair.A.EntityId + pair.B.EntityId;
+        }
+        long nativeAllocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.NotEqual(0, checksum);
+        Assert.Equal(0, referenceAllocated);
+        Assert.Equal(0, nativeAllocated);
+    }
+
+    [Fact]
     public void PrimitiveNarrowphaseMatchesReference()
     {
         Ref.Circle refCircle = new(new Ref.Vec2(0, 0), 2);
@@ -429,30 +510,39 @@ public class WrapperParityTests
         AssertBatchParity(refSparse, nativeSparse);
         AssertBatchParity(refDense, nativeDense);
 
-        // The dense call has already grown every managed result/conversion
-        // buffer. Repeating it must not allocate a NativeShape[] per call.
-        var results = new List<Native.ArcHandle>(128 * 64);
-        var counts = new List<int>(128);
-        nativeWorld.QueryBatch(nativeDense, results, counts);
+        // The dense calls have grown every result/conversion buffer. Repeating
+        // them returns borrowed spans and must not allocate or copy Lists.
+        int checksum = 0;
         long before = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < 8; i++)
-            nativeWorld.QueryBatch(nativeDense, results, counts);
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        Assert.InRange(allocated, 0, 256);
+        {
+            Ref.QueryBatchResult batch = refWorld.QueryBatch(refDense);
+            checksum += batch.Handles.Length + batch.Counts.Length;
+        }
+        long referenceAllocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 8; i++)
+        {
+            Native.QueryBatchResult batch = nativeWorld.QueryBatch(nativeDense);
+            checksum += batch.Handles.Length + batch.Counts.Length;
+        }
+        long nativeAllocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.NotEqual(0, checksum);
+        Assert.Equal(0, referenceAllocated);
+        Assert.Equal(0, nativeAllocated);
 
         void AssertBatchParity(Ref.Shape[] refQueries, Native.Shape[] nativeQueries)
         {
-            var expectedResults = new List<Ref.ArcHandle>();
-            var expectedCounts = new List<int>();
-            var actualResults = new List<Native.ArcHandle>();
-            var actualCounts = new List<int>();
-            refWorld.QueryBatch(refQueries, expectedResults, expectedCounts);
-            nativeWorld.QueryBatch(nativeQueries, actualResults, actualCounts);
+            Ref.QueryBatchResult expected = refWorld.QueryBatch(refQueries);
+            Native.QueryBatchResult actual = nativeWorld.QueryBatch(nativeQueries);
 
-            Assert.Equal(expectedCounts, actualCounts);
-            Assert.Equal(expectedResults.Count, actualResults.Count);
-            for (int i = 0; i < expectedResults.Count; i++)
-                Assert.Equal(expectedResults[i].EntityId, actualResults[i].EntityId);
+            Assert.Equal(expected.Counts.Length, actual.Counts.Length);
+            for (int i = 0; i < expected.Counts.Length; i++)
+                Assert.Equal(expected.Counts[i], actual.Counts[i]);
+            Assert.Equal(expected.Handles.Length, actual.Handles.Length);
+            for (int i = 0; i < expected.Handles.Length; i++)
+                Assert.Equal(expected.Handles[i].EntityId, actual.Handles[i].EntityId);
         }
     }
 
@@ -512,12 +602,13 @@ public class WrapperParityTests
         Native.ArcHandle first = world.Add(
             1, new Native.Circle(Native.Vec2.Zero, 1f));
         world.Add(2, new Native.Circle(new Native.Vec2(1f, 0f), 1f));
-        var pairs = new List<Native.CandidatePair>();
-        world.ComputePairs(pairs);
+        ReadOnlySpan<Native.CandidatePair> pairs = world.ComputePairs();
+        Assert.Equal(1, pairs.Length);
+        Native.CandidatePair pair = pairs[0];
         Native.ManifoldFields invalid = (Native.ManifoldFields)3;
 
         ArgumentOutOfRangeException pairError = Assert.Throws<ArgumentOutOfRangeException>(
-            () => world.TryComputeContact(pairs[0], out _, invalid));
+            () => world.TryComputeContact(pair, out _, invalid));
         Assert.Equal("fields", pairError.ParamName);
 
         var query = new Native.Shape(new Native.Circle(Native.Vec2.Zero, 1f));
@@ -650,18 +741,22 @@ public class WrapperParityTests
         }
         reference.BuildStatic(); native.BuildStatic();
 
-        var refPairs = new List<Ref.CandidatePair>();
-        var nativePairs = new List<Native.CandidatePair>();
-        reference.ComputePairs(refPairs); native.ComputePairs(nativePairs);
-        Assert.Equal(
-            refPairs.Select(p => (p.A.EntityId, p.B.EntityId)).Order(),
-            nativePairs.Select(p => (p.A.EntityId, p.B.EntityId)).Order());
+        ReadOnlySpan<Ref.CandidatePair> refPairs = reference.ComputePairs();
+        ReadOnlySpan<Native.CandidatePair> nativePairs = native.ComputePairs();
+        Assert.Equal(refPairs.Length, nativePairs.Length);
+        for (int i = 0; i < refPairs.Length; i++)
+        {
+            Assert.Equal(refPairs[i].A.EntityId, nativePairs[i].A.EntityId);
+            Assert.Equal(refPairs[i].B.EntityId, nativePairs[i].B.EntityId);
+        }
 
-        var refQuery = new List<Ref.ArcHandle>();
-        var nativeQuery = new List<Native.ArcHandle>();
-        reference.Query(new Ref.Aabb(Ref.Vec2.Zero, new Ref.Vec2(4, 4)), refQuery);
-        native.Query(new Native.Aabb(Native.Vec2.Zero, new Native.Vec2(4, 4)), nativeQuery);
-        Assert.Equal(refQuery.Select(h => h.EntityId), nativeQuery.Select(h => h.EntityId));
+        ReadOnlySpan<Ref.ArcHandle> refQuery = reference.Query(
+            new Ref.Aabb(Ref.Vec2.Zero, new Ref.Vec2(4, 4)));
+        ReadOnlySpan<Native.ArcHandle> nativeQuery = native.Query(
+            new Native.Aabb(Native.Vec2.Zero, new Native.Vec2(4, 4)));
+        Assert.Equal(refQuery.Length, nativeQuery.Length);
+        for (int i = 0; i < refQuery.Length; i++)
+            Assert.Equal(refQuery[i].EntityId, nativeQuery[i].EntityId);
     }
 
     [Fact]
@@ -729,15 +824,14 @@ public class WrapperParityTests
             {
                 for (int x = -8; x <= 8; x++)
                 {
-                    var refHits = new List<Ref.ArcHandle>();
-                    var nativeHits = new List<Native.ArcHandle>();
                     var refProbe = new Ref.Vec2(
                         refPosition.X + x * .25f, refPosition.Y + y * .25f);
                     var nativeProbe = new Native.Vec2(
                         nativePosition.X + x * .25f, nativePosition.Y + y * .25f);
-                    reference.Query(new Ref.Aabb(refProbe, new Ref.Vec2(Grid, Grid)), refHits);
-                    native.Query(new Native.Aabb(
-                        nativeProbe, new Native.Vec2(Grid, Grid)), nativeHits);
+                    ReadOnlySpan<Ref.ArcHandle> refHits = reference.Query(
+                        new Ref.Aabb(refProbe, new Ref.Vec2(Grid, Grid)));
+                    ReadOnlySpan<Native.ArcHandle> nativeHits = native.Query(
+                        new Native.Aabb(nativeProbe, new Native.Vec2(Grid, Grid)));
                     Assert.Equal(refHits.Contains(refHandle), nativeHits.Contains(nativeHandle));
                 }
             }
