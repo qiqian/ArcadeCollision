@@ -35,7 +35,7 @@ internal static class Program
         Console.WriteLine($"Runtime: {RuntimeInformation.FrameworkDescription}");
         Console.WriteLine($"OS/architecture: {RuntimeInformation.OSDescription} / {RuntimeInformation.ProcessArchitecture}");
         Console.WriteLine($"Execution: single calling thread (managed id {threadId}), no Task/Parallel usage");
-        Console.WriteLine(ApplyCpuAffinity(options.CpuIndex));
+        Console.WriteLine(ApplyThreadAffinity(options.CpuIndex));
         Console.WriteLine($"Seed: {options.Seed} (0x{options.Seed:X})");
         Console.WriteLine($"Scene: static={options.StaticCount}, dynamic={options.DynamicCount}, "
             + $"frames={options.Frames}, fat-margin={options.FatMargin}");
@@ -85,23 +85,54 @@ internal static class Program
         GC.KeepAlive(wrapperScene);
     }
 
-    // Pins the whole process to one logical CPU and raises scheduling priority,
-    // so every sample runs on the same core with the same cache and boost state
-    // instead of drifting as the OS migrates the thread. Returns the header line
-    // describing what was applied.
-    private static string ApplyCpuAffinity(int cpuIndex)
+    // Pin only the calling OS thread. Process.ProcessorAffinity would also trap
+    // the GC, finalizer, and tiered-JIT workers on the measured core, making the
+    // managed result depend on contention created by the benchmark itself.
+    private static string ApplyThreadAffinity(int cpuIndex)
     {
         if (cpuIndex < 0)
-            return "CPU affinity: not pinned (--cpu -1)";
-        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux())
-            return "CPU affinity: unsupported on this OS, not pinned";
-        using Process process = Process.GetCurrentProcess();
-        process.ProcessorAffinity = (nint)(1L << cpuIndex);
-        process.PriorityClass = ProcessPriorityClass.High;
+            return "Thread affinity: not pinned (--cpu -1)";
+
+        if (OperatingSystem.IsWindows())
+        {
+            nuint mask = (nuint)(1UL << cpuIndex);
+            if (SetThreadAffinityMask(GetCurrentThread(), mask) == 0)
+                throw new InvalidOperationException(
+                    $"SetThreadAffinityMask failed with Win32 error "
+                    + $"{Marshal.GetLastPInvokeError()}.");
+        }
+        else if (OperatingSystem.IsLinux())
+        {
+            // Linux cpu_set_t is 1024 bits on the supported libc targets. The
+            // CLI currently accepts native-word indexes, while the full mask
+            // size remains valid on hosts with more than 64 logical CPUs.
+            byte[] mask = new byte[128];
+            mask[cpuIndex >> 3] = (byte)(1 << (cpuIndex & 7));
+            if (SchedSetAffinity(0, (nuint)mask.Length, mask) != 0)
+                throw new InvalidOperationException(
+                    $"sched_setaffinity failed with errno "
+                    + $"{Marshal.GetLastPInvokeError()}.");
+        }
+        else
+        {
+            return "Thread affinity: unsupported on this OS, not pinned";
+        }
+
         Thread.CurrentThread.Priority = ThreadPriority.Highest;
-        return $"CPU affinity: pinned to logical CPU {cpuIndex} "
-            + $"(mask 0x{1L << cpuIndex:X}), high process priority";
+        return $"Thread affinity: benchmark thread pinned to logical CPU "
+            + $"{cpuIndex} (mask 0x{1UL << cpuIndex:X}), highest thread priority; "
+            + "GC/JIT threads unpinned at their default priority";
     }
+
+    [DllImport("kernel32.dll")]
+    private static extern nint GetCurrentThread();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern nuint SetThreadAffinityMask(nint thread, nuint mask);
+
+    [DllImport("libc", EntryPoint = "sched_setaffinity", SetLastError = true)]
+    private static extern int SchedSetAffinity(
+        int pid, nuint cpuSetSize, [In] byte[] mask);
 
     private static void CollectBeforeTrial()
     {

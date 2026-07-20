@@ -89,9 +89,9 @@ internal sealed record BenchmarkOptions(
             throw new ArgumentOutOfRangeException("--sample-ms");
         if (!float.IsFinite(options.FatMargin) || options.FatMargin < 0)
             throw new ArgumentOutOfRangeException("--fat-margin");
-        // A single-CPU affinity mask is one bit of a 64-bit word; -1 disables.
+        // A single-CPU affinity mask is one bit of a native word; -1 disables.
         if (options.CpuIndex < -1
-            || options.CpuIndex >= Math.Min(64, Environment.ProcessorCount))
+            || options.CpuIndex >= Math.Min(IntPtr.Size * 8, Environment.ProcessorCount))
             throw new ArgumentOutOfRangeException("--cpu");
         const int maxColliderCount = 1 << 20;
         if ((long)options.StaticCount + options.DynamicCount > maxColliderCount)

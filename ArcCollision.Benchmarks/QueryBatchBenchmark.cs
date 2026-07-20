@@ -11,11 +11,12 @@ namespace ArcCollision.Benchmarks;
 //                    N P/Invokes, no packet).
 //   * Native-batch - native backend, arc_world_query_batch: one P/Invoke with an
 //                    adaptive scalar/direct-packet/Morton-packet native path.
-// So Native-batch/Native-loop isolates the batch/traversal win inside the native
-// backend, while Native-batch/Ref-loop is the end-to-end speedup a managed caller
-// sees. Colliders are held fixed; only the queries are timed. Sparse queries are
-// scattered uniformly (mostly empty -> traversal-bound); dense queries are centred
-// on real colliders (many hits -> result-bound and spatially coherent).
+// Nat/Ref compares the scalar native path with Ref-loop, while Batch/Ref compares
+// the one-call batch path with Ref-loop. Both ratios are speedups (Ref time divided
+// by native time), so values above 1 mean the native path is faster. Colliders are
+// held fixed; only the queries are timed. Sparse queries are scattered uniformly
+// (mostly empty -> traversal-bound); dense queries are centred on real colliders
+// (many hits -> result-bound and spatially coherent).
 internal static class QueryBatchBenchmark
 {
     private const float SparseHalfExtent = 4f;
@@ -39,7 +40,8 @@ internal static class QueryBatchBenchmark
         Console.WriteLine($"World: static={options.StaticCount}, dynamic={options.DynamicCount} "
             + "(colliders held fixed; only the query is timed)");
         Console.WriteLine("Sparse=scattered; Dense=per-query collider; Coherent=4-query bundles share a collider");
-        Console.WriteLine("Mode      N        Ref-loop  Nat-loop  Nat-batch  batch/loop  batch/ref  Hits/query   Alloc B/query R/L/B");
+        Console.WriteLine("Ratios are speedups (Ref time / native time); >1x means native is faster.");
+        Console.WriteLine("Mode      N        Ref-loop  Nat-loop  Nat-batch    Nat/Ref  Batch/Ref  Hits/query   Alloc B/query R/L/B");
 
         int[] centers = ColliderCenters(scenario);
         using Ref.ArcWorld refWorld = BuildRefWorld(refScene, options);
@@ -98,13 +100,39 @@ internal static class QueryBatchBenchmark
             () => wrapperWorld.QueryBatch(wrapperQueries, wrapperResults, wrapperCounts));
 
         double hitsPerQuery = (double)totalHits / n;
-        Console.WriteLine($"{mode,-8}  {n,-7}  "
-            + $"{refLoop.MedianMs,7:0.000}  {nativeLoop.MedianMs,8:0.000}  {nativeBatch.MedianMs,9:0.000}  "
-            + $"{nativeLoop.MedianMs / nativeBatch.MedianMs,9:0.00}x  "
-            + $"{refLoop.MedianMs / nativeBatch.MedianMs,8:0.00}x  {hitsPerQuery,10:0.00}  "
+        double nativeVsRef = refLoop.MedianMs / nativeLoop.MedianMs;
+        double batchVsRef = refLoop.MedianMs / nativeBatch.MedianMs;
+        Console.Write($"{mode,-8}  {n,-7}  "
+            + $"{refLoop.MedianMs,7:0.000}  {nativeLoop.MedianMs,8:0.000}  {nativeBatch.MedianMs,9:0.000}  ");
+        WriteSpeedup($"{nativeVsRef,9:0.00}x", nativeVsRef);
+        Console.Write("  ");
+        WriteSpeedup($"{batchVsRef,8:0.00}x", batchVsRef);
+        Console.WriteLine($"  {hitsPerQuery,10:0.00}  "
             + $"{refLoop.MedianAllocatedBytes / n,5:0.0}/"
             + $"{nativeLoop.MedianAllocatedBytes / n,5:0.0}/"
             + $"{nativeBatch.MedianAllocatedBytes / n,5:0.0}");
+    }
+
+    private static void WriteSpeedup(string text, double speedup)
+    {
+        if (Console.IsOutputRedirected)
+        {
+            Console.Write(text);
+            return;
+        }
+
+        ConsoleColor original = Console.ForegroundColor;
+        try
+        {
+            Console.ForegroundColor = speedup > 1d
+                ? ConsoleColor.Green
+                : ConsoleColor.Red;
+            Console.Write(text);
+        }
+        finally
+        {
+            Console.ForegroundColor = original;
+        }
     }
 
     private static TimingSummary StableTiming(
@@ -115,8 +143,8 @@ internal static class QueryBatchBenchmark
         // A single small native batch can finish in tens of microseconds. Timing
         // it once mostly measures scheduler and timer noise, so calibrate an inner
         // repetition count that keeps every measured sample long enough to span
-        // many OS timer quanta. Calibration is untimed and also finishes tiered
-        // JIT/PInvoke warmup before samples are collected.
+        // many OS timer quanta. Calibration is untimed and also supplies hot
+        // calls for tiered JIT/P/Invoke warmup before samples are collected.
         int repetitions = 1;
         while (repetitions < 1 << 20)
         {
