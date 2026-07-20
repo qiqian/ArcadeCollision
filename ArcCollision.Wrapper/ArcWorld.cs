@@ -122,6 +122,12 @@ public sealed unsafe class ArcWorld : IDisposable
         if ((uint)entityId > ArcHandle.MaxEntityId)
             throw new ArgumentOutOfRangeException(nameof(entityId), entityId,
                 $"Entity id must be between 0 and {ArcHandle.MaxEntityId}.");
+        // Validate managed-side before the native call so invalid shape values
+        // throw ArgumentOutOfRangeException exactly like the Ref backend, and a
+        // failed Add never reaches the native world (validate-before-allocate:
+        // no handle slot is consumed). Add is a cold path, so unlike the query
+        // routes this duplicate of the native check costs nothing that matters.
+        FixedValidation.Shape(shape);
         NativeShape native = shape.ToNative();
         NativeMethods.Check(NativeMethods.WorldAdd(Handle, entityId, native, filter, isStatic ? 1 : 0, enabled ? 1 : 0, out ArcHandle result), nameof(entityId));
         GC.KeepAlive(shape.PolygonObject);
