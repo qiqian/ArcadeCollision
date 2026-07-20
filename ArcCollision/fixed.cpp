@@ -117,18 +117,22 @@ bool valid_vec(const arc_vec2& value) {
 
 // Quantize a world-space float to 24.8 with round-half-to-even (banker's
 // rounding), matching C# MathF.Round so both backends land on the same grid.
+// MathF.Round JITs to the hardware round-to-nearest-even instruction, so use
+// the same instruction (SSE4.1 roundss / ARM64 frintn) rather than a branchy
+// floor-and-adjust sequence: bit-identical results, and this conversion sits
+// on the per-query hot path of arc_world_query_batch.
 int64_t from_float(float value) {
     if (!valid_scalar(value))
         throw std::out_of_range("Fixed-point input must be finite and within range.");
     const float scaled = value * 256.0f;
-    const bool negative = scaled < 0;
-    const float absolute = std::fabs(scaled);
-    const int64_t whole = static_cast<int64_t>(std::floor(absolute));
-    const float fraction = absolute - static_cast<float>(whole);
-    int64_t rounded = whole;
-    if (fraction > 0.5f || (fraction == 0.5f && (whole & 1) != 0))
-        ++rounded;
-    return negative ? -rounded : rounded;
+#if defined(ARC_SIMD128_SSE42)
+    const __m128 lane = _mm_set_ss(scaled);
+    const float rounded = _mm_cvtss_f32(
+        _mm_round_ss(lane, lane, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
+#else
+    const float rounded = vrndns_f32(scaled);
+#endif
+    return static_cast<int64_t>(rounded);
 }
 
 float to_float(int64_t value) { return value / static_cast<float>(FxOne); }

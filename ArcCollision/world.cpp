@@ -644,14 +644,31 @@ int sampled_query_matches(
 
 // Morton sorting and four-lane traversal pay off when queries have enough local
 // tree work for spatially adjacent packets to share. Probe a fixed, evenly spaced
-// sample first: small batches stay scalar, large empty/light batches use packets
-// in their original order, and dense batches retain the Morton-sorted SIMD path.
+// sample first: small batches stay scalar, and dense batches retain the
+// Morton-sorted SIMD path. Light batches only use input-order packets when their
+// groups of four are spatially coherent: scattered lanes share almost no nodes,
+// so the 4-wide union traversal costs measurably more than four scalar descents.
 // This changes only traversal order; published per-query handles remain identical.
 enum class QueryBatchPath {
     Scalar,
     DirectPacket,
     MortonPacket,
 };
+
+// True when one packet's four queries would descend a mostly shared subtree:
+// their united box is within a few member sizes, so per-node SIMD tests replace
+// up to four scalar tests instead of adding union-traversal work. Scattered
+// groups unite to world-scale boxes (hundreds of member sizes), so the
+// threshold only has to separate "bundled" from "unrelated".
+bool coherent_packet_group(const arc::Bounds* group) {
+    arc::Bounds united = group[0];
+    int64_t largest = group[0].perimeter();
+    for (int lane = 1; lane < 4; ++lane) {
+        united = arc::Bounds::unite(united, group[lane]);
+        largest = std::max(largest, group[lane].perimeter());
+    }
+    return united.perimeter() <= 4 * largest;
+}
 
 QueryBatchPath select_query_batch_path(
     arc_world* world, const std::vector<arc::Bounds>& bounds,
@@ -667,9 +684,17 @@ QueryBatchPath select_query_batch_path(
         const size_t index = sample * bounds.size() / samples;
         matches += sampled_query_matches(world, bounds[index], filter);
     }
-    return matches >= static_cast<int>(samples) * min_average_matches
-        ? QueryBatchPath::MortonPacket
-        : QueryBatchPath::DirectPacket;
+    if (matches >= static_cast<int>(samples) * min_average_matches)
+        return QueryBatchPath::MortonPacket;
+
+    const size_t groups = bounds.size() / 4;
+    size_t coherent = 0;
+    for (size_t sample = 0; sample < samples; ++sample)
+        if (coherent_packet_group(&bounds[(sample * groups / samples) * 4]))
+            ++coherent;
+    return coherent * 2 >= samples
+        ? QueryBatchPath::DirectPacket
+        : QueryBatchPath::Scalar;
 }
 
 void append_casts(
@@ -1223,9 +1248,10 @@ arc_status ARC_CALL arc_world_query(
     }
 }
 
-// Adaptive batch query. Small batches use a scalar native loop; large sparse
-// batches use input-order packets without sorting/scatter. Both avoid Morton
-// setup while crossing the C ABI only once. Dense queries use Morton-coherent SIMD.
+// Adaptive batch query. Small and scattered-light batches use a scalar native
+// loop; bundled-light batches use input-order packets without sorting/scatter.
+// Both avoid Morton setup while crossing the C ABI only once. Dense queries use
+// Morton-coherent SIMD.
 // Both paths filter and sort each query exactly like arc_world_query. Results are
 // concatenated into one world-owned handle buffer; out_counts[k] is the number of
 // handles belonging to query k (its slice starts after the previous queries'

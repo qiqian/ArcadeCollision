@@ -29,8 +29,11 @@ per trial, and every query row reports managed bytes allocated per query for the
 Ref-loop, Native-loop, and Native-batch paths.
 
 Native-batch selects among a small scalar loop, input-order SIMD packets for
-sparse work, and Morton-sorted SIMD packets for dense work. The choice is based
-on a fixed deterministic candidate-density probe and never changes result order.
+light batches whose groups of four are spatially bundled, and Morton-sorted
+SIMD packets for dense work. Scattered light batches stay scalar: unrelated
+packet lanes share no subtree, so the 4-wide union traversal costs more than
+four scalar descents. The choice is based on a fixed deterministic
+candidate-density and group-coherence probe and never changes result order.
 
 Build the native Release library first, then run:
 
