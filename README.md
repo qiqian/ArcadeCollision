@@ -6,6 +6,24 @@ ArcCollision is a **deterministic 2D collision-query library** for arcade action
 
 Its defining feature is lockstep-friendly collision geometry: the C# reference backend and the C++ native backend share an explicitly quantized integer model and are designed and regression-tested for bit-level behavioral parity. ArcCollision provides shape tests, manifolds, continuous casts, spatial queries, and a collision world; it is not a rigid-body dynamics or constraint solver.
 
+## Contents
+
+- [1. Design](#1-design)
+  - [Two implementations, one behavior contract](#two-implementations-one-behavior-contract)
+  - [Precision contract](#precision-contract)
+  - [Lockstep and frame synchronization](#lockstep-and-frame-synchronization)
+  - [Collision pipeline](#collision-pipeline)
+  - [Native implementation and platforms](#native-implementation-and-platforms)
+- [2. Performance](#2-performance)
+  - [QueryBatch](#querybatch)
+- [3. API Usage](#3-api-usage)
+  - [Select a C# backend](#select-a-c-backend)
+  - [Create a World, configure layers, and compute contacts](#create-a-world-configure-layers-and-compute-contacts)
+  - [Query, QueryBatch, and exact overlap](#query-querybatch-and-exact-overlap)
+  - [ShapeCast](#shapecast)
+  - [C ABI](#c-abi)
+  - [Build and test](#build-and-test)
+
 ## 1. Design
 
 ### Two implementations, one behavior contract
