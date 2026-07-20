@@ -10,10 +10,15 @@ internal sealed record BenchmarkOptions(
     int Iterations,
     int WarmupIterations,
     int MinimumSampleMilliseconds,
-    float FatMargin)
+    float FatMargin,
+    int CpuIndex)
 {
     public const ulong DefaultSeed = 0xA11CE5EEDUL;
 
+    // Default pin target: logical CPU 2 (the first SMT thread of the second
+    // physical core on typical topologies). Core 0 services most interrupts and
+    // DPCs, so pinning there would reintroduce exactly the jitter pinning is
+    // meant to remove. --cpu -1 disables pinning.
     public static BenchmarkOptions Defaults => new(
         DefaultSeed,
         StaticCount: 1500,
@@ -22,7 +27,8 @@ internal sealed record BenchmarkOptions(
         Iterations: 9,
         WarmupIterations: 3,
         MinimumSampleMilliseconds: 200,
-        FatMargin: 4f);
+        FatMargin: 4f,
+        CpuIndex: Math.Min(2, Environment.ProcessorCount - 1));
 
     public static BenchmarkOptions Parse(string[] args)
     {
@@ -69,6 +75,7 @@ internal sealed record BenchmarkOptions(
                 {
                     FatMargin = float.Parse(Value(), NumberStyles.Float, CultureInfo.InvariantCulture),
                 },
+                "--cpu" => options with { CpuIndex = ParseInt(Value(), argument) },
                 _ => throw new ArgumentException($"Unknown argument: {argument}"),
             };
         }
@@ -82,6 +89,10 @@ internal sealed record BenchmarkOptions(
             throw new ArgumentOutOfRangeException("--sample-ms");
         if (!float.IsFinite(options.FatMargin) || options.FatMargin < 0)
             throw new ArgumentOutOfRangeException("--fat-margin");
+        // A single-CPU affinity mask is one bit of a 64-bit word; -1 disables.
+        if (options.CpuIndex < -1
+            || options.CpuIndex >= Math.Min(64, Environment.ProcessorCount))
+            throw new ArgumentOutOfRangeException("--cpu");
         const int maxColliderCount = 1 << 20;
         if ((long)options.StaticCount + options.DynamicCount > maxColliderCount)
             throw new ArgumentOutOfRangeException(
@@ -92,9 +103,9 @@ internal sealed record BenchmarkOptions(
     public string ReproductionArguments => string.Format(
         CultureInfo.InvariantCulture,
         "--seed 0x{0:X} --static {1} --dynamic {2} --frames {3} "
-        + "--iterations {4} --warmup {5} --sample-ms {6} --fat-margin {7}",
+        + "--iterations {4} --warmup {5} --sample-ms {6} --fat-margin {7} --cpu {8}",
         Seed, StaticCount, DynamicCount, Frames,
-        Iterations, WarmupIterations, MinimumSampleMilliseconds, FatMargin);
+        Iterations, WarmupIterations, MinimumSampleMilliseconds, FatMargin, CpuIndex);
 
     public static void PrintHelp()
     {
@@ -109,6 +120,7 @@ internal sealed record BenchmarkOptions(
         Console.WriteLine("  --warmup <count>       Untimed warmup trials per backend");
         Console.WriteLine("  --sample-ms <ms>       Minimum duration of each query timing sample");
         Console.WriteLine("  --fat-margin <value>   Dynamic-tree fat margin");
+        Console.WriteLine("  --cpu <index>          Logical CPU to pin the benchmark to (-1 disables)");
         Console.WriteLine("  --quick                Small smoke benchmark preset");
     }
 

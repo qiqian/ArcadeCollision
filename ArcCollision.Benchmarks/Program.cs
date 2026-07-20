@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace ArcCollision.Benchmarks;
@@ -34,6 +35,7 @@ internal static class Program
         Console.WriteLine($"Runtime: {RuntimeInformation.FrameworkDescription}");
         Console.WriteLine($"OS/architecture: {RuntimeInformation.OSDescription} / {RuntimeInformation.ProcessArchitecture}");
         Console.WriteLine($"Execution: single calling thread (managed id {threadId}), no Task/Parallel usage");
+        Console.WriteLine(ApplyCpuAffinity(options.CpuIndex));
         Console.WriteLine($"Seed: {options.Seed} (0x{options.Seed:X})");
         Console.WriteLine($"Scene: static={options.StaticCount}, dynamic={options.DynamicCount}, "
             + $"frames={options.Frames}, fat-margin={options.FatMargin}");
@@ -81,6 +83,24 @@ internal static class Program
         QueryBatchBenchmark.Run(scenario, refScene, wrapperScene, options, threadId);
         GC.KeepAlive(refScene);
         GC.KeepAlive(wrapperScene);
+    }
+
+    // Pins the whole process to one logical CPU and raises scheduling priority,
+    // so every sample runs on the same core with the same cache and boost state
+    // instead of drifting as the OS migrates the thread. Returns the header line
+    // describing what was applied.
+    private static string ApplyCpuAffinity(int cpuIndex)
+    {
+        if (cpuIndex < 0)
+            return "CPU affinity: not pinned (--cpu -1)";
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux())
+            return "CPU affinity: unsupported on this OS, not pinned";
+        using Process process = Process.GetCurrentProcess();
+        process.ProcessorAffinity = (nint)(1L << cpuIndex);
+        process.PriorityClass = ProcessPriorityClass.High;
+        Thread.CurrentThread.Priority = ThreadPriority.Highest;
+        return $"CPU affinity: pinned to logical CPU {cpuIndex} "
+            + $"(mask 0x{1L << cpuIndex:X}), high process priority";
     }
 
     private static void CollectBeforeTrial()

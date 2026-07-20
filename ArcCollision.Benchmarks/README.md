@@ -4,6 +4,12 @@ This console benchmark compares `ArcCollision.Ref` and `ArcCollision.Wrapper`
 on the same mixed static/dynamic world. It runs entirely on the calling thread:
 there is no `Task`, `Parallel`, worker pool, or backend concurrency.
 
+To keep results comparable across runs, the process pins itself to one logical
+CPU (default: logical CPU 2, avoiding interrupt-heavy core 0) and raises its
+scheduling priority, so samples do not drift as the OS migrates the thread
+between cores with different cache and boost states. Use `--cpu <index>` to
+choose the core and `--cpu -1` to disable pinning.
+
 The scene generator uses a repository-owned XorShift64* implementation and
 creates every coordinate directly on the 24.8 fixed grid. The seed, static
 shapes, dynamic initial shapes, and every per-frame dynamic update are therefore
