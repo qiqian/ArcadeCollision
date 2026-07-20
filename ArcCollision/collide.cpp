@@ -5,6 +5,7 @@
 // first shape toward the second. Mirrors ArcCollision.Ref/Collide.cs.
 #include "internal.h"
 
+#include <cassert>
 #include <cmath>
 #include <stdexcept>
 
@@ -170,20 +171,31 @@ Vec clamp_contact(Vec contact, const FxAabb& a, const FxAabb& b) {
             std::clamp(contact.y, min_y, max_y)};
 }
 
-// Rotated polygon proxies re-rotate every vertex on each access, and SAT touches
-// every vertex once per candidate axis. Materialize the rotation (and triangle
-// index indirection) once into a thread-local scratch and drop the transform
-// flag: the identical scale/add sequence runs once instead of vertices x axes
-// times, so the flattened values are bit-for-bit the on-the-fly ones.
+// Rotated polygon proxies re-rotate every vertex on each access, while concave
+// pieces repeat an index lookup for every access. Materialize either form once
+// into thread-local scratch and drop both transform/index indirections. The
+// transformed path keeps the identical scale/add sequence, so flattened values
+// remain bit-for-bit equal to the on-the-fly vertices.
 thread_local std::vector<Vec> flatten_scratch_a;
 thread_local std::vector<Vec> flatten_scratch_b;
 
 const Proxy& flatten_proxy(
     const Proxy& proxy, std::vector<Vec>& scratch, Proxy& storage) {
-    if (!proxy.transformed) return proxy;
+    if (!proxy.transformed && proxy.borrowed_indices == nullptr) return proxy;
     scratch.resize(static_cast<size_t>(proxy.count));
-    for (int i = 0; i < proxy.count; ++i)
-        scratch[static_cast<size_t>(i)] = proxy.vertex(i) - proxy.offset;
+    if (proxy.transformed) {
+        for (int i = 0; i < proxy.count; ++i)
+            scratch[static_cast<size_t>(i)] = proxy.vertex(i) - proxy.offset;
+    } else {
+        // The untransformed indexed path used to load this exact source vertex
+        // and add offset in Proxy::vertex. Keep the offset in storage so SAT
+        // performs that same final addition in the same place as before.
+        for (int i = 0; i < proxy.count; ++i) {
+            const int source = proxy.borrowed_indices[
+                proxy.borrowed_index_offset + i];
+            scratch[static_cast<size_t>(i)] = proxy.borrowed_vertices[source];
+        }
+    }
     storage = proxy;
     storage.borrowed_vertices = scratch.data();
     storage.borrowed_indices = nullptr;
@@ -407,6 +419,14 @@ struct BoxProxy {
     int64_t half_y;
 };
 
+// Values shared by corner SAT, contact construction, and contact clamping. Axis
+// scaling uses symmetric fixed rounding, so negating these positive half-axis
+// vectors is bit-identical to scaling the same axis by a negative half extent.
+struct BoxGeometry {
+    std::array<Vec, 4> vertices;
+    FxAabb bounds;
+};
+
 BoxProxy make_box(const arc_aabb& box) {
     return {Vec::from(box.center), Axis::unit_x(), Axis::unit_y(),
             std::abs(from_float(box.half_extents.x)),
@@ -418,6 +438,28 @@ BoxProxy make_box(const arc_obb& box) {
     return {Vec::from(box.center), axis_x, axis_x.perpendicular(),
             std::abs(from_float(box.half_extents.x)),
             std::abs(from_float(box.half_extents.y))};
+}
+
+BoxGeometry make_box_geometry(const BoxProxy& box) {
+    const Vec x = box.axis_x.scale(box.half_x);
+    const Vec y = box.axis_y.scale(box.half_y);
+    return {{box.center - x - y, box.center + x - y,
+             box.center + x + y, box.center - x + y},
+            {box.center,
+             {std::abs(x.x) + std::abs(y.x),
+              std::abs(x.y) + std::abs(y.y)}}};
+}
+
+// The box/box and box-overlap SAT paths cache per-axis dot products and rely on
+// the box basis being orthonormal: both make_box overloads set axis_y to exactly
+// axis_x.perpendicular() ((-y, x)), so axis_x . axis_y is bit-exactly zero (those
+// cached cross terms are hard-coded 0) and axis_x . axis_x equals axis_y . axis_y
+// (one cached self dot serves both axes). If a future BoxProxy ever set axis_y
+// independently -- e.g. a separate from_angle(angle + quarter) -- those cached
+// zeros and shared self dot would silently diverge. Lock the invariant in debug.
+void assert_orthonormal_box_basis([[maybe_unused]] const BoxProxy& box) {
+    assert(box.axis_x.dot(box.axis_y) == 0
+        && box.axis_x.dot(box.axis_x) == box.axis_y.dot(box.axis_y));
 }
 
 // Project a box onto an axis directly (no vertex loop): centre projection +/- the
@@ -432,6 +474,18 @@ void project_box(
     max = center + radius;
 }
 
+// Same projection arithmetic as project_box, with axis/box-axis dots supplied
+// by the box/box SAT cache. Only duplicate symmetric dot products are removed.
+void project_box_cached(
+    const BoxProxy& box, const Axis& axis, int64_t axis_x_dot,
+    int64_t axis_y_dot, int64_t& min, int64_t& max) {
+    const int64_t center = axis.dot(box.center);
+    const int64_t radius = std::abs(axis_x_dot) * box.half_x
+        + std::abs(axis_y_dot) * box.half_y;
+    min = center - radius;
+    max = center + radius;
+}
+
 Vec box_support(const BoxProxy& box, const Axis& direction) {
     Vec result = box.center;
     result += box.axis_x.scale(
@@ -441,28 +495,22 @@ Vec box_support(const BoxProxy& box, const Axis& direction) {
     return result;
 }
 
-FxAabb box_bounds(const BoxProxy& box) {
-    const Vec x = box.axis_x.scale(box.half_x);
-    const Vec y = box.axis_y.scale(box.half_y);
-    return {box.center,
-            {std::abs(x.x) + std::abs(y.x),
-             std::abs(x.y) + std::abs(y.y)}};
-}
-
-Proxy box_contact_proxy(const BoxProxy& box);
+Proxy box_contact_proxy(const BoxProxy& box, const BoxGeometry& geometry);
 
 bool test_box_axis(
     const Axis& test, const BoxProxy& a, const BoxProxy& b,
+    int64_t a_axis_x_dot, int64_t a_axis_y_dot,
+    int64_t b_axis_x_dot, int64_t b_axis_y_dot, const Vec& center_delta,
     int64_t& best_overlap, int64_t& best_depth, Axis& best_axis) {
     int64_t min_a, max_a, min_b, max_b;
-    project_box(a, test, min_a, max_a);
-    project_box(b, test, min_b, max_b);
+    project_box_cached(a, test, a_axis_x_dot, a_axis_y_dot, min_a, max_a);
+    project_box_cached(b, test, b_axis_x_dot, b_axis_y_dot, min_b, max_b);
     const int64_t toward_positive = max_a - min_b;
     const int64_t toward_negative = max_b - min_a;
     const int64_t overlap = std::min(toward_positive, toward_negative);
     if (overlap < 0) return false;
     const Axis oriented = orient_axis(
-        test, toward_positive, toward_negative, b.center - a.center);
+        test, toward_positive, toward_negative, center_delta);
     if (overlap < best_overlap
         || (overlap == best_overlap && canonical_before(oriented, best_axis))) {
         best_overlap = overlap;
@@ -479,16 +527,37 @@ FxManifold box_box(
     int64_t overlap = std::numeric_limits<int64_t>::max();
     int64_t depth = std::numeric_limits<int64_t>::max();
     Axis axis = Axis::unit_x();
-    if (!test_box_axis(a.axis_x, a, b, overlap, depth, axis)
-        || !test_box_axis(a.axis_y, a, b, overlap, depth, axis)
-        || !test_box_axis(b.axis_x, a, b, overlap, depth, axis)
-        || !test_box_axis(b.axis_y, a, b, overlap, depth, axis))
+    const Vec center_delta = b.center - a.center;
+    // A box basis is orthogonal by construction. Compute each symmetric dot only
+    // once, and defer later-axis values so an early separation stays cheap.
+    assert_orthonormal_box_basis(a);
+    assert_orthonormal_box_basis(b);
+    const int64_t a_self = a.axis_x.dot(a.axis_x);
+    const int64_t ax_bx = a.axis_x.dot(b.axis_x);
+    const int64_t ax_by = a.axis_x.dot(b.axis_y);
+    if (!test_box_axis(a.axis_x, a, b,
+            a_self, 0, ax_bx, ax_by, center_delta, overlap, depth, axis))
         return {};
-    const Vec contact = compute_contact
-        ? clamp_contact(support_feature_contact(
-            box_contact_proxy(a), box_contact_proxy(b), axis),
-            box_bounds(a), box_bounds(b))
-        : Vec{};
+    const int64_t ay_bx = a.axis_y.dot(b.axis_x);
+    const int64_t ay_by = a.axis_y.dot(b.axis_y);
+    if (!test_box_axis(a.axis_y, a, b,
+            0, a_self, ay_bx, ay_by, center_delta, overlap, depth, axis))
+        return {};
+    const int64_t b_self = b.axis_x.dot(b.axis_x);
+    if (!test_box_axis(b.axis_x, a, b,
+            ax_bx, ay_bx, b_self, 0, center_delta, overlap, depth, axis)
+        || !test_box_axis(b.axis_y, a, b,
+            ax_by, ay_by, 0, b_self, center_delta, overlap, depth, axis))
+        return {};
+    Vec contact;
+    if (compute_contact) {
+        const BoxGeometry geometry_a = make_box_geometry(a);
+        const BoxGeometry geometry_b = make_box_geometry(b);
+        contact = clamp_contact(support_feature_contact(
+            box_contact_proxy(a, geometry_a),
+            box_contact_proxy(b, geometry_b), axis),
+            geometry_a.bounds, geometry_b.bounds);
+    }
     return {true, axis, depth, contact};
 }
 
@@ -524,12 +593,6 @@ void project_capsule(
     max = std::max(first, second) + radius_projection;
 }
 
-Vec box_vertex(const BoxProxy& box, int index) {
-    const int64_t x = index == 1 || index == 2 ? box.half_x : -box.half_x;
-    const int64_t y = index >= 2 ? box.half_y : -box.half_y;
-    return box.center + box.axis_x.scale(x) + box.axis_y.scale(y);
-}
-
 // Adapt the dedicated primitive proxies to the same support-feature contact
 // representation used by generic SAT. This prevents a near-perpendicular
 // capsule side from selecting an arbitrary far spine endpoint after Q1.30
@@ -544,10 +607,9 @@ Proxy capsule_contact_proxy(const Vec& a, const Vec& b, int64_t radius) {
     return proxy;
 }
 
-Proxy box_contact_proxy(const BoxProxy& box) {
+Proxy box_contact_proxy(const BoxProxy& box, const BoxGeometry& geometry) {
     Proxy proxy;
-    for (int i = 0; i < 4; ++i)
-        proxy.inline_vertices[static_cast<size_t>(i)] = box_vertex(box, i);
+    proxy.inline_vertices = geometry.vertices;
     proxy.count = 4;
     proxy.center = box.center;
     return proxy;
@@ -605,8 +667,9 @@ FxManifold capsule_box(
             Axis::from_vector({-spine.y, spine.x}, Axis::unit_y()),
             a, b, radius, box, overlap, depth, axis))
         return {};
+    const BoxGeometry geometry = make_box_geometry(box);
     for (int corner = 0; corner < 4; ++corner) {
-        const Vec vertex = box_vertex(box, corner);
+        const Vec vertex = geometry.vertices[static_cast<size_t>(corner)];
         const Vec closest = closest_segment(vertex, a, b);
         const Vec raw_axis = closest - vertex;
         if (raw_axis.length_sq() != 0
@@ -617,8 +680,9 @@ FxManifold capsule_box(
     }
     const Vec contact = compute_contact
         ? clamp_contact(support_feature_contact(
-            capsule_contact_proxy(a, b, radius), box_contact_proxy(box), axis),
-            segment_bounds(a, b, radius), box_bounds(box))
+            capsule_contact_proxy(a, b, radius),
+            box_contact_proxy(box, geometry), axis),
+            segment_bounds(a, b, radius), geometry.bounds)
         : Vec{};
     return {true, axis, depth, contact};
 }
@@ -774,18 +838,37 @@ bool aabb_aabb_overlap(const arc_aabb& a, const arc_aabb& b) {
         && first_max.y >= second_min.y && second_max.y >= first_min.y;
 }
 
-bool box_axis_overlaps(const Axis& axis, const BoxProxy& a, const BoxProxy& b) {
+bool box_axis_overlaps(
+    const Axis& axis, const BoxProxy& a, const BoxProxy& b,
+    int64_t a_axis_x_dot, int64_t a_axis_y_dot,
+    int64_t b_axis_x_dot, int64_t b_axis_y_dot) {
     int64_t min_a, max_a, min_b, max_b;
-    project_box(a, axis, min_a, max_a);
-    project_box(b, axis, min_b, max_b);
+    project_box_cached(
+        a, axis, a_axis_x_dot, a_axis_y_dot, min_a, max_a);
+    project_box_cached(
+        b, axis, b_axis_x_dot, b_axis_y_dot, min_b, max_b);
     return max_a >= min_b && max_b >= min_a;
 }
 
 bool boxes_overlap(const BoxProxy& a, const BoxProxy& b) {
-    return box_axis_overlaps(a.axis_x, a, b)
-        && box_axis_overlaps(a.axis_y, a, b)
-        && box_axis_overlaps(b.axis_x, a, b)
-        && box_axis_overlaps(b.axis_y, a, b);
+    assert_orthonormal_box_basis(a);
+    assert_orthonormal_box_basis(b);
+    const int64_t a_self = a.axis_x.dot(a.axis_x);
+    const int64_t ax_bx = a.axis_x.dot(b.axis_x);
+    const int64_t ax_by = a.axis_x.dot(b.axis_y);
+    if (!box_axis_overlaps(
+            a.axis_x, a, b, a_self, 0, ax_bx, ax_by))
+        return false;
+    const int64_t ay_bx = a.axis_y.dot(b.axis_x);
+    const int64_t ay_by = a.axis_y.dot(b.axis_y);
+    if (!box_axis_overlaps(
+            a.axis_y, a, b, 0, a_self, ay_bx, ay_by))
+        return false;
+    const int64_t b_self = b.axis_x.dot(b.axis_x);
+    return box_axis_overlaps(
+            b.axis_x, a, b, ax_bx, ay_bx, b_self, 0)
+        && box_axis_overlaps(
+            b.axis_y, a, b, ax_by, ay_by, 0, b_self);
 }
 
 bool circle_obb_overlap(const arc_circle& circle, const arc_obb& box) {
@@ -825,8 +908,9 @@ bool capsule_box_overlap(const arc_capsule& capsule, const BoxProxy& box) {
             a, b, radius, box))
         return false;
 
+    const BoxGeometry geometry = make_box_geometry(box);
     for (int corner = 0; corner < 4; ++corner) {
-        const Vec vertex = box_vertex(box, corner);
+        const Vec vertex = geometry.vertices[static_cast<size_t>(corner)];
         const Vec closest = closest_segment(vertex, a, b);
         const Vec raw_axis = closest - vertex;
         if (raw_axis.length_sq() != 0
@@ -909,8 +993,11 @@ FxManifold concave_collision(
     if (!first.colliding) return {};
     const int limit = std::min(64, 8 + 2 * (pieces_a + pieces_b));
     for (int iteration = 0; iteration < limit; ++iteration) {
-        const FxManifold candidate = deepest_piece(
-            piece_proxies_a, piece_proxies_b, offset, compute_contact);
+        // Iteration zero has the same offset as `first`; reuse it. Later
+        // candidates contribute only normal/depth to the accumulated push, so
+        // skip their otherwise discarded support-feature contact work.
+        const FxManifold candidate = iteration == 0 ? first : deepest_piece(
+            piece_proxies_a, piece_proxies_b, offset, false);
         if (!candidate.colliding) {
             const int64_t depth = offset.length() + 2;
             return {true, Axis::from_vector(-offset, first.normal),
@@ -1083,11 +1170,23 @@ bool overlap_shapes(const arc_shape& a, const arc_shape& b) {
     // SAT. Concave polygons return true as soon as any convex-piece pair overlaps.
     const int pieces_a = piece_count(a);
     const int pieces_b = piece_count(b);
-    for (int i = 0; i < pieces_a; ++i) {
-        const Proxy proxy_a = make_proxy(a, i);
-        for (int j = 0; j < pieces_b; ++j)
-            if (sat_overlaps(proxy_a, make_proxy(b, j))) return true;
-    }
+    if (pieces_a == 1 && pieces_b == 1)
+        return sat_overlaps(make_proxy(a), make_proxy(b));
+    // Build both sides once. In particular, a concave target used to recreate
+    // every indexed triangle proxy for every source piece.
+    thread_local std::vector<Proxy> overlap_proxies_a;
+    thread_local std::vector<Proxy> overlap_proxies_b;
+    overlap_proxies_a.clear();
+    overlap_proxies_b.clear();
+    overlap_proxies_a.reserve(static_cast<size_t>(pieces_a));
+    overlap_proxies_b.reserve(static_cast<size_t>(pieces_b));
+    for (int i = 0; i < pieces_a; ++i)
+        overlap_proxies_a.push_back(make_proxy(a, i));
+    for (int j = 0; j < pieces_b; ++j)
+        overlap_proxies_b.push_back(make_proxy(b, j));
+    for (const Proxy& proxy_a : overlap_proxies_a)
+        for (const Proxy& proxy_b : overlap_proxies_b)
+            if (sat_overlaps(proxy_a, proxy_b)) return true;
     return false;
 }
 

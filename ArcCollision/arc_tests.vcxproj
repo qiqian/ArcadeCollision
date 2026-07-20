@@ -17,6 +17,7 @@
     <ClCompile Include="tests\test_runner.cpp" />
     <ClCompile Include="tests\c_api_smoke.c" />
     <ClCompile Include="tests\simd_integer_tests.cpp" />
+    <ClCompile Include="tests\collision_cache_tests.cpp" />
     <ClCompile Include="fixed.cpp" />
   </ItemGroup>
   <ItemGroup>

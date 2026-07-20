@@ -93,6 +93,7 @@ if(BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
         tests/test_runner.cpp
         tests/c_api_smoke.c
         tests/simd_integer_tests.cpp
+        tests/collision_cache_tests.cpp
         fixed.cpp)
     target_link_libraries(arc_tests PRIVATE ArcCollision)
     target_include_directories(arc_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

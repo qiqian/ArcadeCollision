@@ -231,8 +231,13 @@ public sealed unsafe class ArcWorld : IDisposable
     {
         results.Clear();
         if (TrackContacts) AdvanceContactFrame();
-        NativeMethods.Check(NativeMethods.WorldComputePairs(Handle, out IntPtr data, out int count));
+        NativeWorldHandle world = Handle;
+        NativeMethods.Check(NativeMethods.WorldComputePairs(world, out IntPtr data, out int count));
         CopyToList(results, data, count);
+        // The result points into world-owned scratch storage. P/Invoke protects a
+        // SafeHandle only for the duration of the native call, so keep the owner
+        // alive until the borrowed data has been copied.
+        GC.KeepAlive(world);
     }
 
     // Publishes a borrowed native result array into the caller's list with one
@@ -275,11 +280,12 @@ public sealed unsafe class ArcWorld : IDisposable
     public void Query(in Shape query, in CollisionFilter filter, List<ArcHandle> results) { CollisionFilter copy = filter; QueryCore(query, &copy, results); }
     private void QueryCore(in Shape query, CollisionFilter* filter, List<ArcHandle> results)
     {
-        _ = Handle;
+        NativeWorldHandle world = Handle;
         results.Clear();
         NativeShape native = query.ToNative();
-        NativeMethods.Check(NativeMethods.WorldQuery(Handle, native, filter, out IntPtr data, out int count));
+        NativeMethods.Check(NativeMethods.WorldQuery(world, native, filter, out IntPtr data, out int count));
         CopyToList(results, data, count);
+        GC.KeepAlive(world);
         GC.KeepAlive(query.PolygonObject);
     }
 
@@ -307,12 +313,13 @@ public sealed unsafe class ArcWorld : IDisposable
     public void QueryBatch(ReadOnlySpan<Shape> queries, in CollisionFilter filter, List<ArcHandle> results, List<int> counts) { CollisionFilter copy = filter; QueryBatchCore(queries, &copy, results, counts); }
     private void QueryBatchCore(ReadOnlySpan<Shape> queries, CollisionFilter* filter, List<ArcHandle> results, List<int> counts)
     {
-        _ = Handle;
+        NativeWorldHandle world = Handle;
         results.Clear();
         counts.Clear();
         int n = queries.Length;
         if (n == 0) return;
-        NativeShape* native = (_queryBatchNative ??= new()).EnsureCapacity(n);
+        NativeBuffer<NativeShape> storage = _queryBatchNative ??= new();
+        NativeShape* native = storage.EnsureCapacity(n);
         bool hasPolygons = false;
         for (int i = 0; i < n; i++)
         {
@@ -320,10 +327,12 @@ public sealed unsafe class ArcWorld : IDisposable
             hasPolygons |= queries[i].Kind == ShapeKind.Polygon;
         }
         NativeMethods.Check(NativeMethods.WorldQueryBatch(
-            Handle, native, n, filter,
+            world, native, n, filter,
             out IntPtr handleData, out IntPtr countData, out int total));
         CopyToList(results, handleData, total);
         CopyToList(counts, countData, n);
+        GC.KeepAlive(world);
+        GC.KeepAlive(storage);
         // Primitive-only batches contain no managed objects referenced solely by
         // the native scratch array, so avoid another full O(N) scan. Polygon
         // batches keep every geometry handle owner alive through the C call.
@@ -389,12 +398,13 @@ public sealed unsafe class ArcWorld : IDisposable
     public void ShapeCastAll(in Shape mover, Vec2 motion, in CollisionFilter filter, List<WorldCastHit> results) { CollisionFilter copy = filter; ShapeCastAllCore(mover, motion, &copy, results); }
     private void ShapeCastAllCore(in Shape mover, Vec2 motion, CollisionFilter* filter, List<WorldCastHit> results)
     {
-        _ = Handle;
+        NativeWorldHandle world = Handle;
         results.Clear();
         FixedValidation.Vec2(motion);
         NativeShape native = mover.ToNative();
-        NativeMethods.Check(NativeMethods.WorldShapeCastAll(Handle, native, motion, filter, out IntPtr data, out int count));
+        NativeMethods.Check(NativeMethods.WorldShapeCastAll(world, native, motion, filter, out IntPtr data, out int count));
         CopyToList(results, data, count);
+        GC.KeepAlive(world);
         GC.KeepAlive(mover.PolygonObject);
     }
     public bool RayCast(Vec2 origin, Vec2 motion, out WorldCastHit closest) => RayCastCore(origin, motion, null, out closest);
@@ -412,12 +422,13 @@ public sealed unsafe class ArcWorld : IDisposable
     public void RayCastAll(Vec2 origin, Vec2 motion, in CollisionFilter filter, List<WorldCastHit> results) { CollisionFilter copy = filter; RayCastAllCore(origin, motion, &copy, results); }
     private void RayCastAllCore(Vec2 origin, Vec2 motion, CollisionFilter* filter, List<WorldCastHit> results)
     {
-        _ = Handle;
+        NativeWorldHandle world = Handle;
         results.Clear();
         FixedValidation.Vec2(origin);
         FixedValidation.Vec2(motion);
-        NativeMethods.Check(NativeMethods.WorldRayCastAll(Handle, origin, motion, filter, out IntPtr data, out int count));
+        NativeMethods.Check(NativeMethods.WorldRayCastAll(world, origin, motion, filter, out IntPtr data, out int count));
         CopyToList(results, data, count);
+        GC.KeepAlive(world);
     }
 
     public void Dispose()

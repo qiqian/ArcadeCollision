@@ -8,6 +8,7 @@
 
 extern "C" int arc_run_c_api_smoke(void);
 extern "C" int arc_run_simd_integer_tests(void);
+extern "C" int arc_run_collision_cache_tests(void);
 
 namespace {
 
@@ -19,6 +20,7 @@ struct Suite {
 const Suite kSuites[] = {
     {"c_api_smoke", arc_run_c_api_smoke},
     {"simd_integer_tests", arc_run_simd_integer_tests},
+    {"collision_cache_tests", arc_run_collision_cache_tests},
 };
 
 } // namespace

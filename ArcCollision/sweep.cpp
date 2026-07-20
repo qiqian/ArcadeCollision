@@ -265,6 +265,57 @@ void sweep_convex(
     }
 }
 
+// A concave polygon is swept as indexed triangle proxies. Building those
+// proxies inside the nested piece loop needlessly repeats float-to-fixed shape
+// setup, and a rotated/indexed polygon would otherwise redo its vertex lookup
+// and rotation for every SAT axis. Prepare each piece once per top-level sweep.
+//
+// Flattened vertices deliberately omit Proxy::offset: the exact
+//     axis_x.scale(x) + axis_y.scale(y)
+// sequence from Proxy::vertex is retained here, and Proxy::vertex still applies
+// the translation afterwards. This keeps the fixed-point result bit-for-bit
+// identical while removing repeated transforms and index indirection.
+struct PreparedSweepProxies {
+    std::vector<Proxy> proxies;
+    std::vector<Vec> flattened_vertices;
+};
+
+thread_local PreparedSweepProxies prepared_mover_proxies;
+thread_local PreparedSweepProxies prepared_target_proxies;
+
+void prepare_sweep_proxies(
+    const arc_shape& shape, int count, PreparedSweepProxies& prepared) {
+    prepared.proxies.resize(static_cast<size_t>(count));
+    size_t flattened_count = 0;
+    for (int piece = 0; piece < count; ++piece) {
+        Proxy& proxy = prepared.proxies[static_cast<size_t>(piece)];
+        proxy = make_proxy(shape, piece);
+        if (proxy.transformed || proxy.borrowed_indices)
+            flattened_count += static_cast<size_t>(proxy.count);
+    }
+
+    prepared.flattened_vertices.resize(flattened_count);
+    size_t flattened_offset = 0;
+    for (Proxy& proxy : prepared.proxies) {
+        if (!proxy.transformed && !proxy.borrowed_indices) continue;
+        Vec* const output = prepared.flattened_vertices.data() + flattened_offset;
+        for (int vertex = 0; vertex < proxy.count; ++vertex) {
+            const int source_index = proxy.borrowed_indices
+                ? proxy.borrowed_indices[proxy.borrowed_index_offset + vertex]
+                : vertex;
+            Vec value = proxy.borrowed_vertices[source_index];
+            if (proxy.transformed)
+                value = proxy.axis_x.scale(value.x) + proxy.axis_y.scale(value.y);
+            output[vertex] = value;
+        }
+        proxy.borrowed_vertices = output;
+        proxy.borrowed_indices = nullptr;
+        proxy.borrowed_index_offset = 0;
+        proxy.transformed = false;
+        flattened_offset += static_cast<size_t>(proxy.count);
+    }
+}
+
 FxSweep reverse_relative(FxSweep hit) {
     if (!hit.hit) return hit;
     const uint8_t old_mask = hit.negative_zero_mask;
@@ -386,7 +437,8 @@ FxSweep ray_aabb(const Vec& origin, const Vec& motion, const FxAabb& box) {
 FxSweep ray_capsule(
     const Vec& origin, const Vec& motion, const Vec& a, const Vec& b, int64_t radius) {
     const Vec segment = b - a;
-    if (segment.length_sq() == 0)
+    const int64_t segment_length_sq = segment.length_sq();
+    if (segment_length_sq == 0)
         return ray_circle(origin, motion, {a, radius});
     FxSweep best;
     add_earlier(rounded_point(origin, motion, a, radius), best);
@@ -412,7 +464,7 @@ FxSweep ray_capsule(
     }
     const Vec point = origin + motion.times_t(enter);
     const int64_t projection = (point - a).dot(segment);
-    if (projection >= 0 && projection <= segment.length_sq()) {
+    if (projection >= 0 && projection <= segment_length_sq) {
         const Vec closest = closest_segment(point, a, b);
         const Axis normal = Axis::from_vector(
             point - closest, Axis::from_vector(-motion, normal_axis));
@@ -438,9 +490,25 @@ FxSweep sweep_shapes(
         return result;
     }
     FxSweep best;
-    for (int i = 0; i < piece_count(mover); ++i)
-        for (int j = 0; j < piece_count(target); ++j)
-            sweep_convex(make_proxy(mover, i), motion, make_proxy(target, j), best);
+    const int mover_piece_count = piece_count(mover);
+    const int target_piece_count = piece_count(target);
+    // Keep the allocation-free primitive/convex-polygon path. Only rotated
+    // polygons need flattening when neither operand decomposes into pieces.
+    if (mover_piece_count == 1 && target_piece_count == 1
+        && !(mover.kind == ARC_SHAPE_POLYGON && mover.polygon_rotation != 0)
+        && !(target.kind == ARC_SHAPE_POLYGON && target.polygon_rotation != 0)) {
+        const Proxy mover_proxy = make_proxy(mover);
+        const Proxy target_proxy = make_proxy(target);
+        sweep_convex(mover_proxy, motion, target_proxy, best);
+        return best;
+    }
+    prepare_sweep_proxies(
+        mover, mover_piece_count, prepared_mover_proxies);
+    prepare_sweep_proxies(
+        target, target_piece_count, prepared_target_proxies);
+    for (const Proxy& mover_proxy : prepared_mover_proxies.proxies)
+        for (const Proxy& target_proxy : prepared_target_proxies.proxies)
+            sweep_convex(mover_proxy, motion, target_proxy, best);
     return best;
 }
 

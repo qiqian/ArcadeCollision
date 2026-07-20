@@ -200,6 +200,59 @@ static int broadphase_stress(void)
     return 0;
 }
 
+/* Locks the generic sweep result for two rotated concave polygons.  Each shape
+   decomposes into several indexed triangle proxies, so this catches changes to
+   proxy preparation as well as the order of the fixed-point transform. */
+static int sweep_proxy_preparation_regression(void)
+{
+    static const arc_vec2 mover_vertices[] = {
+        {-1.5f, -1.5f}, {1.5f, -1.5f}, {1.5f, -0.5f},
+        {-0.5f, -0.5f}, {-0.5f, 1.5f}, {-1.5f, 1.5f}
+    };
+    static const arc_vec2 target_vertices[] = {
+        {-1.75f, -1.25f}, {1.75f, -1.25f}, {1.75f, 0.25f},
+        {0.25f, 0.25f}, {0.25f, 1.25f}, {-1.75f, 1.25f}
+    };
+    arc_polygon* mover_polygon = arc_polygon_create(
+        mover_vertices, (int32_t)(sizeof(mover_vertices) / sizeof(mover_vertices[0])));
+    arc_polygon* target_polygon = arc_polygon_create(
+        target_vertices, (int32_t)(sizeof(target_vertices) / sizeof(target_vertices[0])));
+    arc_shape mover = {0}, target = {0};
+    arc_sweep_hit hit;
+    unsigned hash = 2166136261u;
+    if (!mover_polygon || !target_polygon) {
+        arc_polygon_release(mover_polygon);
+        arc_polygon_release(target_polygon);
+        return 38;
+    }
+
+    mover.kind = ARC_SHAPE_POLYGON;
+    mover.polygon_rotation = 0x10000000u;
+    mover.polygon_translation = (arc_vec2){-6.0f, 0.25f};
+    mover.polygon = mover_polygon;
+    target.kind = ARC_SHAPE_POLYGON;
+    target.polygon_rotation = 0xe0000000u;
+    target.polygon_translation = (arc_vec2){2.5f, -0.5f};
+    target.polygon = target_polygon;
+    hit = arc_moving_shape_vs_shape(&mover, (arc_vec2){11.0f, 0.75f}, &target);
+
+    hash = add_hash(hash, (unsigned)hit.hit);
+    hash = add_hash(hash, float_bits(hit.time));
+    hash = add_hash(hash, float_bits(hit.normal.x));
+    hash = add_hash(hash, float_bits(hit.normal.y));
+    hash = add_hash(hash, float_bits(hit.point.x));
+    hash = add_hash(hash, float_bits(hit.point.y));
+    arc_polygon_release(mover_polygon);
+    arc_polygon_release(target_polygon);
+    if (!hit.hit) return 39;
+    if (hash != 303570820u) {
+        fprintf(stderr,
+            "sweep proxy hash: expected 303570820, got %u\n", hash);
+        return 40;
+    }
+    return 0;
+}
+
 int arc_run_c_api_smoke(void)
 {
     if (arc_get_abi_version() != ARC_ABI_VERSION) return 1;
@@ -301,6 +354,9 @@ int arc_run_c_api_smoke(void)
     arc_world_destroy(world);
     {
         int result = broadphase_stress();
-        return result != 0 ? result : locked_hash_smoke();
+        if (result != 0) return result;
+        result = locked_hash_smoke();
+        if (result != 0) return result;
+        return sweep_proxy_preparation_regression();
     }
 }

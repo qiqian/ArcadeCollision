@@ -117,6 +117,7 @@ public sealed unsafe class DynamicAabbTree : IDisposable
             NativeMethods.Check(NativeMethods.DynamicTreeQuery(
                 Handle, bounds, buffer, storage.Capacity, out required));
             for (int i = 0; i < required; i++) results.Add(buffer[i]);
+            GC.KeepAlive(storage);
         }
         else NativeMethods.Check(status);
     }
@@ -133,6 +134,7 @@ public sealed unsafe class DynamicAabbTree : IDisposable
                 Handle, buffer, storage.Capacity, out required));
             for (int i = 0; i < required; i++)
                 results.Add((buffer[i].A, buffer[i].B));
+            GC.KeepAlive(storage);
         }
         else NativeMethods.Check(status);
     }
@@ -184,8 +186,10 @@ public sealed unsafe class StaticBvh : IDisposable
             return;
         }
 
-        int* ids = (_idsBuffer ??= new()).EnsureCapacity(count);
-        BpBounds* bounds = (_boundsBuffer ??= new()).EnsureCapacity(count);
+        NativeBuffer<int> idsStorage = _idsBuffer ??= new();
+        NativeBuffer<BpBounds> boundsStorage = _boundsBuffer ??= new();
+        int* ids = idsStorage.EnsureCapacity(count);
+        BpBounds* bounds = boundsStorage.EnsureCapacity(count);
         int i = 0;
         foreach (KeyValuePair<int, BpBounds> item in source)
         {
@@ -194,6 +198,8 @@ public sealed unsafe class StaticBvh : IDisposable
             i++;
         }
         NativeMethods.Check(NativeMethods.StaticBvhBuild(Handle, ids, bounds, count));
+        GC.KeepAlive(idsStorage);
+        GC.KeepAlive(boundsStorage);
     }
 
     public void Query(in BpBounds bounds, List<int> results)
@@ -207,6 +213,7 @@ public sealed unsafe class StaticBvh : IDisposable
             NativeMethods.Check(NativeMethods.StaticBvhQuery(
                 Handle, bounds, buffer, storage.Capacity, out required));
             for (int i = 0; i < required; i++) results.Add(buffer[i]);
+            GC.KeepAlive(storage);
         }
         else NativeMethods.Check(status);
     }

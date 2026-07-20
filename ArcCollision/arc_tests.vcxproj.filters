@@ -20,6 +20,9 @@
     <ClCompile Include="tests\simd_integer_tests.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="tests\collision_cache_tests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="fixed.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
