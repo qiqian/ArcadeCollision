@@ -254,8 +254,8 @@ public class BroadphaseTests
     public void ArcWorld_QueryFindsOverlappingEntities()
     {
         using var world = new ArcWorld(10f);
-        world.Add(1, new Aabb(new Vec2(0, 0), new Vec2(2, 2)));
-        world.Add(2, new Aabb(new Vec2(50, 50), new Vec2(2, 2)));
+        world.Add(1, new Aabb(new Vec2(0, 0), new Vec2(2, 2)), CollisionFilter.Default);
+        world.Add(2, new Aabb(new Vec2(50, 50), new Vec2(2, 2)), CollisionFilter.Default);
         var results = new List<ArcHandle>();
 
         world.Query(new Aabb(new Vec2(0, 0), new Vec2(3, 3)), results);
@@ -268,9 +268,9 @@ public class BroadphaseTests
     public void ArcWorld_PairsAreUniqueAndOverlapping()
     {
         using var world = new ArcWorld(10f);
-        world.Add(1, new Aabb(new Vec2(0, 0), new Vec2(3, 3)));
-        world.Add(2, new Aabb(new Vec2(2, 0), new Vec2(3, 3)));
-        world.Add(3, new Aabb(new Vec2(500, 500), new Vec2(3, 3)));
+        world.Add(1, new Aabb(new Vec2(0, 0), new Vec2(3, 3)), CollisionFilter.Default);
+        world.Add(2, new Aabb(new Vec2(2, 0), new Vec2(3, 3)), CollisionFilter.Default);
+        world.Add(3, new Aabb(new Vec2(500, 500), new Vec2(3, 3)), CollisionFilter.Default);
         var pairs = new List<CandidatePair>();
 
         world.ComputePairs(pairs);
@@ -285,12 +285,12 @@ public class BroadphaseTests
     public void ArcWorld_QuerySupportsEveryShapeKind()
     {
         using var world = new ArcWorld(8f);
-        world.Add(1, new Circle(new Vec2(0, 0), 2));
-        world.Add(2, new Capsule(new Vec2(-3, 1), new Vec2(3, 1), 1));
-        world.Add(3, new Obb(new Vec2(1, -1), new Vec2(3, 1), 0.5f));
-        world.Add(4, new Aabb(new Vec2(100, 100), new Vec2(2, 2)));
+        world.Add(1, new Circle(new Vec2(0, 0), 2), CollisionFilter.Default);
+        world.Add(2, new Capsule(new Vec2(-3, 1), new Vec2(3, 1), 1), CollisionFilter.Default);
+        world.Add(3, new Obb(new Vec2(1, -1), new Vec2(3, 1), 0.5f), CollisionFilter.Default);
+        world.Add(4, new Aabb(new Vec2(100, 100), new Vec2(2, 2)), CollisionFilter.Default);
         var polygon = new Polygon(new Vec2(-2, -2), new Vec2(4, -1), new Vec2(0, 3));
-        ArcHandle polygonHandle = world.Add(5, polygon);
+        ArcHandle polygonHandle = world.Add(5, polygon, CollisionFilter.Default);
         var results = new List<ArcHandle>();
 
         world.Query(new Circle(Vec2.Zero, 5), results);
@@ -314,7 +314,7 @@ public class BroadphaseTests
         var polygon = new Polygon(vertices);
         vertices[0] = new Vec2(-10_000, -10_000);
         using var world = new ArcWorld(4f);
-        world.AddStatic(77, polygon);
+        world.AddStatic(77, polygon, CollisionFilter.Default);
         world.BuildStatic();
         var results = new List<ArcHandle>();
 
@@ -359,13 +359,13 @@ public class BroadphaseTests
         {
             Aabb box = RandomBox(random);
             dynamic.Add(id, box);
-            handles.Add(id, world.Add(id, box));
+            handles.Add(id, world.Add(id, box, CollisionFilter.Default));
         }
         for (int id = 1_000; id < 1_060; id++)
         {
             Aabb box = RandomBox(random);
             stationary.Add(id, box);
-            world.AddStatic(id, box);
+            world.AddStatic(id, box, CollisionFilter.Default);
         }
         world.BuildStatic();
 

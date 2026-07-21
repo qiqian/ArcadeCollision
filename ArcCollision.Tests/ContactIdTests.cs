@@ -27,8 +27,8 @@ public class ContactIdTests
     public void ContactId_StaysStableWhileMoving()
     {
         using var world = new ArcWorld();
-        ArcHandle a = world.Add(1, new Circle(new Vec2(0f, 0f), 1f));
-        _ = world.Add(2, new Circle(new Vec2(1.5f, 0f), 1f)); // overlaps `a`
+        ArcHandle a = world.Add(1, new Circle(new Vec2(0f, 0f), 1f), CollisionFilter.Default);
+        _ = world.Add(2, new Circle(new Vec2(1.5f, 0f), 1f), CollisionFilter.Default); // overlaps `a`
 
         var pairs = new List<CandidatePair>();
         ulong id0 = FindContact(world, pairs).Id;
@@ -45,8 +45,8 @@ public class ContactIdTests
     public void PairId_IsOrderIndependent()
     {
         using var world = new ArcWorld();
-        ArcHandle a = world.Add(1, new Circle(Vec2.Zero, 1f));
-        ArcHandle b = world.Add(2, new Circle(new Vec2(1.5f, 0f), 1f));
+        ArcHandle a = world.Add(1, new Circle(Vec2.Zero, 1f), CollisionFilter.Default);
+        ArcHandle b = world.Add(2, new Circle(new Vec2(1.5f, 0f), 1f), CollisionFilter.Default);
 
         Assert.Equal(ArcHandle.PairId(a, b), ArcHandle.PairId(b, a));
     }
@@ -55,9 +55,9 @@ public class ContactIdTests
     public void PairId_DistinguishesDifferentPairs()
     {
         using var world = new ArcWorld();
-        ArcHandle a = world.Add(1, new Circle(Vec2.Zero, 1f));
-        ArcHandle b = world.Add(2, new Circle(new Vec2(1.5f, 0f), 1f));
-        ArcHandle c = world.Add(3, new Circle(new Vec2(3f, 0f), 1f));
+        ArcHandle a = world.Add(1, new Circle(Vec2.Zero, 1f), CollisionFilter.Default);
+        ArcHandle b = world.Add(2, new Circle(new Vec2(1.5f, 0f), 1f), CollisionFilter.Default);
+        ArcHandle c = world.Add(3, new Circle(new Vec2(3f, 0f), 1f), CollisionFilter.Default);
 
         var ids = new HashSet<ulong>
         {
@@ -72,8 +72,8 @@ public class ContactIdTests
     public void ContactFrame_IsZeroWhenTrackingDisabled()
     {
         using var world = new ArcWorld();
-        world.Add(1, new Circle(Vec2.Zero, 1f));
-        world.Add(2, new Circle(new Vec2(1.5f, 0f), 1f));
+        world.Add(1, new Circle(Vec2.Zero, 1f), CollisionFilter.Default);
+        world.Add(2, new Circle(new Vec2(1.5f, 0f), 1f), CollisionFilter.Default);
 
         var pairs = new List<CandidatePair>();
         Assert.Equal(0, FindContact(world, pairs).Frame);
@@ -83,8 +83,8 @@ public class ContactIdTests
     public void ContactFrame_CountsConsecutiveFrames_AndRestartsAfterSeparation()
     {
         using var world = new ArcWorld { TrackContacts = true };
-        ArcHandle a = world.Add(1, new Circle(Vec2.Zero, 1f));
-        world.Add(2, new Circle(new Vec2(1.5f, 0f), 1f));
+        ArcHandle a = world.Add(1, new Circle(Vec2.Zero, 1f), CollisionFilter.Default);
+        world.Add(2, new Circle(new Vec2(1.5f, 0f), 1f), CollisionFilter.Default);
         var pairs = new List<CandidatePair>();
 
         Assert.Equal(1, FindContact(world, pairs).Frame); // first collision frame
@@ -110,9 +110,9 @@ public class ContactIdTests
     {
         using var world = new ArcWorld();
         // One entity (id 7) owning two colliders, e.g. a body and a hurtbox.
-        ArcHandle body = world.Add(7, new Circle(Vec2.Zero, 1f));
-        ArcHandle hurt = world.Add(7, new Circle(Vec2.Zero, 2f));
-        ArcHandle other = world.Add(8, new Circle(new Vec2(1f, 0f), 1f));
+        ArcHandle body = world.Add(7, new Circle(Vec2.Zero, 1f), CollisionFilter.Default);
+        ArcHandle hurt = world.Add(7, new Circle(Vec2.Zero, 2f), CollisionFilter.Default);
+        ArcHandle other = world.Add(8, new Circle(new Vec2(1f, 0f), 1f), CollisionFilter.Default);
 
         Assert.NotEqual(ArcHandle.PairId(body, other), ArcHandle.PairId(hurt, other));
     }

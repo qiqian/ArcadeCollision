@@ -402,8 +402,8 @@ public class WrapperParityTests
                 new Ref.Vec2(x * 10, y * 10), new Ref.Vec2(2, 2));
             var nativeShape = new Native.Aabb(
                 new Native.Vec2(x * 10, y * 10), new Native.Vec2(2, 2));
-            refWorld.AddStatic(entityId, refShape);
-            nativeWorld.AddStatic(entityId, nativeShape);
+            refWorld.AddStatic(entityId, refShape, Ref.CollisionFilter.Default);
+            nativeWorld.AddStatic(entityId, nativeShape, Native.CollisionFilter.Default);
             entityId++;
         }
         refWorld.BuildStatic();
@@ -510,8 +510,9 @@ public class WrapperParityTests
     {
         using var world = new Native.ArcWorld(2f);
         Native.ArcHandle first = world.Add(
-            1, new Native.Circle(Native.Vec2.Zero, 1f));
-        world.Add(2, new Native.Circle(new Native.Vec2(1f, 0f), 1f));
+            1, new Native.Circle(Native.Vec2.Zero, 1f),
+            Native.CollisionFilter.Default);
+        world.Add(2, new Native.Circle(new Native.Vec2(1f, 0f), 1f), Native.CollisionFilter.Default);
         var pairs = new List<Native.CandidatePair>();
         world.ComputePairs(pairs);
         Native.ManifoldFields invalid = (Native.ManifoldFields)3;
@@ -639,8 +640,8 @@ public class WrapperParityTests
         {
             var shape = RandomShape(random, random.Next(5));
             bool isStatic = i % 4 == 0;
-            refHandles.Add(isStatic ? reference.AddStatic(i, shape.Ref) : reference.Add(i, shape.Ref));
-            nativeHandles.Add(isStatic ? native.AddStatic(i, shape.Native) : native.Add(i, shape.Native));
+            refHandles.Add(isStatic ? reference.AddStatic(i, shape.Ref, Ref.CollisionFilter.Default) : reference.Add(i, shape.Ref, Ref.CollisionFilter.Default));
+            nativeHandles.Add(isStatic ? native.AddStatic(i, shape.Native, Native.CollisionFilter.Default) : native.Add(i, shape.Native, Native.CollisionFilter.Default));
         }
 
         for (int i = 0; i < 10; i++)
@@ -672,8 +673,8 @@ public class WrapperParityTests
         {
             using var reference = new Ref.ArcWorld();
             using var native = new Native.ArcWorld();
-            Ref.ArcHandle refHandle = reference.Add(i, shapes[i].Ref);
-            Native.ArcHandle nativeHandle = native.Add(i, shapes[i].Native);
+            Ref.ArcHandle refHandle = reference.Add(i, shapes[i].Ref, Ref.CollisionFilter.Default);
+            Native.ArcHandle nativeHandle = native.Add(i, shapes[i].Native, Native.CollisionFilter.Default);
 
             var refAbsolute = new Ref.Transform(
                 new Ref.Vec2(1_234_567.1f, -765_432.06f),
@@ -714,8 +715,8 @@ public class WrapperParityTests
         {
             using var reference = new Ref.ArcWorld();
             using var native = new Native.ArcWorld();
-            Ref.ArcHandle refHandle = reference.Add(i, shapes[i].Ref);
-            Native.ArcHandle nativeHandle = native.Add(i, shapes[i].Native);
+            Ref.ArcHandle refHandle = reference.Add(i, shapes[i].Ref, Ref.CollisionFilter.Default);
+            Native.ArcHandle nativeHandle = native.Add(i, shapes[i].Native, Native.CollisionFilter.Default);
 
             reference.UpdateTransform(refHandle, new Ref.Transform(
                 refPosition, new Ref.Angle32(0), 1f));

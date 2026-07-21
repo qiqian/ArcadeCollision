@@ -58,7 +58,7 @@ public class PolygonPivotTests
     public void AuthoredOriginIsThePivot()
     {
         using var world = new ArcWorld();
-        ArcHandle handle = world.Add(1, new Shape(FarFromOrigin()));
+        ArcHandle handle = world.Add(1, new Shape(FarFromOrigin()), CollisionFilter.Default);
         Assert.Equal(102f, BoundsCenter(world, handle).X, 2);
         Assert.Equal(101f, BoundsCenter(world, handle).Y, 2);
 
@@ -77,7 +77,7 @@ public class PolygonPivotTests
     public void CenteredPolygonSpinsInPlace()
     {
         using var world = new ArcWorld();
-        ArcHandle handle = world.Add(1, new Shape(FarFromOrigin().Centered()));
+        ArcHandle handle = world.Add(1, new Shape(FarFromOrigin().Centered()), CollisionFilter.Default);
         Assert.Equal(0f, BoundsCenter(world, handle).X, 2);
         Assert.Equal(0f, BoundsCenter(world, handle).Y, 2);
 
@@ -96,9 +96,10 @@ public class PolygonPivotTests
     public void PrimitivesPivotAboutTheirOwnCentre()
     {
         using var world = new ArcWorld();
-        ArcHandle circle = world.Add(1, new Circle(new Vec2(100f, 50f), 2f));
+        ArcHandle circle = world.Add(1, new Circle(new Vec2(100f, 50f), 2f), CollisionFilter.Default);
         ArcHandle capsule = world.Add(
-            2, new Capsule(new Vec2(-5f, 0f), new Vec2(5f, 0f), 1f));
+            2, new Capsule(new Vec2(-5f, 0f), new Vec2(5f, 0f), 1f),
+            CollisionFilter.Default);
 
         // A circle's centre is its local origin: re-placing it is absolute.
         world.UpdateTransform(circle, new Transform(Vec2.Zero));
@@ -124,7 +125,8 @@ public class PolygonPivotTests
     {
         using var world = new ArcWorld();
         ArcHandle handle = world.Add(
-            1, new Obb(new Vec2(10f, 0f), new Vec2(2f, 1f), 0.5f));
+            1, new Obb(new Vec2(10f, 0f), new Vec2(2f, 1f), 0.5f),
+            CollisionFilter.Default);
 
         world.UpdateTransform(handle, new Transform(new Vec2(10f, 0f)));
         world.GetShape(handle).TryGetObb(out Obb kept);

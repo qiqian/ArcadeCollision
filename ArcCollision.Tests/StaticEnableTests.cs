@@ -24,7 +24,7 @@ public class StaticEnableTests
     public void DisabledStaticIsExcludedFromQuery()
     {
         using var world = new ArcWorld();
-        ArcHandle handle = world.AddStatic(1, BoxAt(0f, 0f));
+        ArcHandle handle = world.AddStatic(1, BoxAt(0f, 0f), CollisionFilter.Default);
         world.BuildStatic();
 
         var results = new List<ArcHandle>();
@@ -46,8 +46,8 @@ public class StaticEnableTests
     public void DisabledStaticProducesNoCandidatePairs()
     {
         using var world = new ArcWorld();
-        ArcHandle staticHandle = world.AddStatic(1, BoxAt(0f, 0f));
-        world.Add(2, BoxAt(0.5f, 0f));
+        ArcHandle staticHandle = world.AddStatic(1, BoxAt(0f, 0f), CollisionFilter.Default);
+        world.Add(2, BoxAt(0.5f, 0f), CollisionFilter.Default);
         world.BuildStatic();
 
         var pairs = new List<CandidatePair>();
@@ -95,14 +95,14 @@ public class StaticEnableTests
     public void RemovingDisabledStaticLeavesNoStaleLeaf()
     {
         using var world = new ArcWorld();
-        ArcHandle stale = world.AddStatic(1, BoxAt(0f, 0f));
+        ArcHandle stale = world.AddStatic(1, BoxAt(0f, 0f), CollisionFilter.Default);
         world.BuildStatic();
 
         world.SetEnabled(stale, false);
         world.Remove(stale);
 
         // Recycles the freed slot with a dynamic collider placed elsewhere.
-        ArcHandle reused = world.Add(2, BoxAt(50f, 50f));
+        ArcHandle reused = world.Add(2, BoxAt(50f, 50f), CollisionFilter.Default);
         Assert.Equal(stale.Index, reused.Index);
 
         // The removed static's old location must be empty.
@@ -124,7 +124,7 @@ public class StaticEnableTests
     public void MovingDisabledStaticUpdatesItsBounds()
     {
         using var world = new ArcWorld();
-        ArcHandle handle = world.AddStatic(3, BoxAt(0f, 0f));
+        ArcHandle handle = world.AddStatic(3, BoxAt(0f, 0f), CollisionFilter.Default);
         world.BuildStatic();
 
         world.SetEnabled(handle, false);
@@ -145,7 +145,7 @@ public class StaticEnableTests
     public void DisabledStaticIsExcludedFromCasts()
     {
         using var world = new ArcWorld();
-        ArcHandle handle = world.AddStatic(4, BoxAt(10f, 0f));
+        ArcHandle handle = world.AddStatic(4, BoxAt(10f, 0f), CollisionFilter.Default);
         world.BuildStatic();
 
         Assert.True(world.RayCast(new Vec2(0f, 0f), new Vec2(20f, 0f), out _));
@@ -165,8 +165,8 @@ public class StaticEnableTests
     public void TogglingStaticKeepsCountsConsistent()
     {
         using var world = new ArcWorld();
-        ArcHandle handle = world.AddStatic(1, BoxAt(0f, 0f));
-        world.Add(2, BoxAt(50f, 50f));
+        ArcHandle handle = world.AddStatic(1, BoxAt(0f, 0f), CollisionFilter.Default);
+        world.Add(2, BoxAt(50f, 50f), CollisionFilter.Default);
         world.BuildStatic();
 
         Assert.Equal(2, world.Count);

@@ -126,24 +126,28 @@ public sealed unsafe class ArcWorld : IDisposable
     public float FatMargin => NativeMethods.WorldFatMargin(Handle);
 
     /// <summary>
-    /// Adds a dynamic collider. The shape is stored exactly as given, so it
-    /// starts wherever its own coordinates put it. Internally it is split into
-    /// geometry plus a placement: the shape's <em>local origin</em> becomes the
-    /// initial transform position, and that origin is what a later
+    /// Adds a dynamic collider. The filter is required: every collider states
+    /// what it is and what it accepts, so nothing silently joins the default
+    /// category. Pass <see cref="CollisionFilter.Default"/> for a collider that
+    /// takes part in everything.
+    ///
+    /// <para>The shape is stored exactly as given, so it starts wherever its own
+    /// coordinates put it. Internally it is split into geometry plus a
+    /// placement: the shape's <em>local origin</em> becomes the initial
+    /// transform position, and that origin is what a later
     /// <see cref="UpdateTransform"/> re-places and rotates about. See
     /// <see cref="UpdateTransform"/> for how each shape kind derives it -- in
-    /// particular a polygon pivots about its authored origin, not its centre.
+    /// particular a polygon pivots about its authored origin, not its
+    /// centre.</para>
     /// </summary>
-    public ArcHandle Add(int entityId, in Shape shape) => Add(entityId, shape, CollisionFilter.Default, true, false);
     public ArcHandle Add(int entityId, in Shape shape, in CollisionFilter filter) => Add(entityId, shape, filter, true, false);
     public ArcHandle Add(int entityId, in Shape shape, in CollisionFilter filter, bool enabled) => Add(entityId, shape, filter, enabled, false);
     /// <summary>
-    /// Adds a static collider; placement follows the same rules as
-    /// <see cref="Add(int, in Shape)"/>. Statics live in a one-shot BVH, so
-    /// batch additions and let one rebuild happen rather than interleaving them
-    /// with queries.
+    /// Adds a static collider; placement and the required filter follow the same
+    /// rules as <see cref="Add(int, in Shape, in CollisionFilter)"/>. Statics
+    /// live in a one-shot BVH, so batch additions and let one rebuild happen
+    /// rather than interleaving them with queries.
     /// </summary>
-    public ArcHandle AddStatic(int entityId, in Shape shape) => Add(entityId, shape, CollisionFilter.Default, true, true);
     public ArcHandle AddStatic(int entityId, in Shape shape, in CollisionFilter filter) => Add(entityId, shape, filter, true, true);
     public ArcHandle AddStatic(int entityId, in Shape shape, in CollisionFilter filter, bool enabled) => Add(entityId, shape, filter, enabled, true);
     private ArcHandle Add(int entityId, in Shape shape, in CollisionFilter filter, bool enabled, bool isStatic)

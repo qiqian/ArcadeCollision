@@ -177,7 +177,7 @@ public class BroadphaseScaleTests
             Vec2 at = ClusteredPosition(rng, clusters, 1_800_000f, 2500f);
             Tracked t = MakeTracked(rng, id, at, 400f);
             t.IsStatic = id < 2500;
-            t.Handle = t.IsStatic ? world.AddStatic(id, t.AsShape()) : world.Add(id, t.AsShape());
+            t.Handle = t.IsStatic ? world.AddStatic(id, t.AsShape(), CollisionFilter.Default) : world.Add(id, t.AsShape(), CollisionFilter.Default);
             entities.Add(t);
         }
         world.BuildStatic();
@@ -233,7 +233,7 @@ public class BroadphaseScaleTests
         {
             Tracked t = MakeTracked(rng, nextId++, RandomPos(), 3000f);
             t.IsStatic = i >= 300;
-            t.Handle = t.IsStatic ? world.AddStatic(t.Id, t.AsShape()) : world.Add(t.Id, t.AsShape());
+            t.Handle = t.IsStatic ? world.AddStatic(t.Id, t.AsShape(), CollisionFilter.Default) : world.Add(t.Id, t.AsShape(), CollisionFilter.Default);
             entities.Add(t);
         }
 
@@ -257,7 +257,7 @@ public class BroadphaseScaleTests
             {
                 Tracked t = MakeTracked(rng, nextId++, RandomPos(), 3000f);
                 t.IsStatic = rng.Next(4) == 0;
-                t.Handle = t.IsStatic ? world.AddStatic(t.Id, t.AsShape()) : world.Add(t.Id, t.AsShape());
+                t.Handle = t.IsStatic ? world.AddStatic(t.Id, t.AsShape(), CollisionFilter.Default) : world.Add(t.Id, t.AsShape(), CollisionFilter.Default);
                 entities.Add(t);
             }
             else if (op < 90 && entities.Count > 50)
@@ -311,7 +311,7 @@ public class BroadphaseScaleTests
                     (float)(rng.NextDouble() * 2 - 1) * 50_000f);
                 Tracked t = MakeTracked(rng, id, at, 800f);
                 t.IsStatic = id % 3 == 0;
-                t.Handle = t.IsStatic ? world.AddStatic(id, t.AsShape()) : world.Add(id, t.AsShape());
+                t.Handle = t.IsStatic ? world.AddStatic(id, t.AsShape(), CollisionFilter.Default) : world.Add(id, t.AsShape(), CollisionFilter.Default);
                 entities.Add(t);
             }
             // Churn a little before comparing.
@@ -339,8 +339,8 @@ public class BroadphaseScaleTests
     public void CandidateUsesCurrentStateAfterWorldChanges()
     {
         using var world = new ArcWorld(8f);
-        ArcHandle a = world.Add(1, new Circle(new Vec2(0, 0), 5f));
-        world.Add(2, new Circle(new Vec2(4, 0), 5f));
+        ArcHandle a = world.Add(1, new Circle(new Vec2(0, 0), 5f), CollisionFilter.Default);
+        world.Add(2, new Circle(new Vec2(4, 0), 5f), CollisionFilter.Default);
         var pairs = new List<CandidatePair>();
         world.ComputePairs(pairs);
         CandidatePair pair = Assert.Single(pairs);

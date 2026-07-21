@@ -9,9 +9,9 @@ public class GameReadinessTests
     public void UnrelatedMutationDoesNotInvalidateCandidate()
     {
         using var world = new ArcWorld();
-        world.Add(1, new Circle(Vec2.Zero, 2));
-        world.Add(2, new Circle(new Vec2(1, 0), 2));
-        ArcHandle unrelated = world.Add(3, new Circle(new Vec2(100, 0), 1));
+        world.Add(1, new Circle(Vec2.Zero, 2), CollisionFilter.Default);
+        world.Add(2, new Circle(new Vec2(1, 0), 2), CollisionFilter.Default);
+        ArcHandle unrelated = world.Add(3, new Circle(new Vec2(100, 0), 1), CollisionFilter.Default);
         var pairs = new List<CandidatePair>();
         world.ComputePairs(pairs);
         CandidatePair pair = Assert.Single(pairs);
@@ -25,8 +25,8 @@ public class GameReadinessTests
     public void DisabledColliderRetainsHandleAndLeavesBroadphase()
     {
         using var world = new ArcWorld();
-        ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 2));
-        world.Add(2, new Circle(new Vec2(1, 0), 2));
+        ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 2), CollisionFilter.Default);
+        world.Add(2, new Circle(new Vec2(1, 0), 2), CollisionFilter.Default);
         var pairs = new List<CandidatePair>();
         world.ComputePairs(pairs);
         CandidatePair oldPair = Assert.Single(pairs);
@@ -68,8 +68,8 @@ public class GameReadinessTests
     public void ShapeCastReturnsClosestAndCastAllIsDeterministic()
     {
         using var world = new ArcWorld();
-        world.AddStatic(20, new Aabb(new Vec2(8, 0), new Vec2(1, 1)));
-        world.AddStatic(10, new Aabb(new Vec2(4, 0), new Vec2(1, 1)));
+        world.AddStatic(20, new Aabb(new Vec2(8, 0), new Vec2(1, 1)), CollisionFilter.Default);
+        world.AddStatic(10, new Aabb(new Vec2(4, 0), new Vec2(1, 1)), CollisionFilter.Default);
         world.BuildStatic();
         Shape mover = new Circle(Vec2.Zero, 0.5f);
 
@@ -110,7 +110,7 @@ public class GameReadinessTests
     public void RayCastUsesPointSweepAgainstWorldShapes()
     {
         using var world = new ArcWorld();
-        world.AddStatic(7, new Aabb(new Vec2(5, 0), new Vec2(1, 1)));
+        world.AddStatic(7, new Aabb(new Vec2(5, 0), new Vec2(1, 1)), CollisionFilter.Default);
         world.BuildStatic();
 
         Assert.True(world.RayCast(Vec2.Zero, new Vec2(10, 0), out WorldCastHit hit));
@@ -147,7 +147,7 @@ public class GameReadinessTests
         Assert.False(shape.TryGetAabb(out _));
 
         using var world = new ArcWorld();
-        ArcHandle handle = world.Add(42, shape);
+        ArcHandle handle = world.Add(42, shape, CollisionFilter.Default);
         Assert.True(world.TryGetShape(handle, out Shape stored));
         Assert.Equal(ShapeKind.Circle, stored.Kind);
         Assert.True(world.TryGetFilter(handle, out CollisionFilter filter));
@@ -176,7 +176,7 @@ public class GameReadinessTests
         var handles = new ArcHandle[32];
         for (int i = 0; i < handles.Length; i++)
             handles[i] = world.Add(i,
-                new Circle(new Vec2(i * 1.5f, 0), 1));
+                new Circle(new Vec2(i * 1.5f, 0), 1), CollisionFilter.Default);
         var pairs = new List<CandidatePair>(256);
         var query = new List<ArcHandle>(32);
 
@@ -216,7 +216,7 @@ public class GameReadinessTests
             world.Clear();
             for (int i = 0; i < 16; i++)
                 world.AddStatic(i,
-                    new Aabb(new Vec2(i * 4, 0), new Vec2(1, 1)));
+                    new Aabb(new Vec2(i * 4, 0), new Vec2(1, 1)), CollisionFilter.Default);
             world.BuildStatic();
         }
     }

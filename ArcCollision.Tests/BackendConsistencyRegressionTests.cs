@@ -10,9 +10,9 @@ public class BackendConsistencyRegressionTests
     {
         using var world = new ArcWorld();
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            world.Add(1, new Circle(new Vec2(float.PositiveInfinity, 0), 1)));
+            world.Add(1, new Circle(new Vec2(float.PositiveInfinity, 0), 1), CollisionFilter.Default));
 
-        ArcHandle handle = world.Add(2, new Circle(Vec2.Zero, 1));
+        ArcHandle handle = world.Add(2, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
         Assert.Equal(0, handle.Index);
     }
 

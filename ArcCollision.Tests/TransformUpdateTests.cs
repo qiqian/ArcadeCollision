@@ -34,7 +34,7 @@ public class TransformUpdateTests
     public void TranslationOnly_PlacesBaseAtAbsolutePosition()
     {
         using var world = new ArcWorld();
-        ArcHandle handle = world.Add(1, new Circle(new Vec2(0, 0), 2f));
+        ArcHandle handle = world.Add(1, new Circle(new Vec2(0, 0), 2f), CollisionFilter.Default);
 
         world.UpdateTransform(handle, new Transform(new Vec2(100f, 50f)));
 
@@ -48,8 +48,8 @@ public class TransformUpdateTests
         using var world = new ArcWorld();
         var initial = new Vec2(4f, 7f);
         var baseCircle = new Circle(initial, 2f);
-        ArcHandle viaAbsolute = world.Add(1, baseCircle);
-        ArcHandle viaDelta = world.Add(2, baseCircle);
+        ArcHandle viaAbsolute = world.Add(1, baseCircle, CollisionFilter.Default);
+        ArcHandle viaDelta = world.Add(2, baseCircle, CollisionFilter.Default);
 
         var target = new Vec2(30f, -12f);
         world.UpdateTransform(viaAbsolute, new Transform(target));
@@ -65,7 +65,7 @@ public class TransformUpdateTests
     public void Scale_GrowsShapeUniformly()
     {
         using var world = new ArcWorld();
-        ArcHandle handle = world.Add(1, new Circle(new Vec2(0f, 0f), 2f));
+        ArcHandle handle = world.Add(1, new Circle(new Vec2(0f, 0f), 2f), CollisionFilter.Default);
 
         // r=2: a probe 5 units out misses. Scale x3 -> r=6: now inside the bounds.
         Assert.False(BoundsHit(world, handle, new Vec2(5f, 0f)));
@@ -78,7 +78,7 @@ public class TransformUpdateTests
     {
         using var world = new ArcWorld();
         // Wide-short box: 10 in X, 1 in Y.
-        ArcHandle handle = world.Add(1, new Aabb(new Vec2(0f, 0f), new Vec2(10f, 1f)));
+        ArcHandle handle = world.Add(1, new Aabb(new Vec2(0f, 0f), new Vec2(10f, 1f)), CollisionFilter.Default);
 
         world.UpdateTransform(handle, new Transform(
             new Vec2(0f, 0f), Angle32.FromRadians(MathF.PI / 2f), 1f));
@@ -91,7 +91,7 @@ public class TransformUpdateTests
     public void Rotation_OrientsObb()
     {
         using var world = new ArcWorld();
-        ArcHandle handle = world.Add(1, new Obb(new Vec2(0f, 0f), new Vec2(10f, 1f), 0f));
+        ArcHandle handle = world.Add(1, new Obb(new Vec2(0f, 0f), new Vec2(10f, 1f), 0f), CollisionFilter.Default);
 
         Assert.False(BoundsHit(world, handle, new Vec2(0f, 8f)));  // wide in X initially
         world.UpdateTransform(handle, new Transform(
@@ -104,7 +104,8 @@ public class TransformUpdateTests
     {
         using var world = new ArcWorld();
         ArcHandle handle = world.Add(1,
-            new Capsule(new Vec2(-5f, 0f), new Vec2(5f, 0f), 1f));
+            new Capsule(new Vec2(-5f, 0f), new Vec2(5f, 0f), 1f),
+            CollisionFilter.Default);
 
         world.UpdateTransform(handle, new Transform(new Vec2(20f, 20f)));
 
@@ -118,7 +119,7 @@ public class TransformUpdateTests
         using var world = new ArcWorld();
         var polygon = new Polygon(
             new Vec2(-2f, -1f), new Vec2(2f, -1f), new Vec2(0f, 2f));
-        ArcHandle handle = world.Add(1, polygon);
+        ArcHandle handle = world.Add(1, polygon, CollisionFilter.Default);
 
         Assert.False(BoundsHit(world, handle, new Vec2(5f, 0f)));
         world.UpdateTransform(handle, new Transform(
@@ -133,7 +134,7 @@ public class TransformUpdateTests
     {
         using var world = new ArcWorld();
         ArcHandle handle = world.Add(1,
-            new Obb(Vec2.Zero, new Vec2(4f, 1f), 0f));
+            new Obb(Vec2.Zero, new Vec2(4f, 1f), 0f), CollisionFilter.Default);
         Angle32 quarterTurn = Angle32.FromRadians(MathF.PI / 2f);
 
         world.UpdateTransform(handle, new Transform(
@@ -149,10 +150,10 @@ public class TransformUpdateTests
     public void RemovedSlotReuseUsesReplacementLocalGeometry()
     {
         using var world = new ArcWorld();
-        ArcHandle removed = world.Add(1, new Circle(Vec2.Zero, 8f));
+        ArcHandle removed = world.Add(1, new Circle(Vec2.Zero, 8f), CollisionFilter.Default);
         world.Remove(removed);
         ArcHandle replacement = world.Add(2,
-            new Aabb(Vec2.Zero, new Vec2(1f, 3f)));
+            new Aabb(Vec2.Zero, new Vec2(1f, 3f)), CollisionFilter.Default);
 
         world.UpdateTransform(replacement, new Transform(
             new Vec2(20f, 10f), new Angle32(0), 2f));

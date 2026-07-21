@@ -30,8 +30,8 @@ public class ArcWorldTests
     {
         using var first = new ArcWorld();
         using var second = new ArcWorld();
-        ArcHandle foreign = first.Add(1, new Circle(Vec2.Zero, 1));
-        ArcHandle local = second.Add(2, new Circle(Vec2.Zero, 1));
+        ArcHandle foreign = first.Add(1, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
+        ArcHandle local = second.Add(2, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
 
         Assert.False(second.IsValid(foreign));
         Assert.True(second.IsValid(local));
@@ -46,13 +46,13 @@ public class ArcWorldTests
     {
         using var world = new ArcWorld();
         ArcHandle maximum = world.Add(ArcHandle.MaxEntityId,
-            new Circle(Vec2.Zero, 1));
+            new Circle(Vec2.Zero, 1), CollisionFilter.Default);
 
         Assert.Equal(ArcHandle.MaxEntityId, maximum.EntityId);
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            world.Add(-1, new Circle(Vec2.Zero, 1)));
+            world.Add(-1, new Circle(Vec2.Zero, 1), CollisionFilter.Default));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            world.Add(ArcHandle.MaxEntityId + 1, new Circle(Vec2.Zero, 1)));
+            world.Add(ArcHandle.MaxEntityId + 1, new Circle(Vec2.Zero, 1), CollisionFilter.Default));
     }
 
     [Fact]
@@ -60,20 +60,20 @@ public class ArcWorldTests
     {
         CollectDeadWorlds();
         var first = new ArcWorld();
-        ArcHandle stale = first.Add(1, new Circle(Vec2.Zero, 1));
+        ArcHandle stale = first.Add(1, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
         uint releasedWorldId = stale.WorldId;
         first.Dispose();
         first.Dispose();
 
         using var replacement = new ArcWorld();
-        ArcHandle current = replacement.Add(2, new Circle(Vec2.Zero, 1));
+        ArcHandle current = replacement.Add(2, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
 
         Assert.Equal(releasedWorldId, current.WorldId);
         Assert.NotEqual(stale.Generation, current.Generation);
         Assert.False(replacement.IsValid(stale));
         Assert.True(replacement.IsValid(current));
         Assert.Throws<ObjectDisposedException>(() =>
-            first.Add(3, new Circle(Vec2.Zero, 1)));
+            first.Add(3, new Circle(Vec2.Zero, 1), CollisionFilter.Default));
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class ArcWorldTests
             var worldIds = new HashSet<uint>();
             for (int i = 0; i < worlds.Length; i++)
             {
-                ArcHandle handle = worlds[i].Add(i, new Circle(Vec2.Zero, 0));
+                ArcHandle handle = worlds[i].Add(i, new Circle(Vec2.Zero, 0), CollisionFilter.Default);
                 Assert.Equal(i, handle.EntityId);
                 Assert.True(worldIds.Add(handle.WorldId));
             }
@@ -119,7 +119,7 @@ public class ArcWorldTests
             {
                 worlds[i] = new ArcWorld();
                 int entityId = entityIds[i % entityIds.Length];
-                ArcHandle handle = worlds[i].Add(entityId, new Circle(Vec2.Zero, 0));
+                ArcHandle handle = worlds[i].Add(entityId, new Circle(Vec2.Zero, 0), CollisionFilter.Default);
                 Assert.Equal((uint)(i + 1), handle.WorldId);
                 Assert.Equal(entityId, handle.EntityId);
             }
@@ -150,7 +150,7 @@ public class ArcWorldTests
             {
                 for (int i = 0; i < released.Length; i++) replacements.Add(new ArcWorld());
                 uint[] actual = replacements
-                    .Select(world => world.Add(0, new Circle(Vec2.Zero, 0)).WorldId)
+                    .Select(world => world.Add(0, new Circle(Vec2.Zero, 0), CollisionFilter.Default).WorldId)
                     .OrderBy(id => id).ToArray();
                 Assert.Equal(released, actual);
             }
@@ -176,7 +176,7 @@ public class ArcWorldTests
         for (int cycle = 0; cycle < 512; cycle++)
         {
             using var world = new ArcWorld();
-            ArcHandle current = world.Add(cycle, new Circle(Vec2.Zero, 1));
+            ArcHandle current = world.Add(cycle, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
             if (cycle == 0) worldId = current.WorldId;
             Assert.Equal(worldId, current.WorldId);
             Assert.True(generations.Add(current.Generation));
@@ -193,7 +193,7 @@ public class ArcWorldTests
         ArcHandle oldest;
         using (var world = new ArcWorld())
         {
-            ArcHandle current = world.Add(1, new Circle(Vec2.Zero, 1));
+            ArcHandle current = world.Add(1, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
             oldest = current;
             reusedIndex = current.Index;
             uint oldestGeneration = oldest.Generation;
@@ -201,19 +201,19 @@ public class ArcWorldTests
             while (current.Generation < ArcHandle.MaxGeneration)
             {
                 world.Remove(current);
-                current = world.Add(1, new Circle(Vec2.Zero, 1));
+                current = world.Add(1, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
                 Assert.Equal(reusedIndex, current.Index);
             }
 
             world.Remove(current);
-            ArcHandle replacement = world.Add(2, new Circle(Vec2.Zero, 1));
+            ArcHandle replacement = world.Add(2, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
             Assert.Equal(reusedIndex, replacement.Index);
             Assert.Equal(1u, replacement.Generation);
 
             while (replacement.Generation < oldestGeneration)
             {
                 world.Remove(replacement);
-                replacement = world.Add(2, new Circle(Vec2.Zero, 1));
+                replacement = world.Add(2, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
                 Assert.Equal(reusedIndex, replacement.Index);
             }
 
@@ -245,9 +245,9 @@ public class ArcWorldTests
     public void BroadphasePairsCanBeFilteredBeforeNarrowphase()
     {
         using var world = new ArcWorld(2f);
-        ArcHandle a = world.Add(101, new Circle(Vec2.Zero, 1f));
-        ArcHandle b = world.Add(202, new Circle(new Vec2(1.5f, 0), 1f));
-        world.Add(303, new Circle(new Vec2(20, 0), 1f));
+        ArcHandle a = world.Add(101, new Circle(Vec2.Zero, 1f), CollisionFilter.Default);
+        ArcHandle b = world.Add(202, new Circle(new Vec2(1.5f, 0), 1f), CollisionFilter.Default);
+        world.Add(303, new Circle(new Vec2(20, 0), 1f), CollisionFilter.Default);
 
         var candidates = new List<CandidatePair>();
         world.ComputePairs(candidates);
@@ -265,8 +265,8 @@ public class ArcWorldTests
     public void TryComputeContactHonorsRequestedManifoldFields()
     {
         using var world = new ArcWorld(2f);
-        ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 1f));
-        ArcHandle second = world.Add(2, new Circle(new Vec2(1.5f, 0), 1f));
+        ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 1f), CollisionFilter.Default);
+        ArcHandle second = world.Add(2, new Circle(new Vec2(1.5f, 0), 1f), CollisionFilter.Default);
         var candidates = new List<CandidatePair>();
         world.ComputePairs(candidates);
         CandidatePair pair = Assert.Single(candidates);
@@ -307,8 +307,8 @@ public class ArcWorldTests
     public void DefaultFiltersPreserveExistingPairBehaviour()
     {
         using var world = new ArcWorld();
-        world.Add(1, new Circle(Vec2.Zero, 1));
-        world.Add(2, new Circle(new Vec2(1, 0), 1));
+        world.Add(1, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
+        world.Add(2, new Circle(new Vec2(1, 0), 1), CollisionFilter.Default);
         var candidates = new List<CandidatePair>();
 
         world.ComputePairs(candidates);
@@ -342,8 +342,8 @@ public class ArcWorldTests
     public void SettingSameFilterDoesNotInvalidateCollectedPair()
     {
         using var world = new ArcWorld();
-        ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 1));
-        world.Add(2, new Circle(new Vec2(1, 0), 1));
+        ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
+        world.Add(2, new Circle(new Vec2(1, 0), 1), CollisionFilter.Default);
         var candidates = new List<CandidatePair>();
         world.ComputePairs(candidates);
         CandidatePair pair = Assert.Single(candidates);
@@ -357,8 +357,8 @@ public class ArcWorldTests
     public void ChangingFilterInvalidatesCollectedPairs()
     {
         using var world = new ArcWorld();
-        ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 1));
-        world.Add(2, new Circle(new Vec2(1, 0), 1));
+        ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
+        world.Add(2, new Circle(new Vec2(1, 0), 1), CollisionFilter.Default);
         var candidates = new List<CandidatePair>();
         world.ComputePairs(candidates);
         CandidatePair stale = Assert.Single(candidates);
@@ -399,8 +399,8 @@ public class ArcWorldTests
     {
         using var world = new ArcWorld(2f);
         var half = new Vec2(1, 1);
-        world.Add(1, new Aabb(Vec2.Zero, half));
-        ArcHandle moving = world.Add(2, new Aabb(new Vec2(1, 0), half));
+        world.Add(1, new Aabb(Vec2.Zero, half), CollisionFilter.Default);
+        ArcHandle moving = world.Add(2, new Aabb(new Vec2(1, 0), half), CollisionFilter.Default);
         var candidates = new List<CandidatePair>();
         world.ComputePairs(candidates);
         CandidatePair stale = Assert.Single(candidates);
@@ -416,9 +416,9 @@ public class ArcWorldTests
     public void RemovedHandleCannotAddressReusedSlot()
     {
         using var world = new ArcWorld();
-        ArcHandle removed = world.Add(7, new Circle(Vec2.Zero, 1));
+        ArcHandle removed = world.Add(7, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
         world.Remove(removed);
-        ArcHandle replacement = world.Add(8, new Circle(Vec2.Zero, 1));
+        ArcHandle replacement = world.Add(8, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
 
         Assert.False(world.IsValid(removed));
         Assert.True(world.IsValid(replacement));
@@ -431,10 +431,10 @@ public class ArcWorldTests
     public void ClearInvalidatesHandlesBeforeSlotReuse()
     {
         using var world = new ArcWorld();
-        ArcHandle old = world.Add(11, new Circle(Vec2.Zero, 1));
+        ArcHandle old = world.Add(11, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
 
         world.Clear();
-        ArcHandle current = world.Add(12, new Circle(Vec2.Zero, 1));
+        ArcHandle current = world.Add(12, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
 
         Assert.False(world.IsValid(old));
         Assert.True(world.IsValid(current));
@@ -445,9 +445,9 @@ public class ArcWorldTests
     public void PairCollectionIncludesDynamicStaticButOmitsStaticStatic()
     {
         using var world = new ArcWorld();
-        world.AddStatic(1, new Aabb(Vec2.Zero, new Vec2(2, 2)));
-        world.AddStatic(2, new Aabb(Vec2.Zero, new Vec2(2, 2)));
-        world.Add(3, new Circle(Vec2.Zero, 1));
+        world.AddStatic(1, new Aabb(Vec2.Zero, new Vec2(2, 2)), CollisionFilter.Default);
+        world.AddStatic(2, new Aabb(Vec2.Zero, new Vec2(2, 2)), CollisionFilter.Default);
+        world.Add(3, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
         world.BuildStatic();
         var candidates = new List<CandidatePair>();
 
@@ -462,7 +462,7 @@ public class ArcWorldTests
     public void BuildStaticIsExplicitAndIdempotent()
     {
         using var world = new ArcWorld();
-        world.AddStatic(42, new Aabb(Vec2.Zero, new Vec2(2, 2)));
+        world.AddStatic(42, new Aabb(Vec2.Zero, new Vec2(2, 2)), CollisionFilter.Default);
 
         world.BuildStatic();
         world.BuildStatic();
@@ -487,13 +487,13 @@ public class ArcWorldTests
         {
             Aabb box = NextBox(random);
             dynamic.Add((id, box));
-            world.Add(id, box);
+            world.Add(id, box, CollisionFilter.Default);
         }
         for (int id = 100; id < 140; id++)
         {
             Aabb box = NextBox(random);
             stationary.Add((id, box));
-            world.AddStatic(id, box);
+            world.AddStatic(id, box, CollisionFilter.Default);
         }
         world.BuildStatic();
 
@@ -524,8 +524,8 @@ public class ArcWorldTests
     public void QueryReturnsHandlesThenComputesOnlySelectedContact()
     {
         using var world = new ArcWorld();
-        world.AddStatic(10, new Aabb(Vec2.Zero, new Vec2(2, 2)));
-        world.Add(20, new Circle(new Vec2(10, 0), 1));
+        world.AddStatic(10, new Aabb(Vec2.Zero, new Vec2(2, 2)), CollisionFilter.Default);
+        world.Add(20, new Circle(new Vec2(10, 0), 1), CollisionFilter.Default);
         world.BuildStatic();
         Shape probe = new Circle(new Vec2(1, 0), 1.5f);
         var candidates = new List<ArcHandle>();

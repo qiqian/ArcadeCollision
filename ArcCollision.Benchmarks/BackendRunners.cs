@@ -32,11 +32,11 @@ internal static class BackendRunners
             options.StaticCount + options.DynamicCount,
             pairCapacity));
         for (int i = 0; i < scene.StaticShapes.Length; i++)
-            world.AddStatic(i, scene.StaticShapes[i]);
+            world.AddStatic(i, scene.StaticShapes[i], Ref.CollisionFilter.Default);
         for (int i = 0; i < scene.DynamicInitialShapes.Length; i++)
         {
             dynamicHandles[i] = world.Add(
-                options.StaticCount + i, scene.DynamicInitialShapes[i]);
+                options.StaticCount + i, scene.DynamicInitialShapes[i], Ref.CollisionFilter.Default);
         }
         world.BuildStatic();
         long buildEnd = Stopwatch.GetTimestamp();
@@ -94,11 +94,11 @@ internal static class BackendRunners
             options.StaticCount + options.DynamicCount,
             pairCapacity));
         for (int i = 0; i < scene.StaticShapes.Length; i++)
-            world.AddStatic(i, scene.StaticShapes[i]);
+            world.AddStatic(i, scene.StaticShapes[i], Wrapper.CollisionFilter.Default);
         for (int i = 0; i < scene.DynamicInitialShapes.Length; i++)
         {
             dynamicHandles[i] = world.Add(
-                options.StaticCount + i, scene.DynamicInitialShapes[i]);
+                options.StaticCount + i, scene.DynamicInitialShapes[i], Wrapper.CollisionFilter.Default);
         }
         world.BuildStatic();
         long buildEnd = Stopwatch.GetTimestamp();

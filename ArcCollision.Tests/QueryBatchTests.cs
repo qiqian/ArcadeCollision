@@ -25,9 +25,9 @@ public class QueryBatchTests
         int id = 0;
         for (int x = 0; x < 6; x++)
             for (int y = 0; y < 6; y++)
-                world.AddStatic(id++, new Aabb(new Vec2(x * 10, y * 10), new Vec2(2, 2)));
+                world.AddStatic(id++, new Aabb(new Vec2(x * 10, y * 10), new Vec2(2, 2)), CollisionFilter.Default);
         for (int i = 0; i < 12; i++)
-            world.Add(1000 + i, new Circle(new Vec2(i * 7, i * 5), 3));
+            world.Add(1000 + i, new Circle(new Vec2(i * 7, i * 5), 3), CollisionFilter.Default);
         world.BuildStatic();
         return world;
     }

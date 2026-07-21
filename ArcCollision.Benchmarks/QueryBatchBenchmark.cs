@@ -253,9 +253,9 @@ internal static class QueryBatchBenchmark
         var world = new Ref.ArcWorld(new Ref.ArcWorldOptions(
             options.FatMargin, total, Math.Max(1024, total * 8)));
         for (int i = 0; i < scene.StaticShapes.Length; i++)
-            world.AddStatic(i, scene.StaticShapes[i]);
+            world.AddStatic(i, scene.StaticShapes[i], Ref.CollisionFilter.Default);
         for (int i = 0; i < scene.DynamicInitialShapes.Length; i++)
-            world.Add(options.StaticCount + i, scene.DynamicInitialShapes[i]);
+            world.Add(options.StaticCount + i, scene.DynamicInitialShapes[i], Ref.CollisionFilter.Default);
         world.BuildStatic();
         return world;
     }
@@ -267,9 +267,9 @@ internal static class QueryBatchBenchmark
         var world = new Wrapper.ArcWorld(new Wrapper.ArcWorldOptions(
             options.FatMargin, total, Math.Max(1024, total * 8)));
         for (int i = 0; i < scene.StaticShapes.Length; i++)
-            world.AddStatic(i, scene.StaticShapes[i]);
+            world.AddStatic(i, scene.StaticShapes[i], Wrapper.CollisionFilter.Default);
         for (int i = 0; i < scene.DynamicInitialShapes.Length; i++)
-            world.Add(options.StaticCount + i, scene.DynamicInitialShapes[i]);
+            world.Add(options.StaticCount + i, scene.DynamicInitialShapes[i], Wrapper.CollisionFilter.Default);
         world.BuildStatic();
         return world;
     }

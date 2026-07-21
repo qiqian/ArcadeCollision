@@ -84,8 +84,8 @@ public class DeterminismRegressionTests
         foreach (int entityId in order)
         {
             Shape shape = new Aabb(Vec2.Zero, new Vec2(10, 10));
-            if (entityId is 20 or 40) world.AddStatic(entityId, shape);
-            else world.Add(entityId, shape);
+            if (entityId is 20 or 40) world.AddStatic(entityId, shape, CollisionFilter.Default);
+            else world.Add(entityId, shape, CollisionFilter.Default);
         }
         world.BuildStatic();
 

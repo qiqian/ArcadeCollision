@@ -30,8 +30,8 @@ public class QueryAnyTests
     public void MatchesQueryEmptinessForHitAndMiss()
     {
         using var world = new ArcWorld();
-        world.Add(1, BoxAt(0f, 0f));
-        world.AddStatic(2, BoxAt(100f, 0f));
+        world.Add(1, BoxAt(0f, 0f), CollisionFilter.Default);
+        world.AddStatic(2, BoxAt(100f, 0f), CollisionFilter.Default);
         world.BuildStatic();
 
         Assert.True(world.QueryAny(BoxAt(0f, 0f), Any));     // dynamic tree
@@ -57,7 +57,7 @@ public class QueryAnyTests
     public void BoundaryTouchAgreesWithQuery()
     {
         using var world = new ArcWorld();
-        world.Add(1, BoxAt(0f, 0f));
+        world.Add(1, BoxAt(0f, 0f), CollisionFilter.Default);
 
         AssertAgreesWithQuery(world, BoxAt(2f, 0f), Any);     // edges just meet
         AssertAgreesWithQuery(world, BoxAt(2.5f, 0f), Any);   // clearly apart
@@ -90,8 +90,8 @@ public class QueryAnyTests
         var none = new CollisionFilter(categories: 0u, collidesWith: 0u);
 
         using var world = new ArcWorld();
-        world.Add(1, BoxAt(0f, 0f));
-        world.AddStatic(2, BoxAt(0f, 0f));
+        world.Add(1, BoxAt(0f, 0f), CollisionFilter.Default);
+        world.AddStatic(2, BoxAt(0f, 0f), CollisionFilter.Default);
         world.BuildStatic();
 
         Assert.True(world.QueryAny(BoxAt(0f, 0f), Any));
@@ -107,8 +107,8 @@ public class QueryAnyTests
     public void IgnoresDisabledColliders()
     {
         using var world = new ArcWorld();
-        ArcHandle dynamicHandle = world.Add(1, BoxAt(0f, 0f));
-        ArcHandle staticHandle = world.AddStatic(2, BoxAt(100f, 0f));
+        ArcHandle dynamicHandle = world.Add(1, BoxAt(0f, 0f), CollisionFilter.Default);
+        ArcHandle staticHandle = world.AddStatic(2, BoxAt(100f, 0f), CollisionFilter.Default);
         world.BuildStatic();
 
         world.SetEnabled(dynamicHandle, false);
@@ -127,7 +127,7 @@ public class QueryAnyTests
     public void RemovedColliderIsNoLongerReported()
     {
         using var world = new ArcWorld();
-        ArcHandle handle = world.Add(1, BoxAt(0f, 0f));
+        ArcHandle handle = world.Add(1, BoxAt(0f, 0f), CollisionFilter.Default);
         Assert.True(world.QueryAny(BoxAt(0f, 0f), Any));
 
         world.Remove(handle);
@@ -138,7 +138,7 @@ public class QueryAnyTests
     public void FollowsColliderAfterTransformUpdate()
     {
         using var world = new ArcWorld();
-        ArcHandle handle = world.Add(1, BoxAt(0f, 0f));
+        ArcHandle handle = world.Add(1, BoxAt(0f, 0f), CollisionFilter.Default);
 
         world.UpdateTransform(handle, new Transform(new Vec2(40f, 0f)));
         Assert.False(world.QueryAny(BoxAt(0f, 0f), Any));
@@ -150,7 +150,7 @@ public class QueryAnyTests
     public void SupportsEveryQueryShapeKind()
     {
         using var world = new ArcWorld();
-        world.Add(1, BoxAt(0f, 0f, 2f));
+        world.Add(1, BoxAt(0f, 0f, 2f), CollisionFilter.Default);
 
         Shape[] hits =
         {
@@ -190,9 +190,9 @@ public class QueryAnyTests
         int id = 0;
         for (int x = 0; x < 8; x++)
             for (int y = 0; y < 8; y++)
-                world.AddStatic(id++, BoxAt(x * 10f, y * 10f));
+                world.AddStatic(id++, BoxAt(x * 10f, y * 10f), CollisionFilter.Default);
         for (int i = 0; i < 16; i++)
-            world.Add(1000 + i, new Circle(new Vec2(i * 7f, i * 5f), 3f));
+            world.Add(1000 + i, new Circle(new Vec2(i * 7f, i * 5f), 3f), CollisionFilter.Default);
         world.BuildStatic();
 
         for (int x = -20; x <= 100; x += 3)

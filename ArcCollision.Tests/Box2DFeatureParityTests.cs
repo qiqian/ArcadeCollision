@@ -211,7 +211,7 @@ public class Box2DLargeWorldParityTests
     {
         var box = new Aabb(basePosition, new Vec2(0.5f, 0.5f));
         using var world = new ArcWorld();
-        world.AddStatic(1, box);
+        world.AddStatic(1, box, CollisionFilter.Default);
         world.BuildStatic();
 
         Shape overlap = new Circle(basePosition, 0.1f);
@@ -298,8 +298,8 @@ public class Box2DDeterminismParityTests
         using var world = new ArcWorld(1);
         foreach (int entityId in insertionOrder)
         {
-            if (entityId is 40 or 60) world.AddStatic(entityId, shapes[entityId]);
-            else world.Add(entityId, shapes[entityId]);
+            if (entityId is 40 or 60) world.AddStatic(entityId, shapes[entityId], CollisionFilter.Default);
+            else world.Add(entityId, shapes[entityId], CollisionFilter.Default);
         }
         world.BuildStatic();
 
