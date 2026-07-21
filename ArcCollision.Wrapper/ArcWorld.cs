@@ -177,6 +177,23 @@ public sealed unsafe class ArcWorld : IDisposable
             NativeMethods.WorldUpdateTransformDelta(Handle, handle, delta),
             nameof(delta));
     }
+    /// <summary>
+    /// Removes the collider and recycles its slot. The handle becomes stale, and
+    /// every later call made with it is rejected.
+    ///
+    /// <para><b>Dynamic colliders</b> release their proxy from the incremental
+    /// dynamic tree (about O(log n)). A disabled dynamic holds no proxy, so
+    /// there is nothing to release.</para>
+    ///
+    /// <para><b>Static colliders</b> are dropped from the static BVH whether or
+    /// not they were enabled -- disabled statics are BVH members too, and a leaf
+    /// left behind would alias the slot index once it is recycled. Because this
+    /// does change the leaf set, it marks the one-shot BVH dirty and the next
+    /// query rebuilds every leaf. Batch static removals (level teardown,
+    /// streaming boundaries) instead of interleaving them with queries, and use
+    /// <see cref="SetEnabled"/> for statics that only need to disappear
+    /// temporarily.</para>
+    /// </summary>
     public void Remove(ArcHandle handle) => NativeMethods.Check(NativeMethods.WorldRemove(Handle, handle), nameof(handle));
     public bool IsValid(ArcHandle handle) => NativeMethods.WorldIsValid(Handle, handle) != 0;
     public Shape GetShape(ArcHandle handle)
@@ -202,6 +219,24 @@ public sealed unsafe class ArcWorld : IDisposable
     }
     public void SetFilter(ArcHandle handle, in CollisionFilter filter) => NativeMethods.Check(NativeMethods.WorldSetFilter(Handle, handle, filter), nameof(handle));
     public bool IsEnabled(ArcHandle handle) { NativeMethods.Check(NativeMethods.WorldGetEnabled(Handle, handle, out int enabled), nameof(handle)); return enabled != 0; }
+    /// <summary>
+    /// Enables or disables broadphase participation without invalidating the
+    /// handle. Disabled colliders retain their shape, filter and static status.
+    ///
+    /// <para><b>Dynamic colliders</b> leave and rejoin the incremental dynamic
+    /// tree, so a toggle costs about O(log n).</para>
+    ///
+    /// <para><b>Static colliders</b> stay in the static BVH either way and are
+    /// filtered out of results afterwards, so a toggle is O(1) and never
+    /// rebuilds the tree. That matters because the BVH is one-shot: any real
+    /// change to its leaf set (<c>AddStatic</c>, <see cref="Remove"/>,
+    /// <c>UpdateTransform</c>) marks it dirty and the next query rebuilds every
+    /// leaf. Toggling deliberately avoids that, at the cost of a disabled static
+    /// remaining as dead weight -- still traversed, never reported. So prefer
+    /// toggling over remove/re-add for statics that come and go (doors,
+    /// breakable walls, phase-gated platforms), and keep <see cref="Remove"/>
+    /// for statics that are gone for good.</para>
+    /// </summary>
     public void SetEnabled(ArcHandle handle, bool enabled) => NativeMethods.Check(NativeMethods.WorldSetEnabled(Handle, handle, enabled ? 1 : 0), nameof(handle));
     public void Clear()
     {

@@ -942,7 +942,10 @@ arc_status ARC_CALL arc_world_add(
         slot.active = true;
         slot.enabled = enabled != 0;
         slot.is_static = is_static != 0;
-        if (slot.enabled && slot.is_static)
+        // A static collider joins the BVH as soon as it is active, even when it
+        // starts disabled: enable/disable must not touch the one-shot tree, so
+        // membership tracks `active` and `enabled` is applied at query time.
+        if (slot.is_static)
             world->broadphase.add_or_update_static(static_cast<int>(index), bounds);
         else if (slot.enabled)
             slot.tree_proxy =
@@ -983,7 +986,9 @@ arc_status apply_transform(arc_world* world, arc_handle handle,
         slot->shape = std::move(stored);
         slot->transform = transform;
         slot->bounds = world_shape.bounds;
-        if (slot->enabled && slot->is_static)
+        // A disabled static is still in the BVH, so its leaf bounds must follow
+        // the move; a disabled dynamic owns no proxy and is re-added on enable.
+        if (slot->is_static)
             world->broadphase.add_or_update_static(
                 static_cast<int>(handle_index(handle)), world_shape.bounds);
         else if (slot->enabled)
@@ -1048,7 +1053,9 @@ arc_status ARC_CALL arc_world_remove(arc_world* world, arc_handle handle) {
         return ARC_STATUS_INVALID_HANDLE;
     }
     const int index = static_cast<int>(handle_index(handle));
-    if (slot->enabled && slot->is_static)
+    // Statics are in the BVH regardless of `enabled`, so removal is
+    // unconditional: leaving a leaf behind would alias the recycled slot index.
+    if (slot->is_static)
         world->broadphase.remove_static(index);
     else if (slot->enabled)
         world->broadphase.remove_dynamic(slot->tree_proxy);
@@ -1117,15 +1124,22 @@ arc_status ARC_CALL arc_world_set_enabled(
     const bool value = enabled != 0;
     if (slot->enabled == value) return ARC_STATUS_OK;
     const int index = static_cast<int>(handle_index(handle));
-    if (value && slot->is_static)
-        world->broadphase.add_or_update_static(index, slot->bounds);
-    else if (value)
-        slot->tree_proxy = world->broadphase.add_dynamic(index, slot->bounds);
-    else if (slot->is_static)
-        world->broadphase.remove_static(index);
-    else {
-        world->broadphase.remove_dynamic(slot->tree_proxy);
-        slot->tree_proxy = -1;
+    // Toggling a static deliberately leaves its leaf in the BVH. Mutating the
+    // static tree marks it dirty and the next query rebuilds every leaf (SAH is
+    // one-shot), so a per-frame toggle would cost a full rebuild per frame.
+    // Disabled statics are instead filtered after the broadphase, exactly like
+    // the `active` check: query_slot and compute_pairs both re-test slot.enabled,
+    // so a disabled leaf can never reach a result. The cost is a little dead
+    // weight in the tree until the collider is actually removed.
+    // Dynamic colliders keep the tighter invariant (tree == enabled dynamics):
+    // their tree is incremental, so add/remove is O(log n) rather than a rebuild.
+    if (!slot->is_static) {
+        if (value)
+            slot->tree_proxy = world->broadphase.add_dynamic(index, slot->bounds);
+        else {
+            world->broadphase.remove_dynamic(slot->tree_proxy);
+            slot->tree_proxy = -1;
+        }
     }
     slot->enabled = value;
     world->enabled_count += value ? 1 : -1;
@@ -1177,11 +1191,12 @@ arc_status ARC_CALL arc_world_shift_origin(
             slot.bounds = moved[moved_index].bounds;
             slot.tree_proxy = -1;
             ++moved_index;
-            if (!slot.enabled) continue;
+            // Disabled statics are BVH members too, so they must be re-seeded
+            // here; disabled dynamics own no proxy and keep tree_proxy == -1.
             if (slot.is_static)
                 world->broadphase.add_or_update_static(
                     static_cast<int>(index), slot.bounds);
-            else
+            else if (slot.enabled)
                 slot.tree_proxy = world->broadphase.add_dynamic(
                     static_cast<int>(index), slot.bounds);
         }

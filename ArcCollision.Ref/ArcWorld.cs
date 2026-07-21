@@ -343,10 +343,11 @@ public sealed class ArcWorld : IDisposable
             slot.Transform = shiftedTransforms[i];
             slot.Bounds = shiftedShapes[i].Bounds;
             slot.TreeProxy = -1;
-            if (!slot.Enabled) continue;
+            // Disabled statics are BVH members too, so they must be re-seeded
+            // here; disabled dynamics own no proxy and keep TreeProxy == -1.
             if (slot.Static)
                 _broadphase.AddOrUpdateStatic(i, slot.Bounds);
-            else
+            else if (slot.Enabled)
                 slot.TreeProxy = _broadphase.AddDynamic(i, slot.Bounds);
         }
         _broadphase.BuildStatic();
@@ -400,13 +401,13 @@ public sealed class ArcWorld : IDisposable
 
     private void RefreshProxy(ArcHandle handle, ref Slot slot, in BpBounds bounds)
     {
-        if (!slot.Enabled)
-            return;
+        // A disabled static is still in the BVH, so its leaf bounds must follow
+        // the move; a disabled dynamic owns no proxy and is re-added on enable.
         if (slot.Static)
         {
             _broadphase.AddOrUpdateStatic(handle.Index, bounds);
         }
-        else
+        else if (slot.Enabled)
         {
             _broadphase.UpdateDynamic(slot.TreeProxy, bounds);
         }
@@ -456,36 +457,67 @@ public sealed class ArcWorld : IDisposable
     /// <summary>
     /// Enables or disables broadphase participation without invalidating the
     /// handle. Disabled colliders retain their shape, filter and static status.
+    ///
+    /// <para><b>Dynamic colliders</b> leave and rejoin the incremental dynamic
+    /// tree, so a toggle costs about O(log n).</para>
+    ///
+    /// <para><b>Static colliders</b> stay in the static BVH either way and are
+    /// filtered out of results afterwards, so a toggle is O(1) and never
+    /// rebuilds the tree. That matters because the BVH is one-shot: any real
+    /// change to its leaf set (<c>AddStatic</c>, <see cref="Remove"/>,
+    /// <c>UpdateTransform</c>) marks it dirty and the next query rebuilds every
+    /// leaf. Toggling deliberately avoids that, at the cost of a disabled static
+    /// remaining as dead weight -- still traversed, never reported. So prefer
+    /// toggling over remove/re-add for statics that come and go (doors,
+    /// breakable walls, phase-gated platforms), and keep <see cref="Remove"/>
+    /// for statics that are gone for good.</para>
     /// </summary>
     public void SetEnabled(ArcHandle handle, bool enabled)
     {
         ref Slot slot = ref GetSlot(handle);
         if (slot.Enabled == enabled) return;
 
-        if (enabled)
+        // Static membership tracks Active, not Enabled, so there is nothing to do
+        // here for a static; query and ComputePairs re-test slot.Enabled instead.
+        if (!slot.Static)
         {
-            if (slot.Static)
-                _broadphase.AddOrUpdateStatic(handle.Index, slot.Bounds);
-            else
+            if (enabled)
+            {
                 slot.TreeProxy = _broadphase.AddDynamic(handle.Index, slot.Bounds);
-        }
-        else if (slot.Static)
-        {
-            _broadphase.RemoveStatic(handle.Index);
-        }
-        else
-        {
-            _broadphase.RemoveDynamic(slot.TreeProxy);
-            slot.TreeProxy = -1;
+            }
+            else
+            {
+                _broadphase.RemoveDynamic(slot.TreeProxy);
+                slot.TreeProxy = -1;
+            }
         }
         slot.Enabled = enabled;
         _enabledCount += enabled ? 1 : -1;
     }
 
+    /// <summary>
+    /// Removes the collider and recycles its slot. The handle becomes stale, and
+    /// every later call made with it is rejected.
+    ///
+    /// <para><b>Dynamic colliders</b> release their proxy from the incremental
+    /// dynamic tree (about O(log n)). A disabled dynamic holds no proxy, so
+    /// there is nothing to release.</para>
+    ///
+    /// <para><b>Static colliders</b> are dropped from the static BVH whether or
+    /// not they were enabled -- disabled statics are BVH members too, and a leaf
+    /// left behind would alias the slot index once it is recycled. Because this
+    /// does change the leaf set, it marks the one-shot BVH dirty and the next
+    /// query rebuilds every leaf. Batch static removals (level teardown,
+    /// streaming boundaries) instead of interleaving them with queries, and use
+    /// <see cref="SetEnabled"/> for statics that only need to disappear
+    /// temporarily.</para>
+    /// </summary>
     public void Remove(ArcHandle handle)
     {
         ref Slot slot = ref GetSlot(handle);
-        if (slot.Enabled && slot.Static)
+        // Statics are in the BVH regardless of Enabled, so removal is
+        // unconditional: leaving a leaf behind would alias the recycled slot index.
+        if (slot.Static)
         {
             _broadphase.RemoveStatic(handle.Index);
         }
@@ -967,7 +999,10 @@ public sealed class ArcWorld : IDisposable
         slot.Static = isStatic;
         slot.Generation = AllocateHandleGeneration(index);
 
-        if (enabled && isStatic)
+        // A static collider joins the BVH as soon as it is active, even when it
+        // starts disabled: enable/disable must not touch the one-shot tree, so
+        // membership tracks Active and Enabled is applied at query time.
+        if (isStatic)
         {
             _broadphase.AddOrUpdateStatic(index, slot.Bounds);
         }

@@ -244,12 +244,34 @@ ARC_API arc_status ARC_CALL arc_world_add(arc_world* world, int32_t entity_id, c
    and a pure position delta moves the collider keeping its orientation. */
 ARC_API arc_status ARC_CALL arc_world_update_transform(arc_world* world, arc_handle handle, const arc_transform* transform);
 ARC_API arc_status ARC_CALL arc_world_update_transform_delta(arc_world* world, arc_handle handle, const arc_transform* delta);
+/* Remove a collider and recycle its slot; the handle becomes stale and every
+   later call made with it is rejected. A dynamic collider releases its proxy
+   from the incremental dynamic tree (~O(log n)); a disabled dynamic holds no
+   proxy, so there is nothing to release. A static collider is dropped from the
+   static BVH whether or not it was enabled -- disabled statics are BVH members
+   too, and a leaf left behind would alias the slot index once it is recycled.
+   That does change the leaf set, so it marks the one-shot BVH dirty and the next
+   query rebuilds every leaf: batch static removals (level teardown, streaming
+   boundaries) rather than interleaving them with queries, and use
+   arc_world_set_enabled for statics that only disappear temporarily. */
 ARC_API arc_status ARC_CALL arc_world_remove(arc_world* world, arc_handle handle);
 ARC_API arc_bool ARC_CALL arc_world_is_valid(const arc_world* world, arc_handle handle);
 ARC_API arc_status ARC_CALL arc_world_get_shape(const arc_world* world, arc_handle handle, arc_shape* out_shape);
 ARC_API arc_status ARC_CALL arc_world_get_filter(const arc_world* world, arc_handle handle, arc_collision_filter* out_filter);
 ARC_API arc_status ARC_CALL arc_world_set_filter(arc_world* world, arc_handle handle, arc_collision_filter filter);
 ARC_API arc_status ARC_CALL arc_world_get_enabled(const arc_world* world, arc_handle handle, arc_bool* out_enabled);
+/* Toggle broadphase participation without invalidating the handle; the collider
+   keeps its shape, filter and static status. A dynamic collider leaves and
+   rejoins the incremental dynamic tree (~O(log n)). A static collider stays in
+   the static BVH either way and is filtered out of results afterwards, so a
+   toggle is O(1) and never rebuilds the tree -- which matters because the BVH is
+   one-shot: any real change to its leaf set (arc_world_add of a static,
+   arc_world_remove, arc_world_update_transform) marks it dirty and the next
+   query rebuilds every leaf. Toggling deliberately avoids that, at the cost of a
+   disabled static remaining as dead weight -- still traversed, never reported.
+   So prefer toggling over remove/re-add for statics that come and go (doors,
+   breakable walls, phase-gated platforms), and keep arc_world_remove for statics
+   that are gone for good. */
 ARC_API arc_status ARC_CALL arc_world_set_enabled(arc_world* world, arc_handle handle, arc_bool enabled);
 ARC_API arc_status ARC_CALL arc_world_shift_origin(arc_world* world, arc_vec2 origin_delta);
 ARC_API arc_status ARC_CALL arc_world_compute_pairs(arc_world* world, const arc_candidate_pair** out_data, int32_t* out_count);
