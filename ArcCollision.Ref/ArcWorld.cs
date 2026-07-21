@@ -625,6 +625,51 @@ public sealed class ArcWorld : IDisposable
     }
 
     /// <summary>
+    /// Reports whether <see cref="Query(in Shape, in CollisionFilter, List{ArcHandle})"/>
+    /// would have returned at least one handle, stopping at the first match
+    /// instead of collecting and sorting the whole set. Intended for
+    /// activation/gating tests ("is anything near me?"), where the identity of
+    /// the hit does not matter -- e.g. skipping an entity's update when nothing
+    /// is in range. Pass <see cref="CollisionFilter.Default"/> to accept every
+    /// category.
+    ///
+    /// <para>Like <c>Query</c> this is a <em>broadphase</em> test: it answers
+    /// "potentially colliding" (bounds overlap plus filter), not "touching". Use
+    /// <see cref="TryComputeContact(in Shape, ArcHandle, out Manifold, ManifoldFields)"/>
+    /// when the exact contact matters.</para>
+    /// </summary>
+    public bool QueryAny(in Shape query, in CollisionFilter filter)
+    {
+        ThrowIfDisposed();
+        BpBounds bounds = new(query);
+        var acceptor = new SlotAcceptor(_slots, bounds, filter);
+        return _broadphase.QueryDynamicAny(bounds, acceptor)
+            || _broadphase.QueryStaticAny(bounds, acceptor);
+    }
+
+    // The acceptance test is deliberately identical to AppendQueryResults, so
+    // QueryAny(q, f) == (Query(q, f) produced anything) by construction.
+    private readonly struct SlotAcceptor : IProxyAcceptor
+    {
+        private readonly Slot[] _slots;
+        private readonly BpBounds _bounds;
+        private readonly CollisionFilter _filter;
+
+        public SlotAcceptor(Slot[] slots, BpBounds bounds, in CollisionFilter filter)
+        {
+            _slots = slots;
+            _bounds = bounds;
+            _filter = filter;
+        }
+
+        public bool Accept(int id) =>
+            _slots[id].Active
+            && _slots[id].Enabled
+            && _filter.CanCollideWith(_slots[id].Filter)
+            && _slots[id].Bounds.Overlaps(_bounds);
+    }
+
+    /// <summary>
     /// Resolves several query shapes together, mirroring the native batch API.
     /// Results are concatenated into <paramref name="results"/>, and counts[k] is
     /// the number of handles belonging to queries[k] (its slice follows the sum of

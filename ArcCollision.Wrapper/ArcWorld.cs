@@ -112,7 +112,7 @@ public sealed unsafe class ArcWorld : IDisposable
     public ArcWorld(in ArcWorldOptions options)
     {
         _ = FixedValidation.From(options.FatMargin);
-        if (NativeMethods.GetAbiVersion() != 6) throw new InvalidOperationException("ArcCollision native ABI version mismatch.");
+        if (NativeMethods.GetAbiVersion() != 7) throw new InvalidOperationException("ArcCollision native ABI version mismatch.");
         _handle = NativeMethods.WorldCreate(options);
         if (_handle.IsInvalid)
             NativeMethods.ThrowLastOperationError("Native world creation failed.");
@@ -337,6 +337,31 @@ public sealed unsafe class ArcWorld : IDisposable
         CopyToList(results, data, count);
         GC.KeepAlive(world);
         GC.KeepAlive(query.PolygonObject);
+    }
+
+    /// <summary>
+    /// Reports whether <see cref="Query(in Shape, in CollisionFilter, List{ArcHandle})"/>
+    /// would have returned at least one handle, stopping at the first match
+    /// instead of collecting and sorting the whole set. Intended for
+    /// activation/gating tests ("is anything near me?"), where the identity of
+    /// the hit does not matter -- e.g. skipping an entity's update when nothing
+    /// is in range. Pass <see cref="CollisionFilter.Default"/> to accept every
+    /// category.
+    ///
+    /// <para>Like <c>Query</c> this is a <em>broadphase</em> test: it answers
+    /// "potentially colliding" (bounds overlap plus filter), not "touching". Use
+    /// <see cref="TryComputeContact(in Shape, ArcHandle, out Manifold, ManifoldFields)"/>
+    /// when the exact contact matters.</para>
+    /// </summary>
+    public bool QueryAny(in Shape query, in CollisionFilter filter)
+    {
+        _ = Handle;
+        CollisionFilter copy = filter;
+        NativeShape native = query.ToNative();
+        NativeMethods.Check(
+            NativeMethods.WorldQueryAny(Handle, native, &copy, out int any));
+        GC.KeepAlive(query.PolygonObject);
+        return any != 0;
     }
 
     /// <summary>Queries several shapes in one native call.</summary>

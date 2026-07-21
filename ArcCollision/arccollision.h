@@ -33,7 +33,7 @@
 extern "C" {
 #endif
 
-#define ARC_ABI_VERSION 6u   /* arc_handle: world id narrowed to 3 bits, entity id widened to 29. */
+#define ARC_ABI_VERSION 7u   /* Adds arc_world_query_any. */
 /* arc_handle packs two 32-bit words: packed_index is a 20-bit slot index plus a
    12-bit generation, and packed_entity_id is a 3-bit world id above a 29-bit
    caller-owned entity id. The world id is what makes a handle from another world
@@ -281,6 +281,13 @@ ARC_API arc_status ARC_CALL arc_world_set_enabled(arc_world* world, arc_handle h
 ARC_API arc_status ARC_CALL arc_world_shift_origin(arc_world* world, arc_vec2 origin_delta);
 ARC_API arc_status ARC_CALL arc_world_compute_pairs(arc_world* world, const arc_candidate_pair** out_data, int32_t* out_count);
 ARC_API arc_status ARC_CALL arc_world_query(arc_world* world, const arc_shape* query, const arc_collision_filter* filter_or_null, const arc_handle** out_data, int32_t* out_count);
+/* Existence-only query: reports whether arc_world_query would have returned at
+   least one handle, stopping at the first match instead of collecting and
+   sorting the whole set. For activation/gating tests ("is anything near me?"),
+   where the identity of the hit does not matter. Like arc_world_query this is a
+   broadphase test -- it answers "potentially colliding" (bounds overlap plus
+   filter), not "touching"; use arc_world_try_contact_shape for the latter. */
+ARC_API arc_status ARC_CALL arc_world_query_any(arc_world* world, const arc_shape* query, const arc_collision_filter* filter_or_null, arc_bool* out_any);
 /* Batched box query: queries[0..query_count) are resolved in one native call.
    Small batches use a scalar loop, large sparse batches use unsorted 4-wide SIMD,
    and dense batches use Morton-coherent SIMD. out_handles receives all results

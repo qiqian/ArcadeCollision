@@ -43,6 +43,15 @@ void SpatialHash::query_static(
     static_.query(bounds, results);
 }
 
+bool SpatialHash::query_dynamic_any(
+    const Bounds& bounds, ProxyPredicate accept, void* context) const {
+    return dynamic_.query_any(bounds, accept, context);
+}
+bool SpatialHash::query_static_any(
+    const Bounds& bounds, ProxyPredicate accept, void* context) {
+    return static_.query_any(bounds, accept, context);
+}
+
 void SpatialHash::query_dynamic_packet(
     const Bounds queries[4], std::vector<int>* results[4],
     std::vector<PacketFrame>& stack) const {

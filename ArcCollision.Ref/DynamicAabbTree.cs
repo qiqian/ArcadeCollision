@@ -135,6 +135,45 @@ public sealed class DynamicAabbTree : IDisposable
     }
 
     /// <summary>
+    /// Existence-only box query: the same descent as <see cref="Query"/>, but it
+    /// hands each overlapping leaf to <paramref name="acceptor"/> and returns as
+    /// soon as one is taken, so a caller that only needs "is anything here?"
+    /// skips both the result list and the rest of the traversal. The acceptor is
+    /// a struct type parameter so the JIT specializes the call and no delegate or
+    /// closure is allocated. A boolean is order-independent, so this needs no
+    /// sort and matches the native backend regardless of descent order.
+    /// </summary>
+    internal bool QueryAny<TAcceptor>(in BpBounds bounds, in TAcceptor acceptor)
+        where TAcceptor : struct, IProxyAcceptor
+    {
+        ThrowIfDisposed();
+        if (_root == -1)
+            return false;
+
+        int count = 0;
+        Push(ref count, _root);
+        while (count != 0)
+        {
+            int index = _queryStack[--count];
+            ref Node node = ref _nodes[index];
+            if (!node.Bounds.Overlaps(bounds))
+                continue;
+
+            if (node.IsLeaf)
+            {
+                if (acceptor.Accept(node.Id))
+                    return true;
+            }
+            else
+            {
+                Push(ref count, node.Child1);
+                Push(ref count, node.Child2);
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Enumerates every pair of proxies whose fat bounds overlap, each pair
     /// ordered so the smaller id comes first. This is the standalone-broadphase
     /// capability the internal node accessors exist to serve; the raw per-node

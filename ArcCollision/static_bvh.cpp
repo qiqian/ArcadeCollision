@@ -86,6 +86,28 @@ void StaticBvh::query(
     }
 }
 
+// Existence-only box query; see DynamicAabbTree::query_any. Builds the tree
+// first, exactly like the scalar query, then stops at the first accepted leaf.
+bool StaticBvh::query_any(
+    const Bounds& bounds, ProxyPredicate accept, void* context) {
+    build();
+    if (root_ == -1) return false;
+    int count = 0;
+    push_query(count, root_);
+    while (count != 0) {
+        const Node& node =
+            nodes_[static_cast<size_t>(query_stack_[static_cast<size_t>(--count)])];
+        if (!node.bounds.overlaps(bounds)) continue;
+        if (node.child1 == -1) {
+            if (accept(context, node.id)) return true;
+        } else {
+            push_query(count, node.child1);
+            push_query(count, node.child2);
+        }
+    }
+    return false;
+}
+
 // Packet (4-wide) box query; see DynamicAabbTree::query_packet for the descent.
 // Builds the tree first (like the scalar query), then shares one traversal across
 // four queries with a single SIMD overlap per node and a per-branch live mask.

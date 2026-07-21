@@ -148,6 +148,38 @@ public sealed class StaticBvh : IDisposable
         }
     }
 
+    /// <summary>
+    /// Existence-only box query; see <c>DynamicAabbTree.QueryAny</c>. Stops at
+    /// the first leaf <paramref name="acceptor"/> takes.
+    /// </summary>
+    internal bool QueryAny<TAcceptor>(in BpBounds bounds, in TAcceptor acceptor)
+        where TAcceptor : struct, IProxyAcceptor
+    {
+        ThrowIfDisposed();
+        if (_root == -1)
+            return false;
+
+        int count = 0;
+        Push(ref count, _root);
+        while (count != 0)
+        {
+            ref Node node = ref _nodes[_queryStack[--count]];
+            if (!node.Bounds.Overlaps(bounds))
+                continue;
+            if (node.IsLeaf)
+            {
+                if (acceptor.Accept(node.Id))
+                    return true;
+            }
+            else
+            {
+                Push(ref count, node.Child1);
+                Push(ref count, node.Child2);
+            }
+        }
+        return false;
+    }
+
     internal int RootIndex => _root;
     internal bool IsLeaf(int index) => _nodes[index].IsLeaf;
     internal BpBounds BoundsAt(int index) => _nodes[index].Bounds;

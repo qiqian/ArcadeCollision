@@ -65,6 +65,18 @@ internal sealed class SpatialHash
         _staticBvh.Query(bounds, results);
     }
 
+    // Early-out existence tests; stop at the first accepted leaf.
+    internal bool QueryDynamicAny<TAcceptor>(in BpBounds bounds, in TAcceptor acceptor)
+        where TAcceptor : struct, IProxyAcceptor =>
+        _dynamicTree.QueryAny(bounds, acceptor);
+
+    internal bool QueryStaticAny<TAcceptor>(in BpBounds bounds, in TAcceptor acceptor)
+        where TAcceptor : struct, IProxyAcceptor
+    {
+        EnsureStaticBuilt();
+        return _staticBvh.QueryAny(bounds, acceptor);
+    }
+
     internal void ComputePairs(List<(int A, int B)> results)
     {
         ArgumentNullException.ThrowIfNull(results);

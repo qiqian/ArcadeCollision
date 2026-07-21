@@ -11,6 +11,13 @@ namespace arc {
 // can run concurrently against a read-only tree.
 struct PacketFrame { int node; int mask; };
 
+// Per-leaf acceptance test for the early-out queries. Returning true stops the
+// descent immediately, so an "is anything here?" test does not pay for the full
+// candidate set. A plain function pointer keeps the traversal in the .cpp
+// (no template in this header) and lets the world supply its slot/filter check
+// without the broadphase knowing about slots.
+using ProxyPredicate = bool (*)(void* context, int id);
+
 // Incremental broadphase: a self-balancing tree of fat AABB proxies. Supports
 // add/move/remove in ~log n and box queries / self-pair enumeration. Nodes live
 // in a pooled array with a free list; leaves store the caller's id. Mirrors the
@@ -22,6 +29,8 @@ public:
     bool move_proxy(int proxy, const Bounds& bounds, const Bounds& fat_bounds);
     void destroy_proxy(int proxy);
     void query(const Bounds& bounds, std::vector<int>& results) const;
+    // Stops at the first leaf `accept` returns true for; see ProxyPredicate.
+    bool query_any(const Bounds& bounds, ProxyPredicate accept, void* context) const;
     void query_packet(const Bounds queries[4], std::vector<int>* results[4],
         std::vector<PacketFrame>& stack) const;
     void compute_self_pairs(std::vector<std::pair<int, int>>& results) const;
@@ -78,6 +87,8 @@ public:
     void remove(int id);
     void build();
     void query(const Bounds& bounds, std::vector<int>& results);
+    // Stops at the first leaf `accept` returns true for; see ProxyPredicate.
+    bool query_any(const Bounds& bounds, ProxyPredicate accept, void* context);
     void query_packet(const Bounds queries[4], std::vector<int>* results[4],
         std::vector<PacketFrame>& stack);
     void ensure_capacity(int capacity);
@@ -138,6 +149,9 @@ public:
     void remove_static(int id);
     void query_dynamic(const Bounds& bounds, std::vector<int>& results) const;
     void query_static(const Bounds& bounds, std::vector<int>& results);
+    // Early-out existence tests; stop at the first accepted leaf.
+    bool query_dynamic_any(const Bounds& bounds, ProxyPredicate accept, void* context) const;
+    bool query_static_any(const Bounds& bounds, ProxyPredicate accept, void* context);
     void query_dynamic_packet(const Bounds queries[4], std::vector<int>* results[4],
         std::vector<PacketFrame>& stack) const;
     void query_static_packet(const Bounds queries[4], std::vector<int>* results[4],

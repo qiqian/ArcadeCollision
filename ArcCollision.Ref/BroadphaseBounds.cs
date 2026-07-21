@@ -3,6 +3,19 @@ using System;
 namespace ArcCollision.Ref;
 
 /// <summary>
+/// Per-leaf acceptance test for the early-out broadphase queries
+/// (<c>DynamicAabbTree.QueryAny</c> / <c>StaticBvh.QueryAny</c>). Returning true
+/// stops the descent immediately. Implementations are structs so the JIT
+/// specializes the generic traversal and no delegate or closure is allocated;
+/// this also lets the world supply its slot/filter check without the broadphase
+/// knowing about slots. Mirrors the native <c>arc::ProxyPredicate</c>.
+/// </summary>
+internal interface IProxyAcceptor
+{
+    bool Accept(int id);
+}
+
+/// <summary>
 /// Broadphase axis-aligned bounds in the 24.8 fixed-point grid, stored as int32
 /// min/max. int32 (16 bytes) keeps <see cref="DynamicAabbTree"/> / <see cref="StaticBvh"/>
 /// nodes cache-dense — the real broadphase win, since traversal is memory-bound.

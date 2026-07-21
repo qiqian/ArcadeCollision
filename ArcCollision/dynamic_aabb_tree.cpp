@@ -75,6 +75,30 @@ void DynamicAabbTree::query(
     }
 }
 
+// Existence-only box query: the same descent as query(), but it hands each
+// overlapping leaf to `accept` and returns as soon as one is taken. Callers that
+// only need "is anything here?" therefore skip both the candidate vector and the
+// rest of the traversal. Result order is irrelevant to a boolean, so this needs
+// no sort and stays deterministic across backends regardless of descent order.
+bool DynamicAabbTree::query_any(
+    const Bounds& bounds, ProxyPredicate accept, void* context) const {
+    if (root_ == -1) return false;
+    int count = 0;
+    push_query(count, root_);
+    while (count != 0) {
+        const int index = query_stack_[static_cast<size_t>(--count)];
+        const Node& node = nodes_[static_cast<size_t>(index)];
+        if (!node.bounds.overlaps(bounds)) continue;
+        if (node.is_leaf()) {
+            if (accept(context, node.id)) return true;
+        } else {
+            push_query(count, node.child1);
+            push_query(count, node.child2);
+        }
+    }
+    return false;
+}
+
 // Packet (4-wide) box query: descends the tree once for four queries at a time,
 // testing each node against all four with a single SIMD overlap. A per-branch
 // mask drops queries that diverge, so scattered queries prune quickly while

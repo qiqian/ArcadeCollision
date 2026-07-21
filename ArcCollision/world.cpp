@@ -616,6 +616,22 @@ void append_query(
     }
 }
 
+// Early-out acceptance for arc_world_query_any. Deliberately the same test
+// append_query applies per candidate, so "any" is exactly "the full query would
+// have returned at least one handle" -- only without building or sorting it.
+struct QueryAnyContext {
+    const arc_world* world;
+    const arc_collision_filter* filter;
+    const arc::Bounds* bounds;
+};
+
+bool accept_query_any(void* context, int id) {
+    const auto* state = static_cast<const QueryAnyContext*>(context);
+    const Slot& slot = state->world->slots[static_cast<size_t>(id)];
+    return query_slot(slot, state->filter)
+        && slot.bounds.overlaps(*state->bounds);
+}
+
 // Resolve one prevalidated query into the shared input-order result buffer.
 // Keeping this loop native amortizes the C ABI transition without paying the
 // Morton sort and packet bookkeeping that dominate genuinely sparse batches.
@@ -1267,6 +1283,34 @@ arc_status ARC_CALL arc_world_query(
         return publish_world_results(world->query_values, output, count);
     } catch (...) {
         arc::set_error("Query failed.");
+        return ARC_STATUS_INTERNAL_ERROR;
+    }
+}
+
+// Existence-only query: reports whether arc_world_query would have returned at
+// least one handle, stopping at the first match instead of collecting and
+// sorting the whole set. Intended for activation//gating tests ("is anything
+// near me?"), where the identity of the hit does not matter. Like arc_world_query
+// this is a broadphase test: it answers "potentially colliding" (bounds overlap
+// plus filter), not "touching" -- use arc_world_try_contact_shape for that.
+arc_status ARC_CALL arc_world_query_any(
+    arc_world* world, const arc_shape* query,
+    const arc_collision_filter* filter, arc_bool* out_any) {
+    if (out_any) *out_any = 0;
+    if (!world || !query || !out_any || !arc::validate_shape(*query)) {
+        arc::set_error("Invalid world or query shape.");
+        return ARC_STATUS_INVALID_ARGUMENT;
+    }
+    try {
+        const arc::Bounds bounds = arc::shape_bounds(*query);
+        QueryAnyContext context{world, filter, &bounds};
+        const bool found =
+            world->broadphase.query_dynamic_any(bounds, accept_query_any, &context)
+            || world->broadphase.query_static_any(bounds, accept_query_any, &context);
+        *out_any = found ? 1 : 0;
+        return ARC_STATUS_OK;
+    } catch (...) {
+        arc::set_error("Existence query failed.");
         return ARC_STATUS_INTERNAL_ERROR;
     }
 }

@@ -59,7 +59,7 @@ static int locked_hash_smoke(void)
             != ARC_STATUS_OK) return 34;
     }
     for (i = 0; i < query_count; ++i) {
-        hash = add_hash(hash, query[i].packed_entity_id & 0x0fffffffu);
+        hash = add_hash(hash, query[i].packed_entity_id & ARC_MAX_ENTITY_ID);
     }
     if (arc_world_compute_pairs(world, &pair_view, &pair_count)
         != ARC_STATUS_OK) return 35;
@@ -67,8 +67,8 @@ static int locked_hash_smoke(void)
     for (i = 0; i < pair_count; ++i) {
         arc_contact_pair contact;
         arc_bool colliding;
-        hash = add_hash(hash, pairs[i].a.packed_entity_id & 0x0fffffffu);
-        hash = add_hash(hash, pairs[i].b.packed_entity_id & 0x0fffffffu);
+        hash = add_hash(hash, pairs[i].a.packed_entity_id & ARC_MAX_ENTITY_ID);
+        hash = add_hash(hash, pairs[i].b.packed_entity_id & ARC_MAX_ENTITY_ID);
         if (arc_world_try_contact_pair(
                 world, pairs[i], ARC_MANIFOLD_ALL,
                 &contact, &colliding) != ARC_STATUS_OK)
@@ -173,10 +173,10 @@ static int broadphase_stress(void)
         || required != expected_pairs)
         return 26;
     for (i = 1; i < required; ++i) {
-        unsigned previous_a = pairs[i - 1].a.packed_entity_id & 0x0fffffffu;
-        unsigned current_a = pairs[i].a.packed_entity_id & 0x0fffffffu;
-        unsigned previous_b = pairs[i - 1].b.packed_entity_id & 0x0fffffffu;
-        unsigned current_b = pairs[i].b.packed_entity_id & 0x0fffffffu;
+        unsigned previous_a = pairs[i - 1].a.packed_entity_id & ARC_MAX_ENTITY_ID;
+        unsigned current_a = pairs[i].a.packed_entity_id & ARC_MAX_ENTITY_ID;
+        unsigned previous_b = pairs[i - 1].b.packed_entity_id & ARC_MAX_ENTITY_ID;
+        unsigned current_b = pairs[i].b.packed_entity_id & ARC_MAX_ENTITY_ID;
         if (previous_a > current_a
             || (previous_a == current_a && previous_b > current_b))
             return 29;
@@ -196,6 +196,23 @@ static int broadphase_stress(void)
             != ARC_STATUS_OK
         || required != expected_pairs)
         return 30;
+
+    /* arc_world_query_any must agree with arc_world_query about emptiness. The
+       managed wrappers always pass a filter, so the NULL-filter path is only
+       reachable from C -- cover it here so it cannot rot untested. */
+    {
+        arc_bool any = 0;
+        arc_shape empty_query = {0};
+        empty_query.kind = ARC_SHAPE_AABB;
+        empty_query.aabb.center = (arc_vec2){90000, 90000};
+        empty_query.aabb.half_extents = (arc_vec2){1, 1};
+        if (arc_world_query_any(world, &query, 0, &any) != ARC_STATUS_OK
+            || (any != 0) != (expected_pairs > 0))
+            return 31;
+        if (arc_world_query_any(world, &empty_query, 0, &any) != ARC_STATUS_OK
+            || any != 0)
+            return 32;
+    }
     arc_world_destroy(world);
     return 0;
 }
