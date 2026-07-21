@@ -247,12 +247,13 @@ public class SweepTests
     }
 }
 
+[Collection("ArcWorld lifecycle")]
 public class BroadphaseTests
 {
     [Fact]
     public void ArcWorld_QueryFindsOverlappingEntities()
     {
-        var world = new ArcWorld(10f);
+        using var world = new ArcWorld(10f);
         world.Add(1, new Aabb(new Vec2(0, 0), new Vec2(2, 2)));
         world.Add(2, new Aabb(new Vec2(50, 50), new Vec2(2, 2)));
         var results = new List<ArcHandle>();
@@ -266,7 +267,7 @@ public class BroadphaseTests
     [Fact]
     public void ArcWorld_PairsAreUniqueAndOverlapping()
     {
-        var world = new ArcWorld(10f);
+        using var world = new ArcWorld(10f);
         world.Add(1, new Aabb(new Vec2(0, 0), new Vec2(3, 3)));
         world.Add(2, new Aabb(new Vec2(2, 0), new Vec2(3, 3)));
         world.Add(3, new Aabb(new Vec2(500, 500), new Vec2(3, 3)));
@@ -283,7 +284,7 @@ public class BroadphaseTests
     [Fact]
     public void ArcWorld_QuerySupportsEveryShapeKind()
     {
-        var world = new ArcWorld(8f);
+        using var world = new ArcWorld(8f);
         world.Add(1, new Circle(new Vec2(0, 0), 2));
         world.Add(2, new Capsule(new Vec2(-3, 1), new Vec2(3, 1), 1));
         world.Add(3, new Obb(new Vec2(1, -1), new Vec2(3, 1), 0.5f));
@@ -312,7 +313,7 @@ public class BroadphaseTests
         Vec2[] vertices = { new(40, 40), new(60, 40), new(55, 65), new(48, 52) };
         var polygon = new Polygon(vertices);
         vertices[0] = new Vec2(-10_000, -10_000);
-        var world = new ArcWorld(4f);
+        using var world = new ArcWorld(4f);
         world.AddStatic(77, polygon);
         world.BuildStatic();
         var results = new List<ArcHandle>();
@@ -345,7 +346,7 @@ public class BroadphaseTests
     [Fact]
     public void ArcWorld_HybridBroadphaseMatchesBruteForceAfterRandomMoves()
     {
-        var world = new ArcWorld(12f);
+        using var world = new ArcWorld(12f);
         var handles = new Dictionary<int, ArcHandle>();
         var dynamic = new Dictionary<int, Aabb>();
         var stationary = new Dictionary<int, Aabb>();

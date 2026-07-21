@@ -11,6 +11,7 @@ namespace ArcCollision.Tests;
 /// rotation, uniform scale). Observed through the broadphase
 /// <c>Query</c> (bounds overlap), which is enough to pin placement/scale/rotation.
 /// </summary>
+[Collection("ArcWorld lifecycle")]
 public class TransformUpdateTests
 {
     private static bool BoundsHit(ArcWorld world, ArcHandle handle, Vec2 point)

@@ -17,8 +17,12 @@ public class ArcWorldTests
         Assert.Equal(0x000F_FFFF, ArcHandle.MaxIndex);
         Assert.Equal(0x0000_0FFF, ArcHandle.MaxGeneration);
         Assert.Equal(1_048_576, ArcWorld.MaxColliderCount);
-        Assert.Equal(0x0FFF_FFFF, ArcHandle.MaxEntityId);
-        Assert.Equal(15, ArcWorld.MaxWorldCount);
+        // The second handle word is a 3-bit world id above a 29-bit entity id,
+        // so these two constants are one split and must move together.
+        Assert.Equal(0x1FFF_FFFF, ArcHandle.MaxEntityId);
+        Assert.Equal(7, ArcWorld.MaxWorldCount);
+        Assert.True(ArcWorld.MaxWorldCount <= (int)(uint.MaxValue / (ArcHandle.MaxEntityId + 1u)),
+            "World ids must fit above the entity id, leaving 0 as the invalid id.");
     }
 
     [Fact]
@@ -38,7 +42,7 @@ public class ArcWorldTests
     }
 
     [Fact]
-    public void EntityIdUsesLow28BitsAndRejectsOutOfRangeValues()
+    public void EntityIdUsesLow29BitsAndRejectsOutOfRangeValues()
     {
         using var world = new ArcWorld();
         ArcHandle maximum = world.Add(ArcHandle.MaxEntityId,
@@ -73,7 +77,7 @@ public class ArcWorldTests
     }
 
     [Fact]
-    public void WorldIdPoolLimitsLiveWorldsToFourBitCapacity()
+    public void WorldIdPoolLimitsLiveWorldsToThreeBitCapacity()
     {
         CollectDeadWorlds();
         var worlds = new ArcWorld[ArcWorld.MaxWorldCount];
@@ -99,13 +103,15 @@ public class ArcWorldTests
     }
 
     [Fact]
-    public void EveryPackedWorldNibblePreservesEntityIdBits()
+    public void EveryPackedWorldIdPreservesEntityIdBits()
     {
         CollectDeadWorlds();
         var worlds = new ArcWorld[ArcWorld.MaxWorldCount];
+        // Straddle the top entity-id bit: 0x0FFF_FFFF and 0x1000_0000 sit either
+        // side of bit 28, so a value bleeding into the world id would show up.
         int[] entityIds =
         {
-            0, 1, 0x07FF_FFFF, 0x0800_0000, ArcHandle.MaxEntityId,
+            0, 1, 0x0FFF_FFFF, 0x1000_0000, ArcHandle.MaxEntityId,
         };
         try
         {
@@ -132,7 +138,7 @@ public class ArcWorldTests
         try
         {
             for (int i = 0; i < worlds.Length; i++) worlds[i] = new ArcWorld();
-            uint[] released = { 3, 8, 15 };
+            uint[] released = { 3, 5, 7 };
             foreach (uint id in released)
             {
                 worlds[id - 1].Dispose();
@@ -238,7 +244,7 @@ public class ArcWorldTests
     [Fact]
     public void BroadphasePairsCanBeFilteredBeforeNarrowphase()
     {
-        var world = new ArcWorld(2f);
+        using var world = new ArcWorld(2f);
         ArcHandle a = world.Add(101, new Circle(Vec2.Zero, 1f));
         ArcHandle b = world.Add(202, new Circle(new Vec2(1.5f, 0), 1f));
         world.Add(303, new Circle(new Vec2(20, 0), 1f));
@@ -391,7 +397,7 @@ public class ArcWorldTests
     [Fact]
     public void MutationInvalidatesPreviouslyCollectedPairs()
     {
-        var world = new ArcWorld(2f);
+        using var world = new ArcWorld(2f);
         var half = new Vec2(1, 1);
         world.Add(1, new Aabb(Vec2.Zero, half));
         ArcHandle moving = world.Add(2, new Aabb(new Vec2(1, 0), half));
@@ -409,7 +415,7 @@ public class ArcWorldTests
     [Fact]
     public void RemovedHandleCannotAddressReusedSlot()
     {
-        var world = new ArcWorld();
+        using var world = new ArcWorld();
         ArcHandle removed = world.Add(7, new Circle(Vec2.Zero, 1));
         world.Remove(removed);
         ArcHandle replacement = world.Add(8, new Circle(Vec2.Zero, 1));
@@ -424,7 +430,7 @@ public class ArcWorldTests
     [Fact]
     public void ClearInvalidatesHandlesBeforeSlotReuse()
     {
-        var world = new ArcWorld();
+        using var world = new ArcWorld();
         ArcHandle old = world.Add(11, new Circle(Vec2.Zero, 1));
 
         world.Clear();
@@ -438,7 +444,7 @@ public class ArcWorldTests
     [Fact]
     public void PairCollectionIncludesDynamicStaticButOmitsStaticStatic()
     {
-        var world = new ArcWorld();
+        using var world = new ArcWorld();
         world.AddStatic(1, new Aabb(Vec2.Zero, new Vec2(2, 2)));
         world.AddStatic(2, new Aabb(Vec2.Zero, new Vec2(2, 2)));
         world.Add(3, new Circle(Vec2.Zero, 1));
@@ -455,7 +461,7 @@ public class ArcWorldTests
     [Fact]
     public void BuildStaticIsExplicitAndIdempotent()
     {
-        var world = new ArcWorld();
+        using var world = new ArcWorld();
         world.AddStatic(42, new Aabb(Vec2.Zero, new Vec2(2, 2)));
 
         world.BuildStatic();
@@ -469,7 +475,7 @@ public class ArcWorldTests
     [Fact]
     public void OptimizedPairTraversalMatchesBruteForce()
     {
-        var world = new ArcWorld(8f);
+        using var world = new ArcWorld(8f);
         var dynamic = new List<(int Id, Aabb Box)>();
         var stationary = new List<(int Id, Aabb Box)>();
         var random = new Random(90421);
@@ -517,7 +523,7 @@ public class ArcWorldTests
     [Fact]
     public void QueryReturnsHandlesThenComputesOnlySelectedContact()
     {
-        var world = new ArcWorld();
+        using var world = new ArcWorld();
         world.AddStatic(10, new Aabb(Vec2.Zero, new Vec2(2, 2)));
         world.Add(20, new Circle(new Vec2(10, 0), 1));
         world.BuildStatic();

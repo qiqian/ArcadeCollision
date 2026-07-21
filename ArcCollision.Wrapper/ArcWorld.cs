@@ -2,13 +2,28 @@ using System.Runtime.InteropServices;
 
 namespace ArcCollision.Wrapper;
 
+/// <summary>
+/// Lightweight collider token. Its first 32 bits pack a 20-bit slot index and a
+/// 12-bit generation; the second word packs a 3-bit world id above a 29-bit
+/// caller-owned entity id.
+///
+/// <para>The world id is what makes a handle from another world fail validation
+/// instead of silently addressing a same-index slot there, so its width and the
+/// entity id's trade against each other: a bit spent on EntityId is a halving of
+/// <see cref="ArcWorld.MaxWorldCount"/>. EntityId is caller-owned, so a caller
+/// who wants to pack a type tag into it can do so (e.g. high 4 bits type, low 25
+/// bits id) or keep types in a side table keyed by EntityId.</para>
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public readonly struct ArcHandle : IEquatable<ArcHandle>
 {
     public const int IndexBits = 20, GenerationBits = 12;
     public const int MaxIndex = (1 << IndexBits) - 1;
     public const int MaxGeneration = (1 << GenerationBits) - 1;
-    public const int MaxEntityId = (1 << 28) - 1;
+    // The world id sits directly above the entity id, so both the mask and the
+    // world shift derive from this one constant and cannot drift apart.
+    internal const int EntityIdBits = 29;
+    public const int MaxEntityId = (1 << EntityIdBits) - 1;
     private readonly uint _packedIndex, _packedEntityId;
     internal ArcHandle(int index, uint generation, uint worldId, int entityId)
     {
@@ -17,16 +32,16 @@ public readonly struct ArcHandle : IEquatable<ArcHandle>
             || (uint)entityId > MaxEntityId)
             throw new ArgumentOutOfRangeException();
         _packedIndex = (generation << IndexBits) | (uint)index;
-        _packedEntityId = (worldId << 28) | (uint)entityId;
+        _packedEntityId = (worldId << EntityIdBits) | (uint)entityId;
     }
     internal int Index => (int)(_packedIndex & MaxIndex);
     internal uint Generation => _packedIndex >> IndexBits;
-    internal uint WorldId => _packedEntityId >> 28;
+    internal uint WorldId => _packedEntityId >> EntityIdBits;
     public int EntityId => (int)(_packedEntityId & MaxEntityId);
-    public bool Equals(ArcHandle other) => _packedIndex == other._packedIndex && (_packedEntityId >> 28) == (other._packedEntityId >> 28);
+    public bool Equals(ArcHandle other) => _packedIndex == other._packedIndex && (_packedEntityId >> EntityIdBits) == (other._packedEntityId >> EntityIdBits);
     public override bool Equals(object? obj) => obj is ArcHandle other && Equals(other);
     public override int GetHashCode() => DeterministicHash.Combine(
-        (int)(_packedIndex & MaxIndex), _packedIndex >> IndexBits, _packedEntityId >> 28);
+        (int)(_packedIndex & MaxIndex), _packedIndex >> IndexBits, _packedEntityId >> EntityIdBits);
     public static bool operator ==(ArcHandle left, ArcHandle right) => left.Equals(right);
     public static bool operator !=(ArcHandle left, ArcHandle right) => !left.Equals(right);
 
@@ -86,7 +101,7 @@ public readonly struct WorldCastHit
 
 public sealed unsafe class ArcWorld : IDisposable
 {
-    public const int MaxWorldCount = 15;
+    public const int MaxWorldCount = 7;
     public const int MaxColliderCount = ArcHandle.MaxIndex + 1;
     private NativeWorldHandle? _handle;
     // QueryBatch is world-buffered and ArcWorld is not concurrently callable.
@@ -97,7 +112,7 @@ public sealed unsafe class ArcWorld : IDisposable
     public ArcWorld(in ArcWorldOptions options)
     {
         _ = FixedValidation.From(options.FatMargin);
-        if (NativeMethods.GetAbiVersion() != 5) throw new InvalidOperationException("ArcCollision native ABI version mismatch.");
+        if (NativeMethods.GetAbiVersion() != 6) throw new InvalidOperationException("ArcCollision native ABI version mismatch.");
         _handle = NativeMethods.WorldCreate(options);
         if (_handle.IsInvalid)
             NativeMethods.ThrowLastOperationError("Native world creation failed.");

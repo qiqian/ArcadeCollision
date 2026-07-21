@@ -16,7 +16,15 @@ namespace {
 
 constexpr uint32_t IndexMask = (uint32_t{1} << 20) - 1;
 constexpr uint32_t GenerationMax = (uint32_t{1} << 12) - 1;
-constexpr uint32_t EntityMask = (uint32_t{1} << 28) - 1;
+// Entity id occupies the low bits of packed_entity_id; the world id sits above
+// it. Both the mask and the world shift derive from this one constant so the
+// split can never drift apart. Mirrors ArcHandle.EntityIdBits in the reference.
+constexpr int EntityIdBits = 29;
+constexpr uint32_t EntityMask = (uint32_t{1} << EntityIdBits) - 1;
+static_assert(EntityMask == ARC_MAX_ENTITY_ID,
+    "ARC_MAX_ENTITY_ID must match the packed entity id width");
+static_assert(ARC_MAX_WORLD_COUNT < (1u << (32 - EntityIdBits)),
+    "World ids must fit above the entity id, leaving 0 as the invalid id");
 
 uint32_t handle_index(arc_handle handle) {
     return handle.packed_index & IndexMask;
@@ -25,7 +33,7 @@ uint32_t handle_generation(arc_handle handle) {
     return handle.packed_index >> 20;
 }
 uint32_t handle_world(arc_handle handle) {
-    return handle.packed_entity_id >> 28;
+    return handle.packed_entity_id >> EntityIdBits;
 }
 int32_t handle_entity(arc_handle handle) {
     return static_cast<int32_t>(handle.packed_entity_id & EntityMask);
@@ -253,7 +261,7 @@ arc_handle make_handle(const arc_world* world, size_t index) {
     return {
         (static_cast<uint32_t>(slot.generation) << 20)
             | static_cast<uint32_t>(index),
-        (world->id << 28) | static_cast<uint32_t>(slot.entity_id),
+        (world->id << EntityIdBits) | static_cast<uint32_t>(slot.entity_id),
     };
 }
 

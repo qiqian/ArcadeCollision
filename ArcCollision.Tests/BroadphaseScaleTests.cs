@@ -12,6 +12,7 @@ namespace ArcCollision.Tests;
 /// broadphase intentionally never reports), stay exact through hundreds of
 /// frames of add/remove/update churn, and behave deterministically.
 /// </summary>
+[Collection("ArcWorld lifecycle")]
 public class BroadphaseScaleTests
 {
     private sealed class Tracked
@@ -161,7 +162,7 @@ public class BroadphaseScaleTests
     public void LargeWorld_4000MixedShapes_PairsMatchBruteForceExactly()
     {
         var rng = new Random(31337);
-        var world = new ArcWorld(16f);
+        using var world = new ArcWorld(16f);
         var entities = new List<Tracked>();
 
         // 60 dense clusters scattered across ±1.8M plus uniform strays.
@@ -217,7 +218,7 @@ public class BroadphaseScaleTests
     public void Churn_300Frames_AddRemoveUpdateTeleport_StaysExact()
     {
         var rng = new Random(4242);
-        var world = new ArcWorld(12f);
+        using var world = new ArcWorld(12f);
         var entities = new List<Tracked>();
         var scratch = new List<CandidatePair>();
         var queryResults = new List<ArcHandle>();
@@ -301,7 +302,7 @@ public class BroadphaseScaleTests
         HashSet<(int, int)> Run()
         {
             var rng = new Random(9001);
-            var world = new ArcWorld(16f);
+            using var world = new ArcWorld(16f);
             var entities = new List<Tracked>();
             for (int id = 0; id < 800; id++)
             {
@@ -337,7 +338,7 @@ public class BroadphaseScaleTests
     [Fact]
     public void CandidateUsesCurrentStateAfterWorldChanges()
     {
-        var world = new ArcWorld(8f);
+        using var world = new ArcWorld(8f);
         ArcHandle a = world.Add(1, new Circle(new Vec2(0, 0), 5f));
         world.Add(2, new Circle(new Vec2(4, 0), 5f));
         var pairs = new List<CandidatePair>();

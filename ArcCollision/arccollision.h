@@ -33,10 +33,15 @@
 extern "C" {
 #endif
 
-#define ARC_ABI_VERSION 5u   /* Manifold queries take an explicit detail mode. */
-#define ARC_MAX_WORLD_COUNT 15
+#define ARC_ABI_VERSION 6u   /* arc_handle: world id narrowed to 3 bits, entity id widened to 29. */
+/* arc_handle packs two 32-bit words: packed_index is a 20-bit slot index plus a
+   12-bit generation, and packed_entity_id is a 3-bit world id above a 29-bit
+   caller-owned entity id. The world id is what makes a handle from another world
+   fail validation instead of silently addressing a same-index slot, so the two
+   limits below move together: spending a bit on entity id costs world slots. */
+#define ARC_MAX_WORLD_COUNT 7
 #define ARC_MAX_COLLIDER_COUNT 1048576
-#define ARC_MAX_ENTITY_ID 268435455
+#define ARC_MAX_ENTITY_ID 536870911
 #define ARC_COLLISION_GRID_SIZE (1.0f / 256.0f)
 /* Max |world coordinate| and |extent| accepted at the boundary. Beyond the
    fixed-point range, this bound also keeps every broadphase AABB (position +/-

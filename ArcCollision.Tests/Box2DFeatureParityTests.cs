@@ -132,6 +132,7 @@ public class Box2DCollisionParityTests
 /// local positions that are added to it use the 1/8 grid, matching the float
 /// ULP in this range while still exercising the fixed-point large-world core.
 /// </summary>
+[Collection("ArcWorld lifecycle")]
 public class Box2DLargeWorldParityTests
 {
     internal static readonly Vec2 FarBase = new(1_898_000, -1_898_000);
@@ -259,6 +260,7 @@ public class Box2DLargeWorldParityTests
 /// or scheduler, so this hashes all supported deterministic outputs for a fixed
 /// scene across repeated runs and opposite insertion orders.
 /// </summary>
+[Collection("ArcWorld lifecycle")]
 public class Box2DDeterminismParityTests
 {
     [Fact]

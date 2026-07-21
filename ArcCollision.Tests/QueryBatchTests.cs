@@ -14,9 +14,11 @@ namespace ArcCollision.Tests;
 /// lane), so it pins the packet traversal against the scalar path on each side.
 /// (Ref-vs-native equivalence itself is covered by the parity tests/benchmark.)
 /// </summary>
+[Collection("ArcWorld lifecycle")]
 public class QueryBatchTests
 {
     // Enough colliders, static and dynamic, that queries hit varied subsets.
+    // Ownership transfers to the caller, which disposes it; do not scope it here.
     private static ArcWorld BuildPopulatedWorld()
     {
         var world = new ArcWorld();

@@ -10,7 +10,14 @@ namespace ArcCollision.Ref;
 /// so callers must not retain handles across 4095 reuses of the same slot.
 /// Index values are limited to [0, <see cref="MaxIndex"/>].
 /// EntityId is caller-owned metadata in [0, <see cref="MaxEntityId"/>]; its low
-/// 28 bits share storage with the handle's internal 4-bit world id.
+/// 29 bits share storage with the handle's internal 3-bit world id.
+///
+/// <para>The world id is what makes a handle from another world fail validation
+/// instead of silently addressing a same-index slot there, so its width and the
+/// entity id's trade against each other: a bit spent on EntityId is a halving of
+/// <see cref="ArcWorld.MaxWorldCount"/>. EntityId is caller-owned, so a caller
+/// who wants to pack a type tag into it can do so (e.g. high 4 bits type, low 25
+/// bits id) or keep types in a side table keyed by EntityId.</para>
 /// </summary>
 public readonly struct ArcHandle : IEquatable<ArcHandle>
 {
@@ -18,7 +25,7 @@ public readonly struct ArcHandle : IEquatable<ArcHandle>
     public const int GenerationBits = 12;
     public const int MaxIndex = (1 << IndexBits) - 1;
     public const int MaxGeneration = (1 << GenerationBits) - 1;
-    internal const int EntityIdBits = 28;
+    internal const int EntityIdBits = 29;
     public const int MaxEntityId = (1 << EntityIdBits) - 1;
     private const int EntityIdMask = MaxEntityId;
 
@@ -134,12 +141,14 @@ public readonly struct WorldCastHit
 /// add/update, receives lightweight handles from broadphase, filters candidates,
 /// then selectively asks the world to compute final manifolds.
 /// At most <see cref="MaxWorldCount"/> worlds may be alive concurrently. Dispose
-/// worlds when finished so their 4-bit id can be reused immediately.
+/// worlds when finished so their 3-bit id can be reused immediately: an
+/// undisposed world holds its id until it is garbage collected, so leaking
+/// worlds can exhaust the pool.
 /// Each world supports at most <see cref="MaxColliderCount"/> slot indices.
 /// </summary>
 public sealed class ArcWorld : IDisposable
 {
-    public const int MaxWorldCount = 15;
+    public const int MaxWorldCount = 7;
     public const int MaxColliderCount = ArcHandle.MaxIndex + 1;
     private static readonly object s_worldIdGate = new();
     private static readonly WeakReference<ArcWorld>?[] s_worldOwners =

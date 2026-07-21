@@ -10,6 +10,7 @@ namespace ArcCollision.Tests;
 /// after the colliders are moved with <c>UpdateTransform</c>. Runs against both the
 /// reference and the native wrapper backends via the shared compile.
 /// </summary>
+[Collection("ArcWorld lifecycle")]
 public class ContactIdTests
 {
     private static ContactPair FindContact(ArcWorld world, List<CandidatePair> pairs)

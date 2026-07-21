@@ -3,6 +3,7 @@ using Xunit;
 
 namespace ArcCollision.Tests;
 
+[Collection("ArcWorld lifecycle")]
 public class DeterminismRegressionTests
 {
     [Fact]
@@ -27,10 +28,13 @@ public class DeterminismRegressionTests
         Assert.Equal(1046910925, new Vec2(1.5f, -2.25f).GetHashCode());
         Assert.Equal(new Vec2(0f, float.NaN).GetHashCode(),
             new Vec2(-0f, BitConverter.UInt32BitsToSingle(0x7FA12345u)).GetHashCode());
-        var handle = new ArcHandle(7, 11, 9, 123456);
-        Assert.Equal(-1626455622, handle.GetHashCode());
+        // World id 5 (the old 9 no longer fits the 3-bit field). The hash is
+        // still Combine(index, generation, worldId) over an unchanged algorithm,
+        // so only the input moved -- the locked value is recomputed, not relaxed.
+        var handle = new ArcHandle(7, 11, 5, 123456);
+        Assert.Equal(-1827787050, handle.GetHashCode());
 
-        var sameIdentityDifferentMetadata = new ArcHandle(7, 11, 9, 999999);
+        var sameIdentityDifferentMetadata = new ArcHandle(7, 11, 5, 999999);
         Assert.Equal(handle, sameIdentityDifferentMetadata);
         Assert.Equal(handle.GetHashCode(), sameIdentityDifferentMetadata.GetHashCode());
     }
