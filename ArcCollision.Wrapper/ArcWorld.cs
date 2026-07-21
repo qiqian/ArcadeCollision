@@ -125,9 +125,24 @@ public sealed unsafe class ArcWorld : IDisposable
     public int StaticCount => NativeMethods.WorldStaticCount(Handle);
     public float FatMargin => NativeMethods.WorldFatMargin(Handle);
 
+    /// <summary>
+    /// Adds a dynamic collider. The shape is stored exactly as given, so it
+    /// starts wherever its own coordinates put it. Internally it is split into
+    /// geometry plus a placement: the shape's <em>local origin</em> becomes the
+    /// initial transform position, and that origin is what a later
+    /// <see cref="UpdateTransform"/> re-places and rotates about. See
+    /// <see cref="UpdateTransform"/> for how each shape kind derives it -- in
+    /// particular a polygon pivots about its authored origin, not its centre.
+    /// </summary>
     public ArcHandle Add(int entityId, in Shape shape) => Add(entityId, shape, CollisionFilter.Default, true, false);
     public ArcHandle Add(int entityId, in Shape shape, in CollisionFilter filter) => Add(entityId, shape, filter, true, false);
     public ArcHandle Add(int entityId, in Shape shape, in CollisionFilter filter, bool enabled) => Add(entityId, shape, filter, enabled, false);
+    /// <summary>
+    /// Adds a static collider; placement follows the same rules as
+    /// <see cref="Add(int, in Shape)"/>. Statics live in a one-shot BVH, so
+    /// batch additions and let one rebuild happen rather than interleaving them
+    /// with queries.
+    /// </summary>
     public ArcHandle AddStatic(int entityId, in Shape shape) => Add(entityId, shape, CollisionFilter.Default, true, true);
     public ArcHandle AddStatic(int entityId, in Shape shape, in CollisionFilter filter) => Add(entityId, shape, filter, true, true);
     public ArcHandle AddStatic(int entityId, in Shape shape, in CollisionFilter filter, bool enabled) => Add(entityId, shape, filter, enabled, true);
@@ -167,6 +182,29 @@ public sealed unsafe class ArcWorld : IDisposable
     public void BuildStatic() => NativeMethods.Check(NativeMethods.WorldBuildStatic(Handle));
     /// <summary>
     /// Re-places the collider's immutable base shape at an absolute rigid transform.
+    ///
+    /// <para><b>The transform is absolute, not a delta</b> -- it replaces the
+    /// collider's placement outright. Use <see cref="UpdateTransformDelta"/> to
+    /// compose onto the current one.</para>
+    ///
+    /// <para><b>What the position places, and what the rotation spins about,</b>
+    /// is the shape's <em>local origin</em>. <c>Add</c> derives that origin from
+    /// the shape you passed and keeps the geometry relative to it:</para>
+    /// <list type="bullet">
+    /// <item><description>Circle, AABB, OBB -- the shape's centre.</description></item>
+    /// <item><description>Capsule -- the midpoint of its two endpoints.</description></item>
+    /// <item><description>Polygon -- the origin its vertices were authored
+    /// around, <em>not</em> the geometry's centre. This is deliberate: it is the
+    /// only way to express an off-centre pivot (a blade turning about its hilt).
+    /// Call <c>Polygon.Centered()</c> at load time if you want it to spin in
+    /// place like the primitives do.</description></item>
+    /// </list>
+    ///
+    /// <para><b>Rotation composes with the authored orientation, it does not
+    /// replace it.</b> An OBB or polygon added with its own angle keeps that as a
+    /// base angle, and the transform's rotation is added to it -- so passing
+    /// rotation 0 restores the orientation it was added with rather than
+    /// straightening it to zero.</para>
     /// </summary>
     public void UpdateTransform(ArcHandle handle, in Transform transform)
     {

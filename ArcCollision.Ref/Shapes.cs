@@ -224,6 +224,28 @@ public sealed class Polygon
     public Polygon Moved(Vec2 delta)
         => new(this, delta);
 
+    /// <summary>
+    /// Returns this polygon shifted so its <see cref="Bounds"/> centre lands on
+    /// the local origin, i.e. the point a world transform rotates it about.
+    ///
+    /// <para>Unlike the other shape kinds, a polygon's pivot is wherever its
+    /// vertices were authored relative to (0, 0) -- that is deliberate, since it
+    /// is the only way to express an off-centre pivot (a blade turning about its
+    /// hilt, a door about its hinge). Call this when you want the symmetric
+    /// behaviour the primitives have instead, where a rotation spins the shape
+    /// in place. Polygons are immutable and their geometry is shared, so do this
+    /// once at load time rather than per frame; an already-centred polygon is
+    /// returned unchanged. Centring lands on the fixed-point grid, so the new
+    /// centre is within one quantisation step of the origin.</para>
+    /// </summary>
+    public Polygon Centered()
+    {
+        Vec2 center = _bounds.Center;
+        return center.X == 0f && center.Y == 0f
+            ? this
+            : Moved(new Vec2(-center.X, -center.Y));
+    }
+
     private static bool ComputeConvexity(FxVec2[] vertices)
     {
         int sign = 0;

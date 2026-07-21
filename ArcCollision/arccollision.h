@@ -246,7 +246,24 @@ ARC_API arc_status ARC_CALL arc_world_add(arc_world* world, int32_t entity_id, c
 /* Re-place a collider's immutable base shape. update_transform sets the absolute
    transform; update_transform_delta composes onto the current one (position
    added, rotation composed, scale multiplied), so an identity delta is a no-op
-   and a pure position delta moves the collider keeping its orientation. */
+   and a pure position delta moves the collider keeping its orientation.
+
+   What the position places, and what the rotation spins about, is the shape's
+   LOCAL ORIGIN. arc_world_add derives it from the shape passed in and keeps the
+   geometry relative to it:
+     - circle / AABB / OBB : the shape's centre
+     - capsule             : the midpoint of its two endpoints
+     - polygon             : the origin its vertices were authored around, NOT
+                             the geometry's centre. This is deliberate -- it is
+                             the only way to express an off-centre pivot (a blade
+                             turning about its hilt). Shift the vertices at load
+                             time (arc_polygon_moved by the negated bounds centre)
+                             if it should spin in place like the primitives do.
+
+   Rotation composes with the authored orientation rather than replacing it: an
+   OBB or polygon added with its own angle keeps that as a base angle and the
+   transform's rotation is added to it, so rotation 0 restores the orientation it
+   was added with instead of straightening it to zero. */
 ARC_API arc_status ARC_CALL arc_world_update_transform(arc_world* world, arc_handle handle, const arc_transform* transform);
 ARC_API arc_status ARC_CALL arc_world_update_transform_delta(arc_world* world, arc_handle handle, const arc_transform* delta);
 /* Remove a collider and recycle its slot; the handle becomes stale and every

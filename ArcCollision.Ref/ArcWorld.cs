@@ -274,15 +274,30 @@ public sealed class ArcWorld : IDisposable
     public int StaticCount { get { ThrowIfDisposed(); return _activeCount - _dynamicCount; } }
     public float FatMargin { get { ThrowIfDisposed(); return _broadphase.FatMargin; } }
 
-    public ArcHandle Add(int entityId, in Shape shape) =>
-        AddCore(entityId, shape, CollisionFilter.Default, isStatic: false, enabled: true);
-
+    /// <summary>
+    /// Adds a dynamic collider. The filter is required: every collider states
+    /// what it is and what it accepts, so nothing silently joins the default
+    /// category. Pass <see cref="CollisionFilter.Default"/> for a collider that
+    /// takes part in everything.
+    ///
+    /// <para>The shape is stored exactly as given, so it starts wherever its own
+    /// coordinates put it. Internally it is split into geometry plus a
+    /// placement: the shape's <em>local origin</em> becomes the initial
+    /// transform position, and that origin is what a later
+    /// <see cref="UpdateTransform"/> re-places and rotates about. See
+    /// <see cref="UpdateTransform"/> for how each shape kind derives it -- in
+    /// particular a polygon pivots about its authored origin, not its
+    /// centre.</para>
+    /// </summary>
     public ArcHandle Add(int entityId, in Shape shape, in CollisionFilter filter) =>
         AddCore(entityId, shape, filter, isStatic: false, enabled: true);
 
-    public ArcHandle AddStatic(int entityId, in Shape shape) =>
-        AddCore(entityId, shape, CollisionFilter.Default, isStatic: true, enabled: true);
-
+    /// <summary>
+    /// Adds a static collider; placement and the required filter follow the same
+    /// rules as <see cref="Add(int, in Shape, in CollisionFilter)"/>. Statics
+    /// live in a one-shot BVH, so batch additions and let one rebuild happen
+    /// rather than interleaving them with queries.
+    /// </summary>
     public ArcHandle AddStatic(
         int entityId, in Shape shape, in CollisionFilter filter) =>
         AddCore(entityId, shape, filter, isStatic: true, enabled: true);
@@ -378,6 +393,29 @@ public sealed class ArcWorld : IDisposable
     /// (world position, rotation applied to the authored orientation, uniform
     /// scale) instead of re-supplying geometry. Translation-only transforms (the
     /// common case) just shift the base to the new position.
+    ///
+    /// <para><b>The transform is absolute, not a delta</b> -- it replaces the
+    /// collider's placement outright. Use <see cref="UpdateTransformDelta"/> to
+    /// compose onto the current one.</para>
+    ///
+    /// <para><b>What the position places, and what the rotation spins about,</b>
+    /// is the shape's <em>local origin</em>. <c>Add</c> derives that origin from
+    /// the shape you passed and keeps the geometry relative to it:</para>
+    /// <list type="bullet">
+    /// <item><description>Circle, AABB, OBB -- the shape's centre.</description></item>
+    /// <item><description>Capsule -- the midpoint of its two endpoints.</description></item>
+    /// <item><description>Polygon -- the origin its vertices were authored
+    /// around, <em>not</em> the geometry's centre. This is deliberate: it is the
+    /// only way to express an off-centre pivot (a blade turning about its hilt).
+    /// Call <c>Polygon.Centered()</c> at load time if you want it to spin in
+    /// place like the primitives do.</description></item>
+    /// </list>
+    ///
+    /// <para><b>Rotation composes with the authored orientation, it does not
+    /// replace it.</b> An OBB or polygon added with its own angle keeps that as a
+    /// base angle, and the transform's rotation is added to it -- so passing
+    /// rotation 0 restores the orientation it was added with rather than
+    /// straightening it to zero.</para>
     /// </summary>
     public void UpdateTransform(ArcHandle handle, in Transform transform)
     {
