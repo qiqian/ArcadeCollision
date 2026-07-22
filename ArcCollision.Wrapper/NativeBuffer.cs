@@ -33,17 +33,21 @@ internal sealed unsafe class NativeBuffer<T> : SafeHandleZeroOrMinusOneIsInvalid
             newCapacity *= 2;
         }
 
-        nuint byteCount = checked((nuint)newCapacity * (nuint)sizeof(T));
-        void* resized = NativeMemory.Realloc((void*)handle, byteCount);
-        if (resized == null) throw new OutOfMemoryException();
-        SetHandle((IntPtr)resized);
+        // netstandard2.1 has no NativeMemory; use the HGlobal allocator. Realloc
+        // requires a non-null block, so the first growth (handle == 0) allocates.
+        // Both throw OutOfMemoryException on failure, matching the old null check.
+        IntPtr byteCount = (IntPtr)checked((long)newCapacity * sizeof(T));
+        IntPtr resized = handle == IntPtr.Zero
+            ? Marshal.AllocHGlobal(byteCount)
+            : Marshal.ReAllocHGlobal(handle, byteCount);
+        SetHandle(resized);
         Capacity = newCapacity;
         return (T*)resized;
     }
 
     protected override bool ReleaseHandle()
     {
-        NativeMemory.Free((void*)handle);
+        Marshal.FreeHGlobal(handle);
         handle = IntPtr.Zero;
         Capacity = 0;
         return true;

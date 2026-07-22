@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
 
 namespace ArcCollision.Ref;
 
@@ -7,7 +6,7 @@ namespace ArcCollision.Ref;
 internal static class InPlaceSort
 {
     public static void Sort<T>(List<T> values, IComparer<T> comparer) =>
-        Sort(CollectionsMarshal.AsSpan(values), comparer);
+        Sort(ListMarshal.AsSpan(values), comparer);
 
     public static void Sort<T>(T[] values, int start, int count, IComparer<T> comparer) =>
         Sort(values.AsSpan(start, count), comparer);

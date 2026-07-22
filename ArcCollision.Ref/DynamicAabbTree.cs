@@ -109,7 +109,7 @@ public sealed class DynamicAabbTree : IDisposable
     public void Query(in BpBounds bounds, List<int> results)
     {
         ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(results);
+        Throw.IfNull(results);
         if (_root == -1)
             return;
 
@@ -183,7 +183,7 @@ public sealed class DynamicAabbTree : IDisposable
     public void ComputeSelfPairs(List<(int A, int B)> results)
     {
         ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(results);
+        Throw.IfNull(results);
         if (_root == -1 || _leafCount < 2)
             return;
 
@@ -495,5 +495,5 @@ public sealed class DynamicAabbTree : IDisposable
     }
 
     private void ThrowIfDisposed() =>
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        Throw.IfDisposed(Volatile.Read(ref _disposed) != 0, this);
 }

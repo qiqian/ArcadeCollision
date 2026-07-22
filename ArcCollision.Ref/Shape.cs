@@ -47,7 +47,7 @@ public readonly struct Shape
     /// </summary>
     public Shape(Polygon value, Vec2 translation, Angle32 rotation)
     {
-        ArgumentNullException.ThrowIfNull(value);
+        Throw.IfNull(value);
         this = default;
         Kind = ShapeKind.Polygon;
         _polygon = value;

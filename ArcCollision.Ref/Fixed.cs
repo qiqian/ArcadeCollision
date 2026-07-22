@@ -1,6 +1,4 @@
 using System;
-using System.Numerics;
-using Xunit;
 
 namespace ArcCollision.Ref;
 
@@ -208,7 +206,7 @@ internal static class Fx
 
     private static int ProductShiftFromMax(ulong max)
     {
-        int bits = max == 0 ? 0 : BitOperations.Log2(max) + 1;
+        int bits = max == 0 ? 0 : Bits.Log2(max) + 1;
         return Math.Max(0, bits - 30);
     }
 
@@ -217,7 +215,7 @@ internal static class Fx
 
     private static long FloatBitsToFixed(float value, int fixedShift, long maxRaw)
     {
-        uint bits = BitConverter.SingleToUInt32Bits(value);
+        uint bits = Bits.SingleToUInt32Bits(value);
         bool negative = (bits & 0x80000000u) != 0;
         int exponentBits = (int)((bits >> 23) & 0xffu);
         uint fractionBits = bits & 0x007fffffu;

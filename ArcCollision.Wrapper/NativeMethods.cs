@@ -115,63 +115,18 @@ internal struct NativeIntPair
 
 internal static unsafe class NativeMethods
 {
+    // Resolved by the default P/Invoke mechanism. The native library must sit
+    // next to this assembly (the build copies arccollision.dll / libarccollision.so
+    // / libarccollision.dylib there) or on the OS search path; the bare name lets
+    // the loader add each platform's prefix/extension. Under Unity the engine's
+    // native plugin loader resolves "arccollision" from the Plugins folder.
+    //
+    // netstandard2.1 (the Unity 2022 target) has no System.Runtime.InteropServices
+    // .NativeLibrary API, so the former custom resolver -- RID subfolder probing
+    // and the ARCCOLLISION_NATIVE_PATH override -- is gone. A .NET host that needs
+    // the library from a non-adjacent path must place or symlink it next to the
+    // assembly instead.
     private const string Library = "arccollision";
-
-    static NativeMethods()
-    {
-        NativeLibrary.SetDllImportResolver(typeof(NativeMethods).Assembly, ResolveLibrary);
-    }
-
-    private static IntPtr ResolveLibrary(string name, Assembly assembly, DllImportSearchPath? path)
-    {
-        if (name != Library) return IntPtr.Zero;
-        if (OperatingSystem.IsIOS()) return NativeLibrary.GetMainProgramHandle();
-
-        string? explicitPath = Environment.GetEnvironmentVariable("ARCCOLLISION_NATIVE_PATH");
-        if (!string.IsNullOrWhiteSpace(explicitPath) && NativeLibrary.TryLoad(explicitPath, out IntPtr handle))
-            return handle;
-
-        string basePath = AppContext.BaseDirectory;
-        string fileName = OperatingSystem.IsWindows()
-            ? "arccollision.dll"
-            : OperatingSystem.IsMacOS()
-                ? "libarccollision.dylib"
-                : "libarccollision.so";
-
-        foreach (string candidate in NativeCandidates(basePath, fileName))
-            if (NativeLibrary.TryLoad(candidate, out handle)) return handle;
-
-        // Let the runtime apply platform-specific probing (including Android
-        // packaged native libraries) when no explicit or local asset matched.
-        if (NativeLibrary.TryLoad(fileName, out handle)) return handle;
-        return IntPtr.Zero;
-    }
-
-    private static IEnumerable<string> NativeCandidates(string basePath, string fileName)
-    {
-        yield return Path.Combine(basePath, fileName);
-
-        string architecture = RuntimeInformation.ProcessArchitecture switch
-        {
-            Architecture.X86 => "x86",
-            Architecture.X64 => "x64",
-            Architecture.Arm => "arm",
-            Architecture.Arm64 => "arm64",
-            _ => RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(),
-        };
-
-        string[] runtimeIdentifiers = OperatingSystem.IsWindows()
-            ? [$"win-{architecture}", $"win10-{architecture}"]
-            : OperatingSystem.IsMacOS()
-                ? [$"osx-{architecture}"]
-                : OperatingSystem.IsAndroid()
-                    ? [$"android-{architecture}"]
-                    : [$"linux-{architecture}", $"linux-musl-{architecture}"];
-
-        foreach (string runtimeIdentifier in runtimeIdentifiers)
-            yield return Path.Combine(
-                basePath, "runtimes", runtimeIdentifier, "native", fileName);
-    }
 
     internal static void Check(NativeStatus status, string? parameter = null)
     {

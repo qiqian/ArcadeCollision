@@ -1,6 +1,12 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <!-- netstandard2.1 so Unity 2022 (Mono / IL2CPP, .NET Standard 2.1 API level)
+         can consume the assembly as a precompiled managed plugin. Builds with the
+         .NET 8 SDK; no separate runtime is required. -->
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <!-- netstandard2.1 defaults to C# 8; the wrapper uses newer compiler-only
+         features (file-scoped namespaces, parameterless struct ctors). -->
+    <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

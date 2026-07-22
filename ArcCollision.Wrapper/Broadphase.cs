@@ -108,7 +108,7 @@ public sealed unsafe class DynamicAabbTree : IDisposable
 
     public void Query(in BpBounds bounds, List<int> results)
     {
-        ArgumentNullException.ThrowIfNull(results);
+        Throw.IfNull(results);
         NativeStatus status = NativeMethods.DynamicTreeQuery(Handle, bounds, null, 0, out int required);
         if (status == NativeStatus.BufferTooSmall)
         {
@@ -124,7 +124,7 @@ public sealed unsafe class DynamicAabbTree : IDisposable
 
     public void ComputeSelfPairs(List<(int A, int B)> results)
     {
-        ArgumentNullException.ThrowIfNull(results);
+        Throw.IfNull(results);
         NativeStatus status = NativeMethods.DynamicTreeComputeSelfPairs(Handle, null, 0, out int required);
         if (status == NativeStatus.BufferTooSmall)
         {
@@ -178,7 +178,7 @@ public sealed unsafe class StaticBvh : IDisposable
 
     public void Build(Dictionary<int, BpBounds> source)
     {
-        ArgumentNullException.ThrowIfNull(source);
+        Throw.IfNull(source);
         int count = source.Count;
         if (count == 0)
         {
@@ -204,7 +204,7 @@ public sealed unsafe class StaticBvh : IDisposable
 
     public void Query(in BpBounds bounds, List<int> results)
     {
-        ArgumentNullException.ThrowIfNull(results);
+        Throw.IfNull(results);
         NativeStatus status = NativeMethods.StaticBvhQuery(Handle, bounds, null, 0, out int required);
         if (status == NativeStatus.BufferTooSmall)
         {

@@ -255,7 +255,7 @@ public readonly struct Shape
     public Shape(Polygon value) : this(value, Vec2.Zero, new Angle32(0)) { }
     public Shape(Polygon value, Vec2 translation, Angle32 rotation)
     {
-        ArgumentNullException.ThrowIfNull(value);
+        Throw.IfNull(value);
         this = default;
         _native = new NativeShape(value, translation, rotation);
         _polygon = value;
@@ -372,7 +372,7 @@ internal static class DeterministicHash
     public static int Combine(int a, uint b, uint c) => unchecked((int)Add(Add(Add(Offset, unchecked((uint)a)), b), c));
     public static int Float(float value)
     {
-        uint bits = BitConverter.SingleToUInt32Bits(value);
+        uint bits = Bits.SingleToUInt32Bits(value);
         if ((bits & 0x7fffffffu) == 0) return 0;
         if ((bits & 0x7f800000u) == 0x7f800000u && (bits & 0x007fffffu) != 0) bits = 0x7fc00000u;
         return unchecked((int)bits);

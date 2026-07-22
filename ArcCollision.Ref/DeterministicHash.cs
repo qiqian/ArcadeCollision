@@ -21,7 +21,7 @@ internal static class DeterministicHash
 
     public static int Float(float value)
     {
-        uint bits = BitConverter.SingleToUInt32Bits(value);
+        uint bits = Bits.SingleToUInt32Bits(value);
         if ((bits & 0x7FFFFFFFu) == 0) return 0;
         if ((bits & 0x7F800000u) == 0x7F800000u
             && (bits & 0x007FFFFFu) != 0)

@@ -322,8 +322,8 @@ public sealed class ArcWorld : IDisposable
             Array.Resize(ref _slots, colliderCapacity);
         if (colliderCapacity != 0)
             EnsureGenerationCapacity(colliderCapacity - 1);
-        _candidates.EnsureCapacity(colliderCapacity);
-        _broadphasePairs.EnsureCapacity(pairCapacity);
+        ListMarshal.EnsureCapacity(_candidates, colliderCapacity);
+        ListMarshal.EnsureCapacity(_broadphasePairs, pairCapacity);
         _broadphase.EnsureCapacity(colliderCapacity);
     }
 
@@ -756,7 +756,7 @@ public sealed class ArcWorld : IDisposable
         List<int> counts)
     {
         ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(counts);
+        Throw.IfNull(counts);
         results.Clear();
         counts.Clear();
         for (int i = 0; i < queries.Length; i++)
@@ -1247,7 +1247,7 @@ public sealed class ArcWorld : IDisposable
 
     private void ThrowIfDisposed()
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        Throw.IfDisposed(Volatile.Read(ref _disposed) != 0, this);
     }
 
 }

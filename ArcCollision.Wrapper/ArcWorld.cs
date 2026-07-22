@@ -332,14 +332,17 @@ public sealed unsafe class ArcWorld : IDisposable
         GC.KeepAlive(world);
     }
 
-    // Publishes a borrowed native result array into the caller's list with one
-    // bulk span copy; per-element List.Add calls dominate the managed side of
-    // large result sets.
+    // Publishes a borrowed native result array into the caller's list. The
+    // one-memcpy path (CollectionsMarshal.SetCount + AsSpan) is unavailable on
+    // netstandard2.1, so pre-size the list to avoid intermediate growth and copy
+    // element by element from the borrowed native buffer.
     private static void CopyToList<T>(List<T> results, IntPtr data, int count)
         where T : unmanaged
     {
-        CollectionsMarshal.SetCount(results, count);
-        new ReadOnlySpan<T>((void*)data, count).CopyTo(CollectionsMarshal.AsSpan(results));
+        results.Clear();
+        if (results.Capacity < count) results.Capacity = count;
+        T* source = (T*)data;
+        for (int i = 0; i < count; i++) results.Add(source[i]);
     }
 
     private void AdvanceContactFrame()

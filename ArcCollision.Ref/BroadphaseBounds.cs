@@ -98,7 +98,7 @@ public readonly struct BpBounds
 
     public BpBounds(Polygon polygon, Vec2 translation, Angle32 rotation)
     {
-        ArgumentNullException.ThrowIfNull(polygon);
+        Throw.IfNull(polygon);
         FxVec2 offset = FxVec2.From(translation);
         if (rotation.Raw == 0)
         {
@@ -171,7 +171,7 @@ public readonly struct BpBounds
     internal static BpBounds FromFixedPolygon(
         Polygon polygon, FxVec2 translation, Angle32 rotation)
     {
-        ArgumentNullException.ThrowIfNull(polygon);
+        Throw.IfNull(polygon);
         if (rotation.Raw == 0)
         {
             return new BpBounds(

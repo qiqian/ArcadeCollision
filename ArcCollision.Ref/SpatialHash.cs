@@ -79,7 +79,7 @@ internal sealed class SpatialHash
 
     internal void ComputePairs(List<(int A, int B)> results)
     {
-        ArgumentNullException.ThrowIfNull(results);
+        Throw.IfNull(results);
         results.Clear();
         _dynamicTree.ComputeSelfPairs(results);
         BuildStatic();
