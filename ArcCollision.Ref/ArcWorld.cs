@@ -205,6 +205,10 @@ public sealed class ArcWorld : IDisposable
         // re-supplying or re-deriving geometry.
         public LocalShape Local;
         public FxTransform Transform;
+        // Only capsules use these: fixed endpoint offsets after the current
+        // rotation/scale let same-pose updates translate without float roundtrip.
+        public FxVec2 CapsuleAOffset;
+        public FxVec2 CapsuleBOffset;
         public BpBounds Bounds;
         public CollisionFilter Filter;
         public int EntityId;
@@ -365,6 +369,8 @@ public sealed class ArcWorld : IDisposable
             if (!slot.Active) continue;
             slot.Shape = shiftedShapes[i].Shape;
             slot.Transform = shiftedTransforms[i];
+            slot.CapsuleAOffset = shiftedShapes[i].CapsuleAOffset;
+            slot.CapsuleBOffset = shiftedShapes[i].CapsuleBOffset;
             slot.Bounds = shiftedShapes[i].Bounds;
             slot.TreeProxy = -1;
             // Disabled statics are BVH members too, so they must be re-seeded
@@ -391,8 +397,9 @@ public sealed class ArcWorld : IDisposable
     /// <summary>
     /// Re-places the collider's immutable base shape at an absolute rigid transform
     /// (world position, rotation applied to the authored orientation, uniform
-    /// scale) instead of re-supplying geometry. Translation-only transforms (the
-    /// common case) just shift the base to the new position.
+    /// scale) instead of re-supplying geometry. If rotation and scale quantize to
+    /// the current values, the world automatically takes its integer-only
+    /// translation fast path.
     ///
     /// <para><b>The transform is absolute, not a delta</b> -- it replaces the
     /// collider's placement outright. Use <see cref="UpdateTransformDelta"/> to
@@ -439,9 +446,36 @@ public sealed class ArcWorld : IDisposable
 
     private void ApplyTransform(ArcHandle handle, ref Slot slot, in FxTransform transform)
     {
+        if (transform.Rotation == slot.Transform.Rotation
+            && transform.Scale16 == slot.Transform.Scale16)
+        {
+            FxVec2 previousPosition = slot.Transform.Position;
+            ShapeTransform.Result translated = ShapeTransform.Translate(
+                slot.Local,
+                slot.Shape,
+                slot.Bounds,
+                slot.Transform,
+                transform,
+                slot.CapsuleAOffset,
+                slot.CapsuleBOffset);
+            slot.Shape = translated.Shape;
+            slot.Transform = transform;
+            slot.Bounds = translated.Bounds;
+
+            // The shape may still have been canonicalized from its authored
+            // public values, but unchanged bounds need no tree/BVH update.
+            if (transform.Position.X == previousPosition.X
+                && transform.Position.Y == previousPosition.Y)
+                return;
+            RefreshProxy(handle, ref slot, translated.Bounds);
+            return;
+        }
+
         ShapeTransform.Result world = ShapeTransform.Materialize(slot.Local, transform);
         slot.Shape = world.Shape;
         slot.Transform = transform;
+        slot.CapsuleAOffset = world.CapsuleAOffset;
+        slot.CapsuleBOffset = world.CapsuleBOffset;
         slot.Bounds = world.Bounds;
         RefreshProxy(handle, ref slot, world.Bounds);
     }
@@ -578,6 +612,8 @@ public sealed class ArcWorld : IDisposable
         slot.Shape = default;
         slot.Local = default;
         slot.Transform = default;
+        slot.CapsuleAOffset = default;
+        slot.CapsuleBOffset = default;
         slot.Bounds = default;
         slot.Filter = default;
         slot.EntityId = 0;
@@ -615,6 +651,8 @@ public sealed class ArcWorld : IDisposable
             slot.Shape = default;
             slot.Local = default;
             slot.Transform = default;
+            slot.CapsuleAOffset = default;
+            slot.CapsuleBOffset = default;
             slot.Bounds = default;
             slot.Filter = default;
             slot.EntityId = 0;
@@ -1082,6 +1120,10 @@ public sealed class ArcWorld : IDisposable
         slot.Shape = shape;
         slot.Local = LocalShape.From(shape, out FxTransform initial);
         slot.Transform = initial;
+        slot.CapsuleAOffset = slot.Local.Kind == ShapeKind.Capsule
+            ? slot.Local.CapsuleA : default;
+        slot.CapsuleBOffset = slot.Local.Kind == ShapeKind.Capsule
+            ? slot.Local.CapsuleB : default;
         slot.Bounds = bounds;
         slot.Filter = filter;
         slot.EntityId = entityId;

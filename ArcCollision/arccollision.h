@@ -247,6 +247,9 @@ ARC_API arc_status ARC_CALL arc_world_add(arc_world* world, int32_t entity_id, c
    transform; update_transform_delta composes onto the current one (position
    added, rotation composed, scale multiplied), so an identity delta is a no-op
    and a pure position delta moves the collider keeping its orientation.
+   Rotation and scale are compared after quantization; when both match the
+   current transform, the world automatically uses an integer-only translation
+   fast path and reuses any materialized polygon geometry.
 
    What the position places, and what the rotation spins about, is the shape's
    LOCAL ORIGIN. arc_world_add derives it from the shape passed in and keeps the

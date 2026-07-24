@@ -198,7 +198,91 @@ internal static class ShapeTransform
     {
         public readonly Shape Shape;
         public readonly BpBounds Bounds;
-        public Result(Shape shape, BpBounds bounds) { Shape = shape; Bounds = bounds; }
+        // Translation-invariant capsule endpoint offsets after the current
+        // rotation and scale. Other shape kinds leave these at zero.
+        public readonly FxVec2 CapsuleAOffset;
+        public readonly FxVec2 CapsuleBOffset;
+
+        public Result(
+            Shape shape,
+            BpBounds bounds,
+            FxVec2 capsuleAOffset = default,
+            FxVec2 capsuleBOffset = default)
+        {
+            Shape = shape;
+            Bounds = bounds;
+            CapsuleAOffset = capsuleAOffset;
+            CapsuleBOffset = capsuleBOffset;
+        }
+    }
+
+    /// <summary>
+    /// Re-places an already posed shape when only its fixed-point position
+    /// changed. Rotation/scale work and scaled-polygon allocation are skipped;
+    /// no public float is ever used as the source of the translation.
+    /// </summary>
+    public static Result Translate(
+        in LocalShape local,
+        in Shape current,
+        in BpBounds currentBounds,
+        in FxTransform currentTransform,
+        in FxTransform transform,
+        FxVec2 capsuleAOffset,
+        FxVec2 capsuleBOffset)
+    {
+        FxVec2 position = transform.Position;
+        FxVec2 delta = position - currentTransform.Position;
+        BpBounds bounds = currentBounds.Translated(delta.X, delta.Y);
+        switch (local.Kind)
+        {
+            case ShapeKind.Circle:
+            {
+                long radius = Fx.MulScale(local.CircleRadius, transform.Scale16);
+                return new Result(
+                    new Circle(position.ToVec2(), Fx.To(radius)), bounds);
+            }
+            case ShapeKind.Aabb:
+            {
+                FxVec2 half = Scale(local.BoxHalfExtents, transform.Scale16);
+                return new Result(
+                    new Aabb(position.ToVec2(), half.ToVec2()), bounds);
+            }
+            case ShapeKind.Obb:
+            {
+                FxVec2 half = Scale(local.BoxHalfExtents, transform.Scale16);
+                var angle = new Angle32(
+                    unchecked(local.ObbBaseAngle + transform.Rotation));
+                return new Result(
+                    new Obb(position.ToVec2(), half.ToVec2(), angle), bounds);
+            }
+            case ShapeKind.Capsule:
+            {
+                FxVec2 a = position + capsuleAOffset;
+                FxVec2 b = position + capsuleBOffset;
+                long radius = Fx.MulScale(
+                    local.CapsuleRadius, transform.Scale16);
+                return new Result(
+                    new Capsule(a.ToVec2(), b.ToVec2(), Fx.To(radius)),
+                    bounds,
+                    capsuleAOffset,
+                    capsuleBOffset);
+            }
+            case ShapeKind.Polygon:
+            {
+                // A non-unit scale can only have entered the current Shape via a
+                // full materialization, so it already owns the correctly scaled
+                // immutable geometry. Unit scale reuses the authored polygon.
+                Polygon polygon = transform.Scale16 == Fx.ScaleOne
+                    ? local.Polygon
+                    : current.Polygon;
+                var angle = new Angle32(
+                    unchecked(local.PolygonBaseAngle + transform.Rotation));
+                return new Result(
+                    new Shape(polygon, position.ToVec2(), angle), bounds);
+            }
+            default:
+                throw new InvalidOperationException("Invalid shape kind.");
+        }
     }
 
     public static Result Materialize(in LocalShape local, in FxTransform transform)
@@ -230,12 +314,16 @@ internal static class ShapeTransform
             }
             case ShapeKind.Capsule:
             {
-                FxVec2 a = position + RotateScale(local.CapsuleA, transform);
-                FxVec2 b = position + RotateScale(local.CapsuleB, transform);
+                FxVec2 aOffset = RotateScale(local.CapsuleA, transform);
+                FxVec2 bOffset = RotateScale(local.CapsuleB, transform);
+                FxVec2 a = position + aOffset;
+                FxVec2 b = position + bOffset;
                 long radius = Fx.MulScale(local.CapsuleRadius, transform.Scale16);
                 return new Result(
                     new Capsule(a.ToVec2(), b.ToVec2(), Fx.To(radius)),
-                    BpBounds.FromFixedCapsule(a, b, radius));
+                    BpBounds.FromFixedCapsule(a, b, radius),
+                    aOffset,
+                    bOffset);
             }
             case ShapeKind.Polygon:
             {

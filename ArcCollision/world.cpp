@@ -174,6 +174,11 @@ struct Slot {
     StoredShape shape;       // materialized world shape (for narrowphase)
     LocalShape local;        // immutable fixed local form (precomputed on add)
     FixedTransform transform; // current integer placement of `local`
+    // Only capsules need posed local geometry cached: adding these fixed
+    // endpoint offsets to a new position avoids both rotation/scale work and a
+    // lossy public-float roundtrip on same-pose translation updates.
+    arc::Vec capsule_a_offset;
+    arc::Vec capsule_b_offset;
     arc::Bounds bounds;
     arc_collision_filter filter{};
     int32_t entity_id = 0;
@@ -494,6 +499,10 @@ struct MaterializedShape {
     arc_shape shape{};
     arc::Bounds bounds{};
     arc_polygon* owned_polygon = nullptr;
+    // Translation-invariant capsule endpoint offsets after rotation/scale.
+    // Other shape kinds leave these at zero.
+    arc::Vec capsule_a_offset;
+    arc::Vec capsule_b_offset;
 };
 
 MaterializedShape materialize(const LocalShape& local, const FixedTransform& t) {
@@ -564,6 +573,8 @@ MaterializedShape materialize(const LocalShape& local, const FixedTransform& t) 
             local_a = axis_x.scale(local_a.x) + axis_y.scale(local_a.y);
             local_b = axis_x.scale(local_b.x) + axis_y.scale(local_b.y);
         }
+        result.capsule_a_offset = local_a;
+        result.capsule_b_offset = local_b;
         const arc::Vec a = t.position + local_a;
         const arc::Vec b = t.position + local_b;
         result.shape.capsule = {a.to_public(), b.to_public(), arc::to_float(radius)};
@@ -592,6 +603,66 @@ MaterializedShape materialize(const LocalShape& local, const FixedTransform& t) 
                 *polygon, t.position, result.shape.polygon_rotation);
         break;
     }
+    default:
+        break;
+    }
+    return result;
+}
+
+// Re-place an already posed shape when rotation and Q16.16 scale are unchanged.
+// Bounds and capsule endpoints move directly on the fixed grid. Primitive public
+// fields are rebuilt from immutable fixed local values so the first update also
+// preserves materialize's canonical float bits. A scaled polygon reuses the
+// immutable geometry already owned by the slot.
+MaterializedShape translate_materialized(
+    const Slot& slot, const FixedTransform& transform) {
+    MaterializedShape result;
+    result.shape.kind = slot.local.kind;
+    result.bounds = slot.bounds.translated(
+        transform.position.x - slot.transform.position.x,
+        transform.position.y - slot.transform.position.y);
+    const arc_vec2 position = transform.position.to_public();
+    switch (slot.local.kind) {
+    case ARC_SHAPE_CIRCLE: {
+        const int64_t radius =
+            mul_scale(slot.local.payload.circle.radius, transform.scale16);
+        result.shape.circle = {position, arc::to_float(radius)};
+        break;
+    }
+    case ARC_SHAPE_AABB: {
+        const arc::Vec half =
+            scale_vec(slot.local.payload.aabb.half, transform.scale16);
+        result.shape.aabb = {position, half.to_public()};
+        break;
+    }
+    case ARC_SHAPE_OBB: {
+        const arc::Vec half =
+            scale_vec(slot.local.payload.obb.half, transform.scale16);
+        result.shape.obb = {
+            position,
+            half.to_public(),
+            slot.local.payload.obb.base_angle + transform.rotation};
+        break;
+    }
+    case ARC_SHAPE_CAPSULE: {
+        const arc::Vec a = transform.position + slot.capsule_a_offset;
+        const arc::Vec b = transform.position + slot.capsule_b_offset;
+        const int64_t radius =
+            mul_scale(slot.local.payload.capsule.radius, transform.scale16);
+        result.shape.capsule = {
+            a.to_public(), b.to_public(), arc::to_float(radius)};
+        result.capsule_a_offset = slot.capsule_a_offset;
+        result.capsule_b_offset = slot.capsule_b_offset;
+        break;
+    }
+    case ARC_SHAPE_POLYGON:
+        result.shape.polygon = transform.scale16 == arc::TOne
+            ? slot.local.payload.polygon.geometry
+            : slot.shape.value.polygon;
+        result.shape.polygon_translation = position;
+        result.shape.polygon_rotation =
+            slot.local.payload.polygon.base_angle + transform.rotation;
+        break;
     default:
         break;
     }
@@ -855,6 +926,8 @@ arc_status ARC_CALL arc_world_clear(arc_world* world) {
         slot.shape = StoredShape{};
         slot.local = LocalShape{};
         slot.transform = {};
+        slot.capsule_a_offset = {};
+        slot.capsule_b_offset = {};
         slot.bounds = {};
         slot.filter = {};
         slot.entity_id = 0;
@@ -956,6 +1029,13 @@ arc_status ARC_CALL arc_world_add(
         FixedTransform initial;
         slot.local = to_local(*shape, initial);
         slot.transform = initial;
+        if (slot.local.kind == ARC_SHAPE_CAPSULE) {
+            slot.capsule_a_offset = slot.local.payload.capsule.a;
+            slot.capsule_b_offset = slot.local.payload.capsule.b;
+        } else {
+            slot.capsule_a_offset = {};
+            slot.capsule_b_offset = {};
+        }
         slot.shape = std::move(stored);
         slot.bounds = bounds;
         slot.filter = filter;
@@ -991,11 +1071,36 @@ arc_status ARC_CALL arc_world_add(
     }
 }
 
-// Re-place a collider's immutable base shape at `transform`: materialize the world
-// shape from the local form, recompute bounds, and move its broadphase proxy.
+// Re-place a collider's immutable base shape at `transform`. When the already
+// quantized rotation and scale match, only fixed translation is applied;
+// otherwise materialize the complete world shape from the local form.
 arc_status apply_transform(arc_world* world, arc_handle handle,
     Slot* slot, const FixedTransform& transform) {
     try {
+        if (transform.rotation == slot->transform.rotation
+            && transform.scale16 == slot->transform.scale16) {
+            const bool position_changed =
+                transform.position.x != slot->transform.position.x
+                || transform.position.y != slot->transform.position.y;
+            MaterializedShape translated =
+                translate_materialized(*slot, transform);
+            // Polygon geometry is deliberately the same retained pointer that
+            // the slot already owns, so a raw value replacement neither adds
+            // nor drops a reference.
+            slot->shape.value = translated.shape;
+            slot->transform = transform;
+            slot->bounds = translated.bounds;
+            if (!position_changed) return ARC_STATUS_OK;
+
+            if (slot->is_static)
+                world->broadphase.add_or_update_static(
+                    static_cast<int>(handle_index(handle)), translated.bounds);
+            else if (slot->enabled)
+                world->broadphase.update_dynamic(
+                    slot->tree_proxy, translated.bounds);
+            return ARC_STATUS_OK;
+        }
+
         MaterializedShape world_shape = materialize(slot->local, transform);
         if (world_shape.shape.kind == ARC_SHAPE_POLYGON
             && !world_shape.shape.polygon) {
@@ -1009,6 +1114,8 @@ arc_status apply_transform(arc_world* world, arc_handle handle,
             arc_polygon_release(world_shape.owned_polygon);
         slot->shape = std::move(stored);
         slot->transform = transform;
+        slot->capsule_a_offset = world_shape.capsule_a_offset;
+        slot->capsule_b_offset = world_shape.capsule_b_offset;
         slot->bounds = world_shape.bounds;
         // A disabled static is still in the BVH, so its leaf bounds must follow
         // the move; a disabled dynamic owns no proxy and is re-added on enable.
@@ -1088,6 +1195,8 @@ arc_status ARC_CALL arc_world_remove(arc_world* world, arc_handle handle) {
     slot->shape = StoredShape{};
     slot->local = LocalShape{};
     slot->transform = {};
+    slot->capsule_a_offset = {};
+    slot->capsule_b_offset = {};
     slot->bounds = {};
     slot->filter = {};
     slot->entity_id = 0;
@@ -1187,6 +1296,8 @@ arc_status ARC_CALL arc_world_shift_origin(
             StoredShape shape;
             arc::Bounds bounds;
             FixedTransform transform;
+            arc::Vec capsule_a_offset;
+            arc::Vec capsule_b_offset;
         };
         std::vector<ShiftedSlot> moved;
         moved.reserve(static_cast<size_t>(world->active_count));
@@ -1203,7 +1314,12 @@ arc_status ARC_CALL arc_world_shift_origin(
             StoredShape stored(materialized.shape);
             if (materialized.owned_polygon)
                 arc_polygon_release(materialized.owned_polygon);
-            moved.push_back({std::move(stored), materialized.bounds, shifted});
+            moved.push_back({
+                std::move(stored),
+                materialized.bounds,
+                shifted,
+                materialized.capsule_a_offset,
+                materialized.capsule_b_offset});
         }
         world->broadphase.clear();
         size_t moved_index = 0;
@@ -1212,6 +1328,8 @@ arc_status ARC_CALL arc_world_shift_origin(
             if (!slot.active) continue;
             slot.shape = std::move(moved[moved_index].shape);
             slot.transform = moved[moved_index].transform;
+            slot.capsule_a_offset = moved[moved_index].capsule_a_offset;
+            slot.capsule_b_offset = moved[moved_index].capsule_b_offset;
             slot.bounds = moved[moved_index].bounds;
             slot.tree_proxy = -1;
             ++moved_index;

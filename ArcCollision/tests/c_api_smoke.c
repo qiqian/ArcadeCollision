@@ -270,6 +270,150 @@ static int sweep_proxy_preparation_regression(void)
     return 0;
 }
 
+/* Same-rotation/scale UpdateTransform calls use the translation-only path.  The
+   capsule portion catches endpoint drift from translating already-rounded public
+   floats at a magnitude where one Q24.8 unit is below the float ULP.  The polygon
+   portion locks the more important allocation property: scaled immutable geometry
+   is retained and reused instead of being rebuilt for a pure translation. */
+static int same_pose_translation_regression(void)
+{
+    const arc_collision_filter filter = {
+        ARC_CATEGORY_DEFAULT, ARC_CATEGORY_ALL
+    };
+    const arc_world_options options = {1.0f, 8, 8};
+    arc_world* fast = arc_world_create(&options);
+    arc_world* forced = arc_world_create(&options);
+    arc_polygon* source_polygon = 0;
+    arc_shape fast_result = {0}, forced_result = {0};
+    arc_shape polygon_before = {0}, polygon_after = {0};
+    arc_handle fast_handle, forced_handle, polygon_handle;
+    int have_polygon_before = 0, have_polygon_after = 0;
+    int result = 0;
+
+    if (!fast || !forced) {
+        result = 41;
+        goto cleanup;
+    }
+
+    {
+        arc_shape capsule = {0};
+        arc_transform final_pose = {
+            {65536.0078125f, 0.0f}, 0u, 1.0f
+        };
+        arc_transform detour_pose = final_pose;
+        capsule.kind = ARC_SHAPE_CAPSULE;
+        /* Midpoint = one fixed unit; cached local offsets are exactly -1/+1. */
+        capsule.capsule = (arc_capsule){
+            {0.0f, 0.0f}, {0.0078125f, 0.0f}, 0.00390625f
+        };
+        if (arc_world_add(fast, 1, &capsule, filter, 0, 1, &fast_handle)
+                != ARC_STATUS_OK
+            || arc_world_add(forced, 1, &capsule, filter, 0, 1, &forced_handle)
+                != ARC_STATUS_OK) {
+            result = 42;
+            goto cleanup;
+        }
+        if (arc_world_update_transform(fast, fast_handle, &final_pose)
+                != ARC_STATUS_OK) {
+            result = 43;
+            goto cleanup;
+        }
+
+        /* The final call is deliberately forced through full materialization,
+           providing an independent integer-path oracle for the fast result. */
+        detour_pose.rotation = 1u;
+        if (arc_world_update_transform(forced, forced_handle, &detour_pose)
+                != ARC_STATUS_OK
+            || arc_world_update_transform(forced, forced_handle, &final_pose)
+                != ARC_STATUS_OK
+            || arc_world_get_shape(fast, fast_handle, &fast_result)
+                != ARC_STATUS_OK
+            || arc_world_get_shape(forced, forced_handle, &forced_result)
+                != ARC_STATUS_OK) {
+            result = 44;
+            goto cleanup;
+        }
+        if (fast_result.kind != ARC_SHAPE_CAPSULE
+            || forced_result.kind != ARC_SHAPE_CAPSULE
+            || float_bits(fast_result.capsule.a.x)
+                != float_bits(forced_result.capsule.a.x)
+            || float_bits(fast_result.capsule.a.y)
+                != float_bits(forced_result.capsule.a.y)
+            || float_bits(fast_result.capsule.b.x)
+                != float_bits(forced_result.capsule.b.x)
+            || float_bits(fast_result.capsule.b.y)
+                != float_bits(forced_result.capsule.b.y)
+            || float_bits(fast_result.capsule.radius)
+                != float_bits(forced_result.capsule.radius)
+            || float_bits(fast_result.capsule.a.x) != float_bits(65536.0f)
+            || float_bits(fast_result.capsule.b.x) != float_bits(65536.015625f)) {
+            result = 45;
+            goto cleanup;
+        }
+    }
+
+    if (arc_world_clear(fast) != ARC_STATUS_OK) {
+        result = 46;
+        goto cleanup;
+    }
+    {
+        static const arc_vec2 vertices[] = {
+            {-2.0f, -1.0f}, {2.0f, -1.0f}, {0.5f, 2.0f}
+        };
+        arc_shape polygon = {0};
+        arc_transform first_pose = {
+            {10.0f, -3.0f}, 0x12345678u, 1.5f
+        };
+        arc_transform translated_pose = first_pose;
+        source_polygon = arc_polygon_create(vertices, 3);
+        if (!source_polygon) {
+            result = 47;
+            goto cleanup;
+        }
+        polygon.kind = ARC_SHAPE_POLYGON;
+        polygon.polygon = source_polygon;
+        polygon.polygon_rotation = 0x01020304u;
+        polygon.polygon_translation = (arc_vec2){0.0f, 0.0f};
+        if (arc_world_add(fast, 2, &polygon, filter, 1, 1, &polygon_handle)
+                != ARC_STATUS_OK
+            || arc_world_update_transform(fast, polygon_handle, &first_pose)
+                != ARC_STATUS_OK
+            || arc_world_get_shape(fast, polygon_handle, &polygon_before)
+                != ARC_STATUS_OK) {
+            result = 48;
+            goto cleanup;
+        }
+        have_polygon_before = 1;
+        translated_pose.position = (arc_vec2){25.0f, 7.0f};
+        if (arc_world_update_transform(fast, polygon_handle, &translated_pose)
+                != ARC_STATUS_OK
+            || arc_world_get_shape(fast, polygon_handle, &polygon_after)
+                != ARC_STATUS_OK) {
+            result = 49;
+            goto cleanup;
+        }
+        have_polygon_after = 1;
+        if (polygon_before.polygon == source_polygon
+            || polygon_after.polygon != polygon_before.polygon
+            || polygon_after.polygon_rotation != polygon_before.polygon_rotation
+            || float_bits(polygon_after.polygon_translation.x)
+                != float_bits(25.0f)
+            || float_bits(polygon_after.polygon_translation.y)
+                != float_bits(7.0f)) {
+            result = 50;
+            goto cleanup;
+        }
+    }
+
+cleanup:
+    if (have_polygon_after) arc_polygon_release(polygon_after.polygon);
+    if (have_polygon_before) arc_polygon_release(polygon_before.polygon);
+    arc_polygon_release(source_polygon);
+    arc_world_destroy(forced);
+    arc_world_destroy(fast);
+    return result;
+}
+
 int arc_run_c_api_smoke(void)
 {
     if (arc_get_abi_version() != ARC_ABI_VERSION) return 1;
@@ -374,6 +518,8 @@ int arc_run_c_api_smoke(void)
         if (result != 0) return result;
         result = locked_hash_smoke();
         if (result != 0) return result;
-        return sweep_proxy_preparation_regression();
+        result = sweep_proxy_preparation_regression();
+        if (result != 0) return result;
+        return same_pose_translation_regression();
     }
 }

@@ -185,7 +185,9 @@ public sealed unsafe class ArcWorld : IDisposable
     }
     public void BuildStatic() => NativeMethods.Check(NativeMethods.WorldBuildStatic(Handle));
     /// <summary>
-    /// Re-places the collider's immutable base shape at an absolute rigid transform.
+    /// Re-places the collider's immutable base shape at an absolute rigid
+    /// transform. If rotation and scale quantize to the current values, the
+    /// native world automatically takes its integer-only translation fast path.
     ///
     /// <para><b>The transform is absolute, not a delta</b> -- it replaces the
     /// collider's placement outright. Use <see cref="UpdateTransformDelta"/> to
