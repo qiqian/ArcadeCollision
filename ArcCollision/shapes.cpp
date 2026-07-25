@@ -1,3 +1,9 @@
+/*
+ * shapes.cpp
+ * ArcCollision - native C++ port of ArcCollision.Ref with a stable C ABI.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 // Shape handling: polygon construction (validation, winding, ear-clip
 // triangulation, convexity test), reduction of any shape to SAT proxies (a
 // concave polygon yields one proxy per triangle), bounds computation, and the

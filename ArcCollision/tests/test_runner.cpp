@@ -1,3 +1,9 @@
+/*
+ * test_runner.cpp
+ * ArcCollision - native C/C++ regression test suite.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 // Single entry point for ArcCollision's native (C/C++) algorithm tests. Runs every
 // test suite in turn, prints a pass/fail line for each, and returns 0 only if all
 // pass -- so it works both as a plain executable you can run directly and as a

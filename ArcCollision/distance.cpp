@@ -1,3 +1,9 @@
+/*
+ * distance.cpp
+ * ArcCollision - native C++ port of ArcCollision.Ref with a stable C ABI.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 // Distance primitives: closest point on a segment and closest points between two
 // segments. These underlie capsule collisions and are exposed through the public
 // arc_closest_* C API. All integer; the segment-segment solve scales its operands

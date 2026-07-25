@@ -1,3 +1,9 @@
+/*
+ * dynamic_aabb_tree.cpp
+ * ArcCollision - native C++ port of ArcCollision.Ref with a stable C ABI.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 // Incremental AABB tree (Box2D-style). Leaves carry a fat AABB so small moves
 // don't re-insert; insertion descends by a surface-area cost heuristic and the
 // tree is kept balanced by single rotations on the way up. Mirrors the managed

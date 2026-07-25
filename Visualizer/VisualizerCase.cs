@@ -1,3 +1,9 @@
+/*
+ * VisualizerCase.cs
+ * ArcCollision Visualizer - interactive collision test and debugging tool.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 using System.Text.Json;
 using System.Text.Json.Serialization;
 

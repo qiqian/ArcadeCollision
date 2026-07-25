@@ -1,3 +1,9 @@
+/*
+ * fixed.cpp
+ * ArcCollision - native C++ port of ArcCollision.Ref with a stable C ABI.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 // Fixed-point core: float<->fixed conversion, rounding-controlled integer
 // division, the exact integer square root, adaptive product scaling for
 // degree-four discriminants, and the Q1.30 axis math (bit-serial division plus a

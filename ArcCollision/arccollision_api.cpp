@@ -1,3 +1,9 @@
+/*
+ * arccollision_api.cpp
+ * ArcCollision - native C++ port of ArcCollision.Ref with a stable C ABI.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 // Library-wide C entry points (ABI version + last-error). The rest of the C ABI is
 // implemented alongside its subsystem: collide.cpp, sweep.cpp, distance.cpp,
 // shapes.cpp, and world.cpp.

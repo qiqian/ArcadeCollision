@@ -1,3 +1,9 @@
+/*
+ * collide.cpp
+ * ArcCollision - native C++ port of ArcCollision.Ref with a stable C ABI.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 // Discrete (static) overlap tests. Primitive pairs (circle/aabb) have dedicated
 // closed forms; everything involving rotation or a polygon goes through SAT on the
 // unit-axis (Q1.30) proxy representation. Concave polygons are split into convex

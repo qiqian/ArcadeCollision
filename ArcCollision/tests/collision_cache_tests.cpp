@@ -1,3 +1,9 @@
+/*
+ * collision_cache_tests.cpp
+ * ArcCollision - native C/C++ regression test suite.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 // Regression locks for narrowphase cache optimizations. These cases deliberately
 // exercise unrotated indexed triangle proxies and box contacts; cached geometry
 // must preserve every public manifold bit.

@@ -1,3 +1,9 @@
+/*
+ * internal.h
+ * ArcCollision - native C++ port of ArcCollision.Ref with a stable C ABI.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 #ifndef ARCCOLLISION_INTERNAL_H
 #define ARCCOLLISION_INTERNAL_H
 

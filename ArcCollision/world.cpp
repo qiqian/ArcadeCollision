@@ -1,3 +1,9 @@
+/*
+ * world.cpp
+ * ArcCollision - native C++ port of ArcCollision.Ref with a stable C ABI.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 // The collision world and the bulk of the C ABI. A world owns a slot array of
 // colliders (each a shape + filter + broadphase proxy, addressed by a generational
 // arc_handle), the hybrid broadphase, and reusable scratch buffers. Handles carry a

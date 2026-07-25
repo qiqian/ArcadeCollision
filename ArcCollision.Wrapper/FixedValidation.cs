@@ -1,3 +1,9 @@
+/*
+ * FixedValidation.cs
+ * ArcCollision.Wrapper - C# P/Invoke wrapper for native ArcCollision.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 namespace ArcCollision.Wrapper;
 
 internal static class FixedValidation

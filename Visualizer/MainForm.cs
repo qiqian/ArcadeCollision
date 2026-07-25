@@ -1,3 +1,9 @@
+/*
+ * MainForm.cs
+ * ArcCollision Visualizer - interactive collision test and debugging tool.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 using System;
 using System.Collections.Generic;
 using System.Drawing;

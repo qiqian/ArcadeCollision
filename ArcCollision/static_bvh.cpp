@@ -1,3 +1,9 @@
+/*
+ * static_bvh.cpp
+ * ArcCollision - native C++ port of ArcCollision.Ref with a stable C ABI.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 // One-shot BVH for static colliders. build() recurses over the leaf set, at each
 // node binning centroids along the wider axis and picking the split that minimizes
 // a surface-area heuristic (perimeter * count on each side), falling back to a

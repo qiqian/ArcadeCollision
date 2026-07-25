@@ -1,3 +1,9 @@
+/*
+ * CollisionLimits.cs
+ * ArcCollision.Ref - deterministic C# reference implementation.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 namespace ArcCollision.Ref;
 
 /// <summary>Public limits of the deterministic 24.8 fixed-point core.</summary>

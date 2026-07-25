@@ -1,3 +1,9 @@
+/*
+ * Polyfills.cs
+ * ArcCollision.Wrapper - C# P/Invoke wrapper for native ArcCollision.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 using System;
 using System.Runtime.CompilerServices;
 

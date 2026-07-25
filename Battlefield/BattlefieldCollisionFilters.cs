@@ -1,3 +1,9 @@
+/*
+ * BattlefieldCollisionFilters.cs
+ * Battlefield - ArcCollision beat-'em-up gameplay sample adapted from Quiver.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 namespace ArcCollision.Battlefield;
 
 /// <summary>Collision categories and reusable per-collider filters for combat.</summary>

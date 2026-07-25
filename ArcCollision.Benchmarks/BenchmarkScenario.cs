@@ -1,3 +1,9 @@
+/*
+ * BenchmarkScenario.cs
+ * ArcCollision.Benchmarks - deterministic performance benchmark suite.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 namespace ArcCollision.Benchmarks;
 
 internal enum BenchmarkShapeKind

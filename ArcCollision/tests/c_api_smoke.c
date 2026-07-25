@@ -1,3 +1,9 @@
+/*
+ * c_api_smoke.c
+ * ArcCollision - native C/C++ regression test suite.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 #include "arccollision.h"
 
 #include <math.h>

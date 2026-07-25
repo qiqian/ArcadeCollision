@@ -1,3 +1,9 @@
+/*
+ * sweep.cpp
+ * ArcCollision - native C++ port of ArcCollision.Ref with a stable C ABI.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 // Continuous (swept) collision: earliest time-of-impact of a moving shape against
 // a static target, to stop fast movers tunnelling through thin geometry. Rays use
 // closed forms (slab method for boxes, a quadratic for circles); general shapes

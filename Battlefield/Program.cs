@@ -1,3 +1,9 @@
+/*
+ * Program.cs
+ * Battlefield - ArcCollision beat-'em-up gameplay sample adapted from Quiver.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 using System;
 using System.Windows.Forms;
 

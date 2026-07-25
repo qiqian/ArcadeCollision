@@ -1,3 +1,9 @@
+/*
+ * spatial_hash.cpp
+ * ArcCollision - native C++ port of ArcCollision.Ref with a stable C ABI.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 // Hybrid broadphase driver: keeps a dynamic tree (movers) and a static BVH, and
 // merges their candidate pairs. compute_pairs = dynamic self-pairs + a dual
 // descent between the dynamic tree and the static BVH; static-static pairs are

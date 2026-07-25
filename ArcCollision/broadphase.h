@@ -1,3 +1,9 @@
+/*
+ * broadphase.h
+ * ArcCollision - native C++ port of ArcCollision.Ref with a stable C ABI.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 #ifndef ARCCOLLISION_BROADPHASE_H
 #define ARCCOLLISION_BROADPHASE_H
 

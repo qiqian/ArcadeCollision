@@ -1,3 +1,9 @@
+/*
+ * Manifold.cs
+ * ArcCollision.Ref - deterministic C# reference implementation.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 namespace ArcCollision.Ref;
 
 /// <summary>Selects how much collision information <see cref="Collide.ShapeVsShape"/> computes.</summary>

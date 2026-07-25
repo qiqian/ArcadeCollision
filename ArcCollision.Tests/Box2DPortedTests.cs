@@ -1,3 +1,9 @@
+/*
+ * Box2DPortedTests.cs
+ * ArcCollision.Tests - ArcCollision adaptations of Box2D test fixtures.
+ * Copyright (c) 2026 Qian Qian <qiqian82@gmail.com>. MIT License.
+ */
+
 using Xunit;
 
 namespace ArcCollision.Tests;
