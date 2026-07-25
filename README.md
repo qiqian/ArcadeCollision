@@ -1,10 +1,10 @@
-# ArcCollision
+# ArcadeCollision
 
 ![Collision bodies, hurtboxes, and attack volumes in the Battlefield sample](./intro.png)
 
-ArcCollision is a **deterministic 2D collision-query library** for arcade action games, fighting games, and beat 'em ups. Its goal is to provide predictable collision results on Windows, Linux, macOS, Android, and iOS while keeping latency, managed allocation, and integration overhead low enough for a game loop.
+ArcadeCollision is a **deterministic 2D collision-query library** for arcade action games, fighting games, and beat 'em ups. Its goal is to provide predictable collision results on Windows, Linux, macOS, Android, and iOS while keeping latency, managed allocation, and integration overhead low enough for a game loop.
 
-Its defining feature is lockstep-friendly collision geometry: the C# reference backend and the C++ native backend share an explicitly quantized integer model and are designed and regression-tested for bit-level behavioral parity. ArcCollision provides shape tests, manifolds, continuous casts, spatial queries, and a collision world; it is not a rigid-body dynamics or constraint solver.
+Its defining feature is lockstep-friendly collision geometry: the C# reference backend and the C++ native backend share an explicitly quantized integer model and are designed and regression-tested for bit-level behavioral parity. ArcadeCollision provides shape tests, manifolds, continuous casts, spatial queries, and a collision world; it is not a rigid-body dynamics or constraint solver.
 
 ## Contents
 
@@ -61,7 +61,7 @@ The practical consequence is deliberate: contact points and depths are resolved 
 
 ### Lockstep and frame synchronization
 
-ArcCollision is designed to be the deterministic collision subsystem inside a lockstep or rollback game. For a fixed library version and backend, given all of the following:
+ArcadeCollision is designed to be the deterministic collision subsystem inside a lockstep or rollback game. For a fixed library version and backend, given all of the following:
 
 - identical shape data, filters, `Angle32.Raw` values, and Transform input bits;
 - the same fixed-timestep call sequence;
@@ -72,7 +72,7 @@ the World produces deterministic handles, ordered broadphase candidates, collisi
 
 The C# and native backends share exact-bit regression cases and locked scenarios that hash every published result bit. The same deterministic World scenario is locked to hash `2644972881` in both the managed and C API test suites. Broader parity tests also enforce tightly bounded grid-level agreement. This is a strong regression contract, but not an unconditional promise that every possible manifold or convenience output will be bit-identical across arbitrary backend, compiler, and platform combinations. Strict lockstep peers should use the same library version and backend, and validate the locked hashes on every target platform included in the session.
 
-The game still owns networking, input synchronization, frame stepping, snapshots, rollback, and deterministic gameplay state. In particular, independently integrated floating-point movement can diverge before it reaches ArcCollision. Lockstep projects should synchronize quantized state—or guarantee identical IEEE-754 input bits—and perform World mutations in the same order. Synchronize `Angle32.Raw` directly instead of independently converting radians on each peer. Matching handles and `PairId` values also requires the same collider add/remove lifecycle.
+The game still owns networking, input synchronization, frame stepping, snapshots, rollback, and deterministic gameplay state. In particular, independently integrated floating-point movement can diverge before it reaches ArcadeCollision. Lockstep projects should synchronize quantized state—or guarantee identical IEEE-754 input bits—and perform World mutations in the same order. Synchronize `Angle32.Raw` directly instead of independently converting radians on each peer. Matching handles and `PairId` values also requires the same collider add/remove lifecycle.
 
 Collision decisions, sweep time, and sweep normal are integer-derived. Some published convenience values, such as a reconstructed `SweepHit.Point` on particular relative fast paths, cross back through float arithmetic; re-quantize such values before feeding them into authoritative gameplay state.
 
@@ -350,4 +350,4 @@ dotnet run --project Visualizer -c Release
 dotnet run --project Battlefield -c Release
 ```
 
-Other platform presets and deployment paths are documented in the native and Wrapper subproject READMEs. ArcCollision is available under the [MIT License](./LICENSE).
+Other platform presets and deployment paths are documented in the native and Wrapper subproject READMEs. ArcadeCollision is available under the [MIT License](./LICENSE).
