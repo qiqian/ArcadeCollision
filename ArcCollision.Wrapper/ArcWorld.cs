@@ -73,6 +73,7 @@ public readonly struct ArcHandle : IEquatable<ArcHandle>
 public readonly struct CandidatePair
 {
     public readonly ArcHandle A, B;
+    internal CandidatePair(ArcHandle a, ArcHandle b) { A = a; B = b; }
 
     /// <summary>Stable per-pair identity; see <see cref="ArcHandle.PairId"/>.</summary>
     public ulong Id => ArcHandle.PairId(A, B);
@@ -113,12 +114,14 @@ public sealed unsafe class ArcWorld : IDisposable
     // QueryBatch is world-buffered and ArcWorld is not concurrently callable.
     // Keep blittable conversion scratch outside the GC heap.
     private NativeBuffer<NativeShape>? _queryBatchNative;
+    private NativeBuffer<CandidatePair>? _contactBatchNative;
 
     public ArcWorld(float fatMargin = 16) : this(new ArcWorldOptions(fatMargin)) { }
     public ArcWorld(in ArcWorldOptions options)
     {
         _ = FixedValidation.From(options.FatMargin);
-        if (NativeMethods.GetAbiVersion() != 7) throw new InvalidOperationException("ArcCollision native ABI version mismatch.");
+        if (NativeMethods.GetAbiVersion() != NativeMethods.AbiVersion)
+            throw new InvalidOperationException("ArcCollision native ABI version mismatch.");
         _handle = NativeMethods.WorldCreate(options);
         if (_handle.IsInvalid)
             NativeMethods.ThrowLastOperationError("Native world creation failed.");
@@ -318,25 +321,38 @@ public sealed unsafe class ArcWorld : IDisposable
     private readonly List<ulong> _staleContacts = new();
 
     /// <summary>
-    /// When enabled, each contact returned by <see cref="TryComputeContact(in
-    /// CandidatePair, out ContactPair, ManifoldFields)"/> carries a
-    /// <see cref="ContactPair.Frame"/> count: 1 the first frame a pair collides,
-    /// incrementing while it keeps colliding, restarting at 1 after it separates.
+    /// When enabled, contacts returned by <see cref="ComputePairs"/>,
+    /// <see cref="TryComputeContact(in CandidatePair, out ContactPair, ManifoldFields)"/>,
+    /// and <see cref="TryComputeContacts(List{CandidatePair}, List{ContactPair},
+    /// ManifoldFields)"/> carry a <see cref="ContactPair.Frame"/> count: 1 the
+    /// first frame a pair collides, incrementing while it keeps colliding,
+    /// restarting at 1 after it separates.
     /// A frame boundary is one <see cref="ComputePairs"/> call. Off by default;
     /// while off, <c>Frame</c> is 0 and no per-contact state is kept.
     /// </summary>
     public bool TrackContacts { get; set; }
 
-    public void ComputePairs(List<CandidatePair> results)
+    /// <summary>
+    /// Collects filtered, real-bounds-overlapping pairs and classifies them.
+    /// AABB/AABB pairs are exact at the bounds stage, so their requested
+    /// manifold is produced immediately in <paramref name="confirmedContacts"/>.
+    /// Other shape combinations are returned in
+    /// <paramref name="narrowphaseCandidates"/> for selective narrowphase.
+    /// The two output lists are independently sorted by stable pair order.
+    /// </summary>
+    public void ComputePairs(
+        List<ContactPair> confirmedContacts,
+        List<CandidatePair> narrowphaseCandidates,
+        ManifoldFields fields = ManifoldFields.None)
     {
-        results.Clear();
-        if (TrackContacts) AdvanceContactFrame();
         NativeWorldHandle world = Handle;
-        NativeMethods.Check(NativeMethods.WorldComputePairs(world, out IntPtr data, out int count));
-        CopyToList(results, data, count);
-        // The result points into world-owned scratch storage. P/Invoke protects a
-        // SafeHandle only for the duration of the native call, so keep the owner
-        // alive until the borrowed data has been copied.
+        NativeMethods.Check(NativeMethods.WorldComputePairs(
+            world, fields,
+            out IntPtr confirmedData, out int confirmedCount,
+            out IntPtr candidateData, out int candidateCount), nameof(fields));
+        if (TrackContacts) AdvanceContactFrame();
+        CopyContactsToList(confirmedContacts, confirmedData, confirmedCount);
+        CopyToList(narrowphaseCandidates, candidateData, candidateCount);
         GC.KeepAlive(world);
     }
 
@@ -351,6 +367,20 @@ public sealed unsafe class ArcWorld : IDisposable
         if (results.Capacity < count) results.Capacity = count;
         T* source = (T*)data;
         for (int i = 0; i < count; i++) results.Add(source[i]);
+    }
+
+    private void CopyContactsToList(
+        List<ContactPair> results, IntPtr data, int count)
+    {
+        results.Clear();
+        if (results.Capacity < count) results.Capacity = count;
+        NativeContact* source = (NativeContact*)data;
+        for (int i = 0; i < count; i++)
+        {
+            NativeContact native = source[i];
+            int frame = TrackContacts ? RecordContactFrame(native.Pair.Id) : 0;
+            results.Add(new ContactPair(native, frame));
+        }
     }
 
     private void AdvanceContactFrame()
@@ -483,6 +513,29 @@ public sealed unsafe class ArcWorld : IDisposable
         contact = new ContactPair(native, frame);
         return true;
     }
+
+    /// <summary>
+    /// Resolves several candidate pairs in input order in one native call.
+    /// Invalid, disabled, filtered, or non-colliding pairs are omitted.
+    /// </summary>
+    public void TryComputeContacts(
+        List<CandidatePair> candidates,
+        List<ContactPair> contacts,
+        ManifoldFields fields = ManifoldFields.All)
+    {
+        NativeWorldHandle world = Handle;
+        NativeBuffer<CandidatePair> scratch =
+            _contactBatchNative ??= new NativeBuffer<CandidatePair>();
+        CandidatePair* nativePairs = scratch.EnsureCapacity(candidates.Count);
+        for (int i = 0; i < candidates.Count; i++)
+            nativePairs[i] = candidates[i];
+        NativeMethods.Check(NativeMethods.WorldContactPairs(
+            world, nativePairs, candidates.Count, fields,
+            out IntPtr data, out int count), nameof(fields));
+        CopyContactsToList(contacts, data, count);
+        GC.KeepAlive(scratch);
+        GC.KeepAlive(world);
+    }
     public bool TryComputeContact(
         in Shape query, ArcHandle target, out Manifold manifold,
         ManifoldFields fields = ManifoldFields.All) =>
@@ -565,5 +618,7 @@ public sealed unsafe class ArcWorld : IDisposable
         _handle = null;
         _queryBatchNative?.Dispose();
         _queryBatchNative = null;
+        _contactBatchNative?.Dispose();
+        _contactBatchNative = null;
     }
 }

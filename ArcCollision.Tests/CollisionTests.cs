@@ -277,14 +277,16 @@ public class BroadphaseTests
         world.Add(1, new Aabb(new Vec2(0, 0), new Vec2(3, 3)), CollisionFilter.Default);
         world.Add(2, new Aabb(new Vec2(2, 0), new Vec2(3, 3)), CollisionFilter.Default);
         world.Add(3, new Aabb(new Vec2(500, 500), new Vec2(3, 3)), CollisionFilter.Default);
-        var pairs = new List<CandidatePair>();
+        var contacts = new List<ContactPair>();
+        var candidates = new List<CandidatePair>();
 
-        world.ComputePairs(pairs);
+        world.ComputePairs(contacts, candidates);
 
-        CandidatePair pair = Assert.Single(pairs);
-        Assert.Equal(1, pair.A.EntityId);
-        Assert.Equal(2, pair.B.EntityId);
-        Assert.True(world.TryComputeContact(pair, out _));
+        ContactPair contact = Assert.Single(contacts);
+        Assert.Empty(candidates);
+        Assert.Equal(1, contact.A.EntityId);
+        Assert.Equal(2, contact.B.EntityId);
+        Assert.True(contact.Manifold.Colliding);
     }
 
     [Fact]

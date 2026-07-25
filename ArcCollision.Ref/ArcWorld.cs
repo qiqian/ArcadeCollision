@@ -189,6 +189,19 @@ public sealed class ArcWorld : IDisposable
         }
     }
 
+    private sealed class ContactComparer : IComparer<ContactPair>
+    {
+        public static readonly ContactComparer Instance = new();
+
+        public int Compare(ContactPair x, ContactPair y)
+        {
+            int comparison = HandleComparer.Instance.Compare(x.A, y.A);
+            return comparison != 0
+                ? comparison
+                : HandleComparer.Instance.Compare(x.B, y.B);
+        }
+    }
+
     private sealed class CastHitComparer : IComparer<WorldCastHit>
     {
         public static readonly CastHitComparer Instance = new();
@@ -247,10 +260,12 @@ public sealed class ArcWorld : IDisposable
     private readonly List<ulong> _staleContacts = new();
 
     /// <summary>
-    /// When enabled, each contact returned by <see cref="TryComputeContact(in
-    /// CandidatePair, out ContactPair, ManifoldFields)"/> carries a
-    /// <see cref="ContactPair.Frame"/> count: 1 the first frame a pair collides,
-    /// incrementing while it keeps colliding, restarting at 1 after it separates.
+    /// When enabled, contacts returned by <see cref="ComputePairs"/>,
+    /// <see cref="TryComputeContact(in CandidatePair, out ContactPair, ManifoldFields)"/>,
+    /// and <see cref="TryComputeContacts(List{CandidatePair}, List{ContactPair},
+    /// ManifoldFields)"/> carry a <see cref="ContactPair.Frame"/> count: 1 the
+    /// first frame a pair collides, incrementing while it keeps colliding,
+    /// restarting at 1 after it separates.
     /// A frame boundary is one <see cref="ComputePairs"/> call. Off by default;
     /// while off, <c>Frame</c> is 0 and no per-contact state is kept.
     /// </summary>
@@ -671,23 +686,61 @@ public sealed class ArcWorld : IDisposable
         }
     }
 
-    /// <summary>Collects broadphase candidates only; no manifolds are computed.</summary>
-    public void ComputePairs(List<CandidatePair> results)
+    /// <summary>
+    /// Collects filtered, real-bounds-overlapping pairs and classifies them.
+    /// AABB/AABB pairs are exact at the bounds stage, so their requested
+    /// manifold is produced immediately in <paramref name="confirmedContacts"/>.
+    /// Every other shape combination is returned in
+    /// <paramref name="narrowphaseCandidates"/> for selective resolution through
+    /// <see cref="TryComputeContact(in CandidatePair, out ContactPair, ManifoldFields)"/>
+    /// or <see cref="TryComputeContacts(List{CandidatePair}, List{ContactPair}, ManifoldFields)"/>.
+    /// The two output lists are independently sorted by stable pair order.
+    /// Unrequested manifold fields are zero.
+    /// </summary>
+    public void ComputePairs(
+        List<ContactPair> confirmedContacts,
+        List<CandidatePair> narrowphaseCandidates,
+        ManifoldFields fields = ManifoldFields.None)
     {
+        ValidateManifoldFields(fields);
         ThrowIfDisposed();
-        results.Clear();
+        confirmedContacts.Clear();
+        narrowphaseCandidates.Clear();
         if (TrackContacts) AdvanceContactFrame();
+
         _broadphase.ComputePairs(_broadphasePairs);
         for (int i = 0; i < _broadphasePairs.Count; i++)
         {
             (int a, int b) = _broadphasePairs[i];
-            if (_slots[a].Active && _slots[b].Active
-                && _slots[a].Enabled && _slots[b].Enabled
-                && _slots[a].Filter.CanCollideWith(_slots[b].Filter)
-                && _slots[a].Bounds.Overlaps(_slots[b].Bounds))
-                results.Add(CreatePair(a, b));
+            ref Slot slotA = ref _slots[a];
+            ref Slot slotB = ref _slots[b];
+            if (!slotA.Active || !slotB.Active
+                || !slotA.Enabled || !slotB.Enabled
+                || !slotA.Filter.CanCollideWith(slotB.Filter)
+                || !slotA.Bounds.Overlaps(slotB.Bounds))
+                continue;
+
+            CandidatePair pair = CreatePair(a, b);
+            if (slotA.Shape.Kind == ShapeKind.Aabb
+                && slotB.Shape.Kind == ShapeKind.Aabb)
+            {
+                ref Slot first = ref _slots[pair.A.Index];
+                ref Slot second = ref _slots[pair.B.Index];
+                Manifold manifold = fields == ManifoldFields.None
+                    ? new Manifold(true, Vec2.Zero, 0f, Vec2.Zero)
+                    : Collide.ShapeVsShape(first.Shape, second.Shape, fields);
+                int frame = TrackContacts ? RecordContactFrame(pair.Id) : 0;
+                confirmedContacts.Add(
+                    new ContactPair(pair.A, pair.B, manifold, frame));
+            }
+            else
+            {
+                narrowphaseCandidates.Add(pair);
+            }
         }
-        InPlaceSort.Sort(results, CandidateComparer.Instance);
+
+        InPlaceSort.Sort(confirmedContacts, ContactComparer.Instance);
+        InPlaceSort.Sort(narrowphaseCandidates, CandidateComparer.Instance);
     }
 
     /// <summary>Returns broadphase handles overlapping a transient query shape.</summary>
@@ -995,6 +1048,34 @@ public sealed class ArcWorld : IDisposable
     {
         ValidateManifoldFields(fields);
         ThrowIfDisposed();
+        return TryComputeContactCore(pair, out contact, fields);
+    }
+
+    /// <summary>
+    /// Resolves several candidate pairs in input order. Invalid, disabled,
+    /// filtered, or non-colliding pairs are omitted. Unrequested manifold fields
+    /// are zero.
+    /// </summary>
+    public void TryComputeContacts(
+        List<CandidatePair> candidates,
+        List<ContactPair> contacts,
+        ManifoldFields fields = ManifoldFields.All)
+    {
+        ValidateManifoldFields(fields);
+        ThrowIfDisposed();
+        contacts.Clear();
+        if (contacts.Capacity < candidates.Count)
+            contacts.Capacity = candidates.Count;
+        for (int i = 0; i < candidates.Count; i++)
+            if (TryComputeContactCore(candidates[i], out ContactPair contact, fields))
+                contacts.Add(contact);
+    }
+
+    private bool TryComputeContactCore(
+        in CandidatePair pair,
+        out ContactPair contact,
+        ManifoldFields fields)
+    {
         if (!IsValid(pair.A) || !IsValid(pair.B)
             || !_slots[pair.A.Index].Enabled || !_slots[pair.B.Index].Enabled)
         {

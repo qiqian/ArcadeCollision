@@ -314,8 +314,17 @@ public class Box2DDeterminismParityTests
         world.Query(new Aabb(Vec2.Zero, new Vec2(20, 20)), query);
         foreach (ArcHandle handle in query) hash = Add(hash, unchecked((uint)handle.EntityId));
 
+        var contacts = new List<ContactPair>();
         var pairs = new List<CandidatePair>();
-        world.ComputePairs(pairs);
+        world.ComputePairs(contacts, pairs, ManifoldFields.NormalDepth);
+        foreach (ContactPair contact in contacts)
+        {
+            hash = Add(hash, unchecked((uint)contact.A.EntityId));
+            hash = Add(hash, unchecked((uint)contact.B.EntityId));
+            hash = Add(hash, BitConverter.SingleToUInt32Bits(contact.Manifold.Depth));
+            hash = Add(hash, BitConverter.SingleToUInt32Bits(contact.Manifold.Normal.X));
+            hash = Add(hash, BitConverter.SingleToUInt32Bits(contact.Manifold.Normal.Y));
+        }
         foreach (CandidatePair pair in pairs)
         {
             hash = Add(hash, unchecked((uint)pair.A.EntityId));

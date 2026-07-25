@@ -519,8 +519,9 @@ public class WrapperParityTests
             1, new Native.Circle(Native.Vec2.Zero, 1f),
             Native.CollisionFilter.Default);
         world.Add(2, new Native.Circle(new Native.Vec2(1f, 0f), 1f), Native.CollisionFilter.Default);
+        var contacts = new List<Native.ContactPair>();
         var pairs = new List<Native.CandidatePair>();
-        world.ComputePairs(pairs);
+        world.ComputePairs(contacts, pairs);
         Native.ManifoldFields invalid = (Native.ManifoldFields)3;
 
         ArgumentOutOfRangeException pairError = Assert.Throws<ArgumentOutOfRangeException>(
@@ -657,9 +658,15 @@ public class WrapperParityTests
         }
         reference.BuildStatic(); native.BuildStatic();
 
+        var refContacts = new List<Ref.ContactPair>();
+        var nativeContacts = new List<Native.ContactPair>();
         var refPairs = new List<Ref.CandidatePair>();
         var nativePairs = new List<Native.CandidatePair>();
-        reference.ComputePairs(refPairs); native.ComputePairs(nativePairs);
+        reference.ComputePairs(refContacts, refPairs);
+        native.ComputePairs(nativeContacts, nativePairs);
+        Assert.Equal(
+            refContacts.Select(p => (p.A.EntityId, p.B.EntityId)).Order(),
+            nativeContacts.Select(p => (p.A.EntityId, p.B.EntityId)).Order());
         Assert.Equal(
             refPairs.Select(p => (p.A.EntityId, p.B.EntityId)).Order(),
             nativePairs.Select(p => (p.A.EntityId, p.B.EntityId)).Order());
@@ -669,6 +676,84 @@ public class WrapperParityTests
         reference.Query(new Ref.Aabb(Ref.Vec2.Zero, new Ref.Vec2(4, 4)), refQuery);
         native.Query(new Native.Aabb(Native.Vec2.Zero, new Native.Vec2(4, 4)), nativeQuery);
         Assert.Equal(refQuery.Select(h => h.EntityId), nativeQuery.Select(h => h.EntityId));
+    }
+
+    [Fact]
+    public void ClassifiedPairsAndBatchContactsAreBitExactAcrossBackends()
+    {
+        using var reference = new Ref.ArcWorld(2) { TrackContacts = true };
+        using var native = new Native.ArcWorld(2) { TrackContacts = true };
+
+        // Add in reverse entity order so confirmed manifold orientation must
+        // follow the public sorted handles, not broadphase slot order.
+        reference.Add(20,
+            new Ref.Aabb(Ref.Vec2.Zero, new Ref.Vec2(1, 1)),
+            Ref.CollisionFilter.Default);
+        native.Add(20,
+            new Native.Aabb(Native.Vec2.Zero, new Native.Vec2(1, 1)),
+            Native.CollisionFilter.Default);
+        reference.Add(10,
+            new Ref.Aabb(new Ref.Vec2(1.5f, 0), new Ref.Vec2(1, 1)),
+            Ref.CollisionFilter.Default);
+        native.Add(10,
+            new Native.Aabb(new Native.Vec2(1.5f, 0), new Native.Vec2(1, 1)),
+            Native.CollisionFilter.Default);
+
+        reference.Add(30,
+            new Ref.Circle(new Ref.Vec2(10, 0), 1),
+            Ref.CollisionFilter.Default);
+        native.Add(30,
+            new Native.Circle(new Native.Vec2(10, 0), 1),
+            Native.CollisionFilter.Default);
+        reference.Add(40,
+            new Ref.Circle(new Ref.Vec2(11.5f, 0), 1),
+            Ref.CollisionFilter.Default);
+        native.Add(40,
+            new Native.Circle(new Native.Vec2(11.5f, 0), 1),
+            Native.CollisionFilter.Default);
+
+        var refConfirmed = new List<Ref.ContactPair>();
+        var nativeConfirmed = new List<Native.ContactPair>();
+        var refCandidates = new List<Ref.CandidatePair>();
+        var nativeCandidates = new List<Native.CandidatePair>();
+        reference.ComputePairs(
+            refConfirmed, refCandidates, Ref.ManifoldFields.All);
+        native.ComputePairs(
+            nativeConfirmed, nativeCandidates, Native.ManifoldFields.All);
+
+        Ref.ContactPair expected = Assert.Single(refConfirmed);
+        Native.ContactPair actual = Assert.Single(nativeConfirmed);
+        Assert.Equal((expected.A.EntityId, expected.B.EntityId),
+            (actual.A.EntityId, actual.B.EntityId));
+        Assert.Equal(expected.Frame, actual.Frame);
+        Assert.Equal(expected.Manifold.Colliding, actual.Manifold.Colliding);
+        AssertFloatBits(expected.Manifold.Depth, actual.Manifold.Depth);
+        AssertVecBits(expected.Manifold.Normal, actual.Manifold.Normal);
+        AssertVecBits(expected.Manifold.Contact, actual.Manifold.Contact);
+        Assert.Equal(10, expected.A.EntityId);
+        Assert.Equal(new Ref.Vec2(-1, 0), expected.Manifold.Normal);
+
+        Assert.Equal(
+            refCandidates.Select(p => (p.A.EntityId, p.B.EntityId)),
+            nativeCandidates.Select(p => (p.A.EntityId, p.B.EntityId)));
+        var refResolved = new List<Ref.ContactPair>();
+        var nativeResolved = new List<Native.ContactPair>();
+        reference.TryComputeContacts(
+            refCandidates, refResolved, Ref.ManifoldFields.NormalDepth);
+        native.TryComputeContacts(
+            nativeCandidates, nativeResolved, Native.ManifoldFields.NormalDepth);
+
+        Ref.ContactPair expectedResolved = Assert.Single(refResolved);
+        Native.ContactPair actualResolved = Assert.Single(nativeResolved);
+        Assert.Equal((expectedResolved.A.EntityId, expectedResolved.B.EntityId),
+            (actualResolved.A.EntityId, actualResolved.B.EntityId));
+        Assert.Equal(expectedResolved.Frame, actualResolved.Frame);
+        AssertFloatBits(
+            expectedResolved.Manifold.Depth, actualResolved.Manifold.Depth);
+        AssertVecBits(
+            expectedResolved.Manifold.Normal, actualResolved.Manifold.Normal);
+        AssertVecBits(
+            expectedResolved.Manifold.Contact, actualResolved.Manifold.Contact);
     }
 
     [Fact]

@@ -255,8 +255,9 @@ public class ArcWorldTests
         ArcHandle b = world.Add(202, new Circle(new Vec2(1.5f, 0), 1f), CollisionFilter.Default);
         world.Add(303, new Circle(new Vec2(20, 0), 1f), CollisionFilter.Default);
 
+        var confirmed = new List<ContactPair>();
         var candidates = new List<CandidatePair>();
-        world.ComputePairs(candidates);
+        world.ComputePairs(confirmed, candidates);
 
         CandidatePair pair = Assert.Single(candidates);
         Assert.Equal(101, pair.A.EntityId);
@@ -273,8 +274,9 @@ public class ArcWorldTests
         using var world = new ArcWorld(2f);
         ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 1f), CollisionFilter.Default);
         ArcHandle second = world.Add(2, new Circle(new Vec2(1.5f, 0), 1f), CollisionFilter.Default);
+        var confirmed = new List<ContactPair>();
         var candidates = new List<CandidatePair>();
-        world.ComputePairs(candidates);
+        world.ComputePairs(confirmed, candidates);
         CandidatePair pair = Assert.Single(candidates);
 
         Assert.True(world.TryComputeContact(
@@ -307,6 +309,96 @@ public class ArcWorldTests
             pair, out _, (ManifoldFields)3));
         Assert.Throws<ArgumentOutOfRangeException>(() => world.TryComputeContact(
             query, first, out _, (ManifoldFields)3));
+        Assert.Throws<ArgumentOutOfRangeException>(() => world.ComputePairs(
+            new List<ContactPair>(), new List<CandidatePair>(), (ManifoldFields)3));
+        Assert.Throws<ArgumentOutOfRangeException>(() => world.TryComputeContacts(
+            candidates, new List<ContactPair>(), (ManifoldFields)3));
+    }
+
+    [Fact]
+    public void ClassifiedPairsProduceAabbContactsAndDeferOtherShapes()
+    {
+        using var world = new ArcWorld(2f);
+        world.Add(1, new Aabb(Vec2.Zero, new Vec2(1, 1)), CollisionFilter.Default);
+        world.Add(2, new Aabb(new Vec2(1.5f, 0), new Vec2(1, 1)), CollisionFilter.Default);
+        // These circle bounds overlap, but their rounded shapes do not.
+        world.Add(3, new Circle(new Vec2(10, 10), 1), CollisionFilter.Default);
+        world.Add(4, new Circle(new Vec2(11.5f, 11.5f), 1), CollisionFilter.Default);
+
+        var confirmed = new List<ContactPair>();
+        var candidates = new List<CandidatePair>();
+        world.ComputePairs(confirmed, candidates, ManifoldFields.All);
+
+        ContactPair contact = Assert.Single(confirmed);
+        Assert.Equal(1, contact.A.EntityId);
+        Assert.Equal(2, contact.B.EntityId);
+        Assert.True(contact.Manifold.Colliding);
+        Assert.Equal(new Vec2(1, 0), contact.Manifold.Normal);
+        Assert.Equal(0.5f, contact.Manifold.Depth);
+        Assert.Single(candidates);
+
+        var resolved = new List<ContactPair>();
+        world.TryComputeContacts(candidates, resolved, ManifoldFields.All);
+        Assert.Empty(resolved);
+    }
+
+    [Fact]
+    public void BatchContactsPreserveInputOrderAndRequestedFields()
+    {
+        using var world = new ArcWorld(2f);
+        world.Add(1, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
+        world.Add(2, new Circle(new Vec2(1.5f, 0), 1), CollisionFilter.Default);
+        world.Add(3, new Circle(new Vec2(10, 0), 1), CollisionFilter.Default);
+        world.Add(4, new Circle(new Vec2(11.5f, 0), 1), CollisionFilter.Default);
+        world.Add(5, new Circle(new Vec2(20, 20), 1), CollisionFilter.Default);
+        world.Add(6, new Circle(new Vec2(21.5f, 21.5f), 1), CollisionFilter.Default);
+
+        var confirmed = new List<ContactPair>();
+        var candidates = new List<CandidatePair>();
+        world.ComputePairs(confirmed, candidates);
+        Assert.Equal(3, candidates.Count);
+
+        var contacts = new List<ContactPair>();
+        world.TryComputeContacts(
+            candidates, contacts, ManifoldFields.NormalDepth);
+
+        Assert.Equal(2, contacts.Count);
+        Assert.Equal((1, 2), (contacts[0].A.EntityId, contacts[0].B.EntityId));
+        Assert.Equal((3, 4), (contacts[1].A.EntityId, contacts[1].B.EntityId));
+        Assert.All(contacts, contact =>
+        {
+            Assert.True(contact.Manifold.Colliding);
+            Assert.NotEqual(Vec2.Zero, contact.Manifold.Normal);
+            Assert.True(contact.Manifold.Depth > 0);
+            Assert.Equal(Vec2.Zero, contact.Manifold.Contact);
+        });
+    }
+
+    [Fact]
+    public void ClassifiedAabbContactsParticipateInFrameTracking()
+    {
+        using var world = new ArcWorld { TrackContacts = true };
+        ArcHandle first = world.Add(
+            1, new Aabb(Vec2.Zero, new Vec2(1, 1)), CollisionFilter.Default);
+        world.Add(
+            2, new Aabb(new Vec2(1.5f, 0), new Vec2(1, 1)), CollisionFilter.Default);
+        var confirmed = new List<ContactPair>();
+        var candidates = new List<CandidatePair>();
+
+        world.ComputePairs(confirmed, candidates);
+        Assert.Equal(1, Assert.Single(confirmed).Frame);
+        Assert.Empty(candidates);
+
+        world.ComputePairs(confirmed, candidates);
+        Assert.Equal(2, Assert.Single(confirmed).Frame);
+
+        world.UpdateTransform(first, new Transform(new Vec2(-10, 0)));
+        world.ComputePairs(confirmed, candidates);
+        Assert.Empty(confirmed);
+
+        world.UpdateTransform(first, Transform.Identity);
+        world.ComputePairs(confirmed, candidates);
+        Assert.Equal(1, Assert.Single(confirmed).Frame);
     }
 
     [Fact]
@@ -315,10 +407,12 @@ public class ArcWorldTests
         using var world = new ArcWorld();
         world.Add(1, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
         world.Add(2, new Circle(new Vec2(1, 0), 1), CollisionFilter.Default);
+        var confirmed = new List<ContactPair>();
         var candidates = new List<CandidatePair>();
 
-        world.ComputePairs(candidates);
+        world.ComputePairs(confirmed, candidates);
 
+        Assert.Empty(confirmed);
         Assert.Single(candidates);
     }
 
@@ -332,15 +426,18 @@ public class ArcWorldTests
             new CollisionFilter(attack, hurtbox));
         ArcHandle target = world.Add(2, new Circle(new Vec2(1, 0), 1),
             new CollisionFilter(hurtbox, 0));
+        var confirmed = new List<ContactPair>();
         var candidates = new List<CandidatePair>();
 
         Assert.Equal(new CollisionFilter(hurtbox, 0), world.GetFilter(target));
 
-        world.ComputePairs(candidates);
+        world.ComputePairs(confirmed, candidates);
+        Assert.Empty(confirmed);
         Assert.Empty(candidates);
 
         world.SetFilter(target, new CollisionFilter(hurtbox, attack));
-        world.ComputePairs(candidates);
+        world.ComputePairs(confirmed, candidates);
+        Assert.Empty(confirmed);
         Assert.Single(candidates);
     }
 
@@ -350,8 +447,9 @@ public class ArcWorldTests
         using var world = new ArcWorld();
         ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
         world.Add(2, new Circle(new Vec2(1, 0), 1), CollisionFilter.Default);
+        var confirmed = new List<ContactPair>();
         var candidates = new List<CandidatePair>();
-        world.ComputePairs(candidates);
+        world.ComputePairs(confirmed, candidates);
         CandidatePair pair = Assert.Single(candidates);
 
         world.SetFilter(first, CollisionFilter.Default);
@@ -365,15 +463,17 @@ public class ArcWorldTests
         using var world = new ArcWorld();
         ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
         world.Add(2, new Circle(new Vec2(1, 0), 1), CollisionFilter.Default);
+        var confirmed = new List<ContactPair>();
         var candidates = new List<CandidatePair>();
-        world.ComputePairs(candidates);
+        world.ComputePairs(confirmed, candidates);
         CandidatePair stale = Assert.Single(candidates);
 
         world.SetFilter(first, new CollisionFilter(
             CollisionCategories.Default, collidesWith: 0));
 
         Assert.False(world.TryComputeContact(stale, out _));
-        world.ComputePairs(candidates);
+        world.ComputePairs(confirmed, candidates);
+        Assert.Empty(confirmed);
         Assert.Empty(candidates);
     }
 
@@ -404,17 +504,19 @@ public class ArcWorldTests
     public void MutationInvalidatesPreviouslyCollectedPairs()
     {
         using var world = new ArcWorld(2f);
-        var half = new Vec2(1, 1);
-        world.Add(1, new Aabb(Vec2.Zero, half), CollisionFilter.Default);
-        ArcHandle moving = world.Add(2, new Aabb(new Vec2(1, 0), half), CollisionFilter.Default);
+        world.Add(1, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
+        ArcHandle moving = world.Add(
+            2, new Circle(new Vec2(1, 0), 1), CollisionFilter.Default);
+        var confirmed = new List<ContactPair>();
         var candidates = new List<CandidatePair>();
-        world.ComputePairs(candidates);
+        world.ComputePairs(confirmed, candidates);
         CandidatePair stale = Assert.Single(candidates);
 
         world.UpdateTransform(moving, new Transform(new Vec2(20, 0)));
 
         Assert.False(world.TryComputeContact(stale, out _));
-        world.ComputePairs(candidates);
+        world.ComputePairs(confirmed, candidates);
+        Assert.Empty(confirmed);
         Assert.Empty(candidates);
     }
 
@@ -455,10 +557,12 @@ public class ArcWorldTests
         world.AddStatic(2, new Aabb(Vec2.Zero, new Vec2(2, 2)), CollisionFilter.Default);
         world.Add(3, new Circle(Vec2.Zero, 1), CollisionFilter.Default);
         world.BuildStatic();
+        var confirmed = new List<ContactPair>();
         var candidates = new List<CandidatePair>();
 
-        world.ComputePairs(candidates);
+        world.ComputePairs(confirmed, candidates);
 
+        Assert.Empty(confirmed);
         Assert.Equal(2, candidates.Count);
         Assert.All(candidates, pair =>
             Assert.True(pair.A.EntityId == 3 || pair.B.EntityId == 3));
@@ -503,10 +607,12 @@ public class ArcWorldTests
         }
         world.BuildStatic();
 
-        var actualPairs = new List<CandidatePair>();
-        world.ComputePairs(actualPairs);
+        var actualPairs = new List<ContactPair>();
+        var candidates = new List<CandidatePair>();
+        world.ComputePairs(actualPairs, candidates);
+        Assert.Empty(candidates);
         var actual = new HashSet<(int, int)>();
-        foreach (CandidatePair pair in actualPairs)
+        foreach (ContactPair pair in actualPairs)
             actual.Add(pair.A.EntityId < pair.B.EntityId
                 ? (pair.A.EntityId, pair.B.EntityId)
                 : (pair.B.EntityId, pair.A.EntityId));

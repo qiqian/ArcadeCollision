@@ -81,6 +81,7 @@ internal sealed class Game : IDisposable
     // pairs, and an attack Query only ever returns opposing hurtboxes. The fat
     // margin only tunes broadphase re-insertion frequency, not results.
     private readonly ArcWorld _world = new(128f);
+    private readonly List<ContactPair> _bodyContacts = new();
     private readonly List<CandidatePair> _bodyPairs = new();
     private readonly List<ArcHandle> _hitCandidates = new();
     private readonly List<ArcHandle> _poisonCandidates = new();
@@ -115,6 +116,7 @@ internal sealed class Game : IDisposable
         Fighters.Clear();
         _world.Clear();
         PoisonPools.Clear();
+        _bodyContacts.Clear();
         _bodyPairs.Clear();
         _hitCandidates.Clear();
         _poisonCandidates.Clear();
@@ -1175,8 +1177,11 @@ internal sealed class Game : IDisposable
             }
         }
 
-        _world.ComputePairs(_bodyPairs);
+        _world.ComputePairs(
+            _bodyContacts, _bodyPairs, ManifoldFields.All);
         Array.Clear(_bodyCorrections, 0, _nextEntityId);
+        for (int contactIndex = 0; contactIndex < _bodyContacts.Count; contactIndex++)
+            ResolveBodyContact(_bodyContacts[contactIndex]);
         for (int pairIndex = 0; pairIndex < _bodyPairs.Count; pairIndex++)
         {
             CandidatePair pair = _bodyPairs[pairIndex];
@@ -1184,14 +1189,23 @@ internal sealed class Game : IDisposable
             Fighter b = FighterFor(pair.B);
             if (a.Dead || b.Dead || !a.CombatActive || !b.CombatActive) continue;
             if (!_world.TryComputeContact(pair, out ContactPair contact)) continue;
-            DebugManifolds.Add(new CollisionManifoldDebug(
-                contact.Manifold, CollisionManifoldKind.Body));
-            Vec2 separation = contact.Manifold.Normal * (contact.Manifold.Depth * .5f);
-            _bodyCorrections[a.EntityId] -= separation;
-            _bodyCorrections[b.EntityId] += separation;
+            ResolveBodyContact(contact);
         }
         for (int i = 0; i < Fighters.Count; i++)
             Fighters[i].Pos += _bodyCorrections[Fighters[i].EntityId];
+    }
+
+    private void ResolveBodyContact(in ContactPair contact)
+    {
+        Fighter a = FighterFor(contact.A);
+        Fighter b = FighterFor(contact.B);
+        if (a.Dead || b.Dead || !a.CombatActive || !b.CombatActive) return;
+        DebugManifolds.Add(new CollisionManifoldDebug(
+            contact.Manifold, CollisionManifoldKind.Body));
+        Vec2 separation =
+            contact.Manifold.Normal * (contact.Manifold.Depth * .5f);
+        _bodyCorrections[a.EntityId] -= separation;
+        _bodyCorrections[b.EntityId] += separation;
     }
 
     private void ClampArena()

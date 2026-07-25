@@ -76,7 +76,7 @@ The game still owns networking, input synchronization, frame stepping, snapshots
 
 Collision decisions, sweep time, and sweep normal are integer-derived. Some published convenience values, such as a reconstructed `SweepHit.Point` on particular relative fast paths, cross back through float arithmetic; re-quantize such values before feeding them into authoritative gameplay state.
 
-The C# World also provides opt-in contact-frame tracking. One `ComputePairs` call defines one collision frame; a successful `TryComputeContact` records persistence, `ContactPair.Frame == 1` marks an enter event, `Frame > 1` marks a stay, and contact after a separation starts again at 1. The tracker does not emit leave events; compare the current and previous sets of contact IDs when leave notification is required. This state is disabled by default and remains deterministic when every peer evaluates the same contacts at the same simulation cadence.
+The C# World also provides opt-in contact-frame tracking. One `ComputePairs` call defines one collision frame. It records confirmed AABB contacts immediately; successful `TryComputeContact` and `TryComputeContacts` calls record resolved narrowphase contacts. `ContactPair.Frame == 1` marks an enter event, `Frame > 1` marks a stay, and contact after a separation starts again at 1. The tracker does not emit leave events; compare the current and previous sets of contact IDs when leave notification is required. This state is disabled by default and remains deterministic when every peer evaluates the same contacts at the same simulation cadence.
 
 ### Collision pipeline
 
@@ -87,7 +87,9 @@ World work is split into two stages:
 1. Dynamic colliders enter a fat-margin dynamic AABB tree; static colliders enter a SAH static BVH.
 2. The broadphase publishes candidate `ArcHandle` or `CandidatePair` values, and the caller requests exact overlap or manifold work only where needed.
 
-`ComputePairs` produces dynamic-dynamic and dynamic-static candidates, never static-static pairs. `Query` and `QueryBatch` return bounds candidates rather than exact shape intersections; call `TryComputeContact` when exact overlap is required.
+`ComputePairs` produces dynamic-dynamic and dynamic-static pairs, never static-static pairs. It returns AABB/AABB pairs directly as `ContactPair` values because their real bounds are their exact shapes; all other combinations remain `CandidatePair` values for `TryComputeContact` or the single-call `TryComputeContacts` batch. `Query` and `QueryBatch` return bounds candidates rather than exact shape intersections.
+
+The confirmed and candidate lists are each sorted by the stable pair order. If gameplay needs one globally sorted stream after resolving the candidates, merge or sort the final contacts by their pair handles instead of relying on list concatenation order.
 
 Each collider owns 32-bit `Categories` and `CollidesWith` masks. There is no global layer matrix. Both colliders must accept the relationship:
 
@@ -234,15 +236,18 @@ ArcHandle enemy = world.Add(
 world.UpdateTransform(player, new Transform(new Vec2(1, 0)));
 world.UpdateTransform(enemy, new Transform(new Vec2(2, 0)));
 
-var pairs = new List<CandidatePair>();
-world.ComputePairs(pairs);
+var contacts = new List<ContactPair>();
+var candidates = new List<CandidatePair>();
+var resolved = new List<ContactPair>();
 
-foreach (CandidatePair pair in pairs)
+// AABB/AABB contacts are completed here. Other shape combinations remain
+// candidates; ManifoldFields controls the confirmed AABB manifold detail.
+world.ComputePairs(contacts, candidates, ManifoldFields.All);
+world.TryComputeContacts(candidates, resolved, ManifoldFields.All);
+contacts.AddRange(resolved);
+
+foreach (ContactPair contact in contacts)
 {
-    if (!world.TryComputeContact(
-            pair, out ContactPair contact, ManifoldFields.All))
-        continue;
-
     Manifold manifold = contact.Manifold;
     // manifold.Normal / manifold.Depth / manifold.Contact
 }
@@ -328,7 +333,7 @@ if (world.ShapeCast(mover, motion, playerFilter, out WorldCastHit closest))
 
 C and C++ callers include only [`ArcCollision/arccollision.h`](./ArcCollision/arccollision.h). Exported functions use a C ABI, expose no STL types, and never require the caller to free a native World's result buffer.
 
-`arc_world_compute_pairs`, `arc_world_query`, `arc_world_query_batch`, and cast-all functions return borrowed views. A view is invalidated by the next call using the same World; copy it first if another World operation is required before the results have been consumed.
+`arc_world_compute_pairs`, `arc_world_try_contact_pairs`, `arc_world_query`, `arc_world_query_batch`, and cast-all functions return borrowed views. A view is invalidated by the next call using the same World; copy it first if another World operation is required before the results have been consumed.
 
 See [`ArcCollision/README.md`](./ArcCollision/README.md) and [`ArcCollision.Wrapper/README.md`](./ArcCollision.Wrapper/README.md) for complete native build and deployment details.
 

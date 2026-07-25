@@ -121,6 +121,8 @@ internal struct NativeIntPair
 
 internal static unsafe class NativeMethods
 {
+    internal const uint AbiVersion = 8;
+
     // Resolved by the default P/Invoke mechanism. The native library must sit
     // next to this assembly (the build copies arccollision.dll / libarccollision.so
     // / libarccollision.dylib there) or on the OS search path; the bare name lets
@@ -215,11 +217,12 @@ internal static unsafe class NativeMethods
     [DllImport(Library, EntryPoint="arc_world_get_enabled", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldGetEnabled(NativeWorldHandle world, ArcHandle handle, out int enabled);
     [DllImport(Library, EntryPoint="arc_world_set_enabled", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldSetEnabled(NativeWorldHandle world, ArcHandle handle, int enabled);
     [DllImport(Library, EntryPoint="arc_world_shift_origin", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldShiftOrigin(NativeWorldHandle world, Vec2 delta);
-    [DllImport(Library, EntryPoint="arc_world_compute_pairs", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldComputePairs(NativeWorldHandle world, out IntPtr output, out int count);
+    [DllImport(Library, EntryPoint="arc_world_compute_pairs", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldComputePairs(NativeWorldHandle world, ManifoldFields fields, out IntPtr confirmed, out int confirmedCount, out IntPtr candidates, out int candidateCount);
     [DllImport(Library, EntryPoint="arc_world_query", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldQuery(NativeWorldHandle world, in NativeShape query, CollisionFilter* filter, out IntPtr output, out int count);
     [DllImport(Library, EntryPoint="arc_world_query_any", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldQueryAny(NativeWorldHandle world, in NativeShape query, CollisionFilter* filter, out int any);
     [DllImport(Library, EntryPoint="arc_world_query_batch", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldQueryBatch(NativeWorldHandle world, NativeShape* queries, int count, CollisionFilter* filter, out IntPtr handles, out IntPtr counts, out int total);
     [DllImport(Library, EntryPoint="arc_world_try_contact_pair", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldContactPair(NativeWorldHandle world, CandidatePair pair, ManifoldFields fields, out NativeContact contact, out int colliding);
+    [DllImport(Library, EntryPoint="arc_world_try_contact_pairs", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldContactPairs(NativeWorldHandle world, CandidatePair* pairs, int pairCount, ManifoldFields fields, out IntPtr contacts, out int contactCount);
     [DllImport(Library, EntryPoint="arc_world_try_contact_shape", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldContactShape(NativeWorldHandle world, in NativeShape query, CollisionFilter* filter, ArcHandle target, ManifoldFields fields, out Manifold manifold, out int colliding);
     [DllImport(Library, EntryPoint="arc_world_shape_cast", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldShapeCast(NativeWorldHandle world, in NativeShape mover, Vec2 motion, CollisionFilter* filter, out WorldCastHit hit, out int found);
     [DllImport(Library, EntryPoint="arc_world_shape_cast_all", CallingConvention=CallingConvention.Cdecl)] internal static extern NativeStatus WorldShapeCastAll(NativeWorldHandle world, in NativeShape mover, Vec2 motion, CollisionFilter* filter, out IntPtr output, out int count);

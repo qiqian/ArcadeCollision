@@ -97,10 +97,12 @@ public class DeterminismRegressionTests
 
         var query = new List<ArcHandle>();
         world.Query(new Aabb(Vec2.Zero, new Vec2(20, 20)), query);
-        var pairs = new List<CandidatePair>();
-        world.ComputePairs(pairs);
+        var contacts = new List<ContactPair>();
+        var candidates = new List<CandidatePair>();
+        world.ComputePairs(contacts, candidates);
+        Assert.Empty(candidates);
         return (query.Select(handle => handle.EntityId).ToArray(),
-            pairs.Select(pair => (pair.A.EntityId, pair.B.EntityId)).ToArray());
+            contacts.Select(pair => (pair.A.EntityId, pair.B.EntityId)).ToArray());
     }
 
     private static int[] QueryBvh(Dictionary<int, BpBounds> source)

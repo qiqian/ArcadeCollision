@@ -18,8 +18,9 @@ public class GameReadinessTests
         world.Add(1, new Circle(Vec2.Zero, 2), CollisionFilter.Default);
         world.Add(2, new Circle(new Vec2(1, 0), 2), CollisionFilter.Default);
         ArcHandle unrelated = world.Add(3, new Circle(new Vec2(100, 0), 1), CollisionFilter.Default);
+        var contacts = new List<ContactPair>();
         var pairs = new List<CandidatePair>();
-        world.ComputePairs(pairs);
+        world.ComputePairs(contacts, pairs);
         CandidatePair pair = Assert.Single(pairs);
 
         world.UpdateTransform(unrelated, new Transform(new Vec2(200, 0)));
@@ -33,8 +34,9 @@ public class GameReadinessTests
         using var world = new ArcWorld();
         ArcHandle first = world.Add(1, new Circle(Vec2.Zero, 2), CollisionFilter.Default);
         world.Add(2, new Circle(new Vec2(1, 0), 2), CollisionFilter.Default);
+        var contacts = new List<ContactPair>();
         var pairs = new List<CandidatePair>();
-        world.ComputePairs(pairs);
+        world.ComputePairs(contacts, pairs);
         CandidatePair oldPair = Assert.Single(pairs);
 
         world.SetEnabled(first, false);
@@ -44,14 +46,16 @@ public class GameReadinessTests
         Assert.Equal(2, world.Count);
         Assert.Equal(1, world.EnabledCount);
         Assert.False(world.TryComputeContact(oldPair, out _));
-        world.ComputePairs(pairs);
+        world.ComputePairs(contacts, pairs);
+        Assert.Empty(contacts);
         Assert.Empty(pairs);
 
         world.UpdateTransform(first, new Transform(new Vec2(1, 0)));
         world.SetEnabled(first, true);
 
         Assert.Equal(2, world.EnabledCount);
-        world.ComputePairs(pairs);
+        world.ComputePairs(contacts, pairs);
+        Assert.Empty(contacts);
         Assert.Single(pairs);
     }
 
@@ -132,10 +136,11 @@ public class GameReadinessTests
         ArcHandle dynamic = world.Add(1, new Circle(new Vec2(1001, 500), 2), filter);
         ArcHandle stationary = world.AddStatic(
             2, new Circle(new Vec2(1002, 500), 2), filter);
+        var contacts = new List<ContactPair>();
         var pairs = new List<CandidatePair>();
 
         world.ShiftOrigin(new Vec2(1000, 500));
-        world.ComputePairs(pairs);
+        world.ComputePairs(contacts, pairs);
 
         Assert.True(world.IsValid(dynamic));
         Assert.True(world.IsValid(stationary));
@@ -183,6 +188,7 @@ public class GameReadinessTests
         for (int i = 0; i < handles.Length; i++)
             handles[i] = world.Add(i,
                 new Circle(new Vec2(i * 1.5f, 0), 1), CollisionFilter.Default);
+        var contacts = new List<ContactPair>(256);
         var pairs = new List<CandidatePair>(256);
         var query = new List<ArcHandle>(32);
 
@@ -198,7 +204,7 @@ public class GameReadinessTests
             for (int i = 0; i < handles.Length; i++)
                 world.UpdateTransform(handles[i],
                     new Transform(new Vec2(i * 1.5f, frame & 1)));
-            world.ComputePairs(pairs);
+            world.ComputePairs(contacts, pairs);
             world.Query(new Aabb(new Vec2(24, 0), new Vec2(30, 4)), query);
         }
     }

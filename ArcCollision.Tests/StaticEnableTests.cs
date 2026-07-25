@@ -56,17 +56,21 @@ public class StaticEnableTests
         world.Add(2, BoxAt(0.5f, 0f), CollisionFilter.Default);
         world.BuildStatic();
 
-        var pairs = new List<CandidatePair>();
-        world.ComputePairs(pairs);
-        Assert.Single(pairs);
+        var contacts = new List<ContactPair>();
+        var candidates = new List<CandidatePair>();
+        world.ComputePairs(contacts, candidates);
+        Assert.Single(contacts);
+        Assert.Empty(candidates);
 
         world.SetEnabled(staticHandle, false);
-        world.ComputePairs(pairs);
-        Assert.Empty(pairs);
+        world.ComputePairs(contacts, candidates);
+        Assert.Empty(contacts);
+        Assert.Empty(candidates);
 
         world.SetEnabled(staticHandle, true);
-        world.ComputePairs(pairs);
-        Assert.Single(pairs);
+        world.ComputePairs(contacts, candidates);
+        Assert.Single(contacts);
+        Assert.Empty(candidates);
     }
 
     /// <summary>

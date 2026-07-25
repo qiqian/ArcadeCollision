@@ -21,7 +21,10 @@ public class ContactIdTests
 {
     private static ContactPair FindContact(ArcWorld world, List<CandidatePair> pairs)
     {
-        world.ComputePairs(pairs);
+        var confirmed = new List<ContactPair>();
+        world.ComputePairs(confirmed, pairs);
+        if (confirmed.Count != 0)
+            return Assert.Single(confirmed);
         foreach (CandidatePair pair in pairs)
             if (world.TryComputeContact(pair, out ContactPair contact))
                 return contact;
@@ -99,8 +102,9 @@ public class ContactIdTests
 
         // Separate for a frame: no contact resolved.
         world.UpdateTransform(a, new Transform(new Vec2(100f, 0f)));
-        world.ComputePairs(pairs);
-        bool anyContact = false;
+        var confirmed = new List<ContactPair>();
+        world.ComputePairs(confirmed, pairs);
+        bool anyContact = confirmed.Count != 0;
         foreach (CandidatePair pair in pairs)
             if (world.TryComputeContact(pair, out _))
                 anyContact = true;

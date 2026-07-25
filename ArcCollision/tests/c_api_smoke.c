@@ -29,6 +29,7 @@ static int locked_hash_smoke(void)
     int entities[6] = {10, 20, 30, 40, 50, 60};
     arc_world* world = arc_world_create(&(arc_world_options){1, 16, 16});
     const arc_handle* query = 0;
+    const arc_contact_pair* confirmed_view = 0;
     const arc_candidate_pair* pair_view = 0;
     arc_candidate_pair pairs[15];
     int query_count = 0, pair_count = 0, i;
@@ -67,8 +68,14 @@ static int locked_hash_smoke(void)
     for (i = 0; i < query_count; ++i) {
         hash = add_hash(hash, query[i].packed_entity_id & ARC_MAX_ENTITY_ID);
     }
-    if (arc_world_compute_pairs(world, &pair_view, &pair_count)
-        != ARC_STATUS_OK) return 35;
+    {
+        int confirmed_count = 0;
+        if (arc_world_compute_pairs(
+                world, ARC_MANIFOLD_NONE,
+                &confirmed_view, &confirmed_count, &pair_view, &pair_count)
+            != ARC_STATUS_OK) return 35;
+        if (confirmed_count != 0) return 35;
+    }
     memcpy(pairs, pair_view, (size_t)pair_count * sizeof(*pairs));
     for (i = 0; i < pair_count; ++i) {
         arc_contact_pair contact;
@@ -111,6 +118,8 @@ static int broadphase_stress(void)
     int i, j;
     int expected_pairs = 0;
     int required = 0;
+    int confirmed_count = 0;
+    const arc_contact_pair* confirmed = 0;
     const arc_candidate_pair* pairs = 0;
     const arc_handle* query_results = 0;
     arc_shape query = {0};
@@ -175,7 +184,10 @@ static int broadphase_stress(void)
                 ++expected_pairs;
         }
     }
-    if (arc_world_compute_pairs(world, &pairs, &required) != ARC_STATUS_OK
+    if (arc_world_compute_pairs(
+            world, ARC_MANIFOLD_NONE,
+            &confirmed, &confirmed_count, &pairs, &required) != ARC_STATUS_OK
+        || confirmed_count != 0
         || required != expected_pairs)
         return 26;
     for (i = 1; i < required; ++i) {
@@ -502,11 +514,16 @@ int arc_run_c_api_smoke(void)
     {
         arc_handle second;
         int required = 0;
+        int confirmed_count = 0;
+        const arc_contact_pair* confirmed = 0;
         const arc_candidate_pair* pairs = 0;
         status = arc_world_add(world, 8, &shape, filter, 1, 1, &second);
         if (status != ARC_STATUS_OK) return 7;
-        status = arc_world_compute_pairs(world, &pairs, &required);
-        if (status != ARC_STATUS_OK || required != 1) return 8;
+        status = arc_world_compute_pairs(
+            world, ARC_MANIFOLD_NONE,
+            &confirmed, &confirmed_count, &pairs, &required);
+        if (status != ARC_STATUS_OK || confirmed_count != 0 || required != 1)
+            return 8;
         {
             arc_candidate_pair pair = pairs[0];
             if (pair.a.packed_entity_id % (1u << 28) != 7

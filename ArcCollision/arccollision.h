@@ -39,7 +39,7 @@
 extern "C" {
 #endif
 
-#define ARC_ABI_VERSION 7u   /* Adds arc_world_query_any. */
+#define ARC_ABI_VERSION 8u   /* Adds classified pairs and batch contact resolution. */
 /* arc_handle packs two 32-bit words: packed_index is a 20-bit slot index plus a
    12-bit generation, and packed_entity_id is a 3-bit world id above a 29-bit
    caller-owned entity id. The world id is what makes a handle from another world
@@ -232,12 +232,12 @@ ARC_API int32_t ARC_CALL arc_get_sweep_algorithm(const arc_shape* mover, const a
    remain inside int32; the +/-ARC_MAX_COORDINATE bound guarantees this. Inputs
    outside the range are rejected at the boundary.
 
-   The compute-pairs, query and cast-all APIs return borrowed read-only views of
-   result buffers owned by the world. Consume the returned data immediately; it
-   must not be modified or freed and becomes invalid on the next call using the
-   same world (or when that world is cleared/destroyed). Empty results return
-   data=NULL and count=0. World access is not synchronized; callers must prevent
-   concurrent operations on the same world. */
+   The compute-pairs, batch-contact, query and cast-all APIs return borrowed
+   read-only views of result buffers owned by the world. Consume the returned
+   data immediately; it must not be modified or freed and becomes invalid on the
+   next call using the same world (or when that world is cleared/destroyed).
+   Empty results return data=NULL and count=0. World access is not synchronized;
+   callers must prevent concurrent operations on the same world. */
 ARC_API arc_world* ARC_CALL arc_world_create(const arc_world_options* options);
 ARC_API void ARC_CALL arc_world_destroy(arc_world* world);
 ARC_API arc_status ARC_CALL arc_world_clear(arc_world* world);
@@ -305,7 +305,15 @@ ARC_API arc_status ARC_CALL arc_world_get_enabled(const arc_world* world, arc_ha
    that are gone for good. */
 ARC_API arc_status ARC_CALL arc_world_set_enabled(arc_world* world, arc_handle handle, arc_bool enabled);
 ARC_API arc_status ARC_CALL arc_world_shift_origin(arc_world* world, arc_vec2 origin_delta);
-ARC_API arc_status ARC_CALL arc_world_compute_pairs(arc_world* world, const arc_candidate_pair** out_data, int32_t* out_count);
+/* Computes filtered pairs whose real (non-fat) bounds overlap. AABB/AABB pairs
+   are exact at this stage, so they are returned as complete contacts using the
+   requested manifold detail. All other shape combinations are returned as
+   narrowphase candidates. Both borrowed result arrays are independently sorted
+   by the normal stable pair ordering. */
+ARC_API arc_status ARC_CALL arc_world_compute_pairs(
+    arc_world* world, arc_manifold_fields fields,
+    const arc_contact_pair** out_confirmed, int32_t* out_confirmed_count,
+    const arc_candidate_pair** out_candidates, int32_t* out_candidate_count);
 ARC_API arc_status ARC_CALL arc_world_query(arc_world* world, const arc_shape* query, const arc_collision_filter* filter_or_null, const arc_handle** out_data, int32_t* out_count);
 /* Existence-only query: reports whether arc_world_query would have returned at
    least one handle, stopping at the first match instead of collecting and
@@ -327,6 +335,12 @@ ARC_API arc_status ARC_CALL arc_world_query_batch(arc_world* world, const arc_sh
 ARC_API arc_status ARC_CALL arc_world_try_contact_pair(
     arc_world* world, arc_candidate_pair pair, arc_manifold_fields fields,
     arc_contact_pair* out_contact, arc_bool* out_colliding);
+/* Resolves candidate pairs in input order in one native call. Invalid, disabled,
+   filtered, and non-colliding pairs are omitted from the borrowed output view. */
+ARC_API arc_status ARC_CALL arc_world_try_contact_pairs(
+    arc_world* world, const arc_candidate_pair* pairs, int32_t pair_count,
+    arc_manifold_fields fields, const arc_contact_pair** out_contacts,
+    int32_t* out_contact_count);
 ARC_API arc_status ARC_CALL arc_world_try_contact_shape(
     arc_world* world, const arc_shape* query,
     const arc_collision_filter* filter_or_null, arc_handle target,

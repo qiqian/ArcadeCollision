@@ -215,6 +215,7 @@ struct arc_world {
         candidates.reserve(static_cast<size_t>(std::max(16, options.initial_collider_capacity)));
         pairs.reserve(static_cast<size_t>(options.initial_pair_capacity));
         pair_values.reserve(static_cast<size_t>(options.initial_pair_capacity));
+        contact_values.reserve(static_cast<size_t>(options.initial_pair_capacity));
         query_values.reserve(static_cast<size_t>(
             std::max(16, options.initial_collider_capacity)));
         cast_values.reserve(static_cast<size_t>(
@@ -228,6 +229,7 @@ struct arc_world {
     std::vector<int> candidates;
     std::vector<std::pair<int, int>> pairs;
     std::vector<arc_candidate_pair> pair_values;
+    std::vector<arc_contact_pair> contact_values;
     std::vector<arc_handle> query_values;
     std::vector<arc_world_cast_hit> cast_values;
     // Scratch for arc_world_query_batch. Sparse batches write directly to
@@ -615,6 +617,10 @@ MaterializedShape materialize(const LocalShape& local, const FixedTransform& t) 
     return result;
 }
 
+bool contact_less(const arc_contact_pair& a, const arc_contact_pair& b) {
+    return pair_less({a.a, a.b}, {b.a, b.b});
+}
+
 // Re-place an already posed shape when rotation and Q16.16 scale are unchanged.
 // Bounds and capsule endpoints move directly on the fixed grid. Primitive public
 // fields are rebuilt from immutable fixed local values so the first update also
@@ -923,6 +929,7 @@ arc_status ARC_CALL arc_world_clear(arc_world* world) {
     world->candidates.clear();
     world->pairs.clear();
     world->pair_values.clear();
+    world->contact_values.clear();
     world->query_values.clear();
     world->cast_values.clear();
     world->active_count = world->enabled_count = world->dynamic_count = 0;
@@ -959,6 +966,7 @@ arc_status ARC_CALL arc_world_ensure_capacity(
         world->candidates.reserve(static_cast<size_t>(collider_capacity));
         world->pairs.reserve(static_cast<size_t>(pair_capacity));
         world->pair_values.reserve(static_cast<size_t>(pair_capacity));
+        world->contact_values.reserve(static_cast<size_t>(pair_capacity));
         world->query_values.reserve(static_cast<size_t>(collider_capacity));
         world->cast_values.reserve(static_cast<size_t>(collider_capacity));
         world->broadphase.ensure_capacity(collider_capacity);
@@ -1360,24 +1368,58 @@ arc_status ARC_CALL arc_world_shift_origin(
 }
 
 arc_status ARC_CALL arc_world_compute_pairs(
-    arc_world* world, const arc_candidate_pair** output, int32_t* count) {
-    if (!initialize_world_results(output, count))
+    arc_world* world, arc_manifold_fields fields,
+    const arc_contact_pair** confirmed, int32_t* confirmed_count,
+    const arc_candidate_pair** candidates, int32_t* candidate_count) {
+    if (!initialize_world_results(confirmed, confirmed_count)
+        || !initialize_world_results(candidates, candidate_count))
         return ARC_STATUS_INVALID_ARGUMENT;
     if (!world) return ensure_world(world);
+    if (fields > ARC_MANIFOLD_ALL) {
+        arc::set_error("Manifold fields are outside the supported range.");
+        return ARC_STATUS_OUT_OF_RANGE;
+    }
     try {
         world->broadphase.compute_pairs(world->pairs);
         world->pair_values.clear();
+        world->contact_values.clear();
         for (const auto& pair : world->pairs) {
             const Slot& a = world->slots[static_cast<size_t>(pair.first)];
             const Slot& b = world->slots[static_cast<size_t>(pair.second)];
             if (a.active && b.active && a.enabled && b.enabled
                 && arc::filter_allows(a.filter, b.filter)
-                && a.bounds.overlaps(b.bounds))
-                world->pair_values.push_back(
-                    make_pair(world, pair.first, pair.second));
+                && a.bounds.overlaps(b.bounds)) {
+                const arc_candidate_pair value =
+                    make_pair(world, pair.first, pair.second);
+                if (a.shape.value.kind == ARC_SHAPE_AABB
+                    && b.shape.value.kind == ARC_SHAPE_AABB) {
+                    const Slot& first = world->slots[
+                        static_cast<size_t>(handle_index(value.a))];
+                    const Slot& second = world->slots[
+                        static_cast<size_t>(handle_index(value.b))];
+                    arc_manifold manifold{};
+                    if (fields == ARC_MANIFOLD_NONE) {
+                        manifold.colliding = 1;
+                    } else {
+                        manifold = arc::collide_shapes(
+                            first.shape.value, second.shape.value,
+                            fields == ARC_MANIFOLD_ALL).to_public();
+                    }
+                    world->contact_values.push_back(
+                        {value.a, value.b, manifold});
+                } else {
+                    world->pair_values.push_back(value);
+                }
+            }
         }
         std::sort(world->pair_values.begin(), world->pair_values.end(), pair_less);
-        return publish_world_results(world->pair_values, output, count);
+        std::sort(
+            world->contact_values.begin(), world->contact_values.end(), contact_less);
+        arc_status status = publish_world_results(
+            world->contact_values, confirmed, confirmed_count);
+        if (status != ARC_STATUS_OK) return status;
+        return publish_world_results(
+            world->pair_values, candidates, candidate_count);
     } catch (...) {
         arc::set_error("Pair computation failed.");
         return ARC_STATUS_INTERNAL_ERROR;
@@ -1629,6 +1671,51 @@ arc_status ARC_CALL arc_world_try_contact_pair(
         *output = {pair.a, pair.b, manifold};
     }
     return ARC_STATUS_OK;
+}
+
+arc_status ARC_CALL arc_world_try_contact_pairs(
+    arc_world* world, const arc_candidate_pair* pairs, int32_t pair_count,
+    arc_manifold_fields fields, const arc_contact_pair** output,
+    int32_t* count) {
+    if (!initialize_world_results(output, count))
+        return ARC_STATUS_INVALID_ARGUMENT;
+    if (!world || pair_count < 0 || (pair_count != 0 && !pairs)) {
+        arc::set_error("World and candidate pair data are required.");
+        return ARC_STATUS_INVALID_ARGUMENT;
+    }
+    if (fields > ARC_MANIFOLD_ALL) {
+        arc::set_error("Manifold fields are outside the supported range.");
+        return ARC_STATUS_OUT_OF_RANGE;
+    }
+    try {
+        world->contact_values.clear();
+        world->contact_values.reserve(static_cast<size_t>(pair_count));
+        for (int32_t i = 0; i < pair_count; ++i) {
+            const arc_candidate_pair pair = pairs[i];
+            Slot* a = get_slot(world, pair.a);
+            Slot* b = get_slot(world, pair.b);
+            if (!a || !b || !a->enabled || !b->enabled
+                || !arc::filter_allows(a->filter, b->filter))
+                continue;
+
+            arc_manifold manifold{};
+            if (fields == ARC_MANIFOLD_NONE) {
+                manifold.colliding = arc::overlap_shapes(
+                    a->shape.value, b->shape.value) ? 1 : 0;
+            } else {
+                manifold = arc::collide_shapes(
+                    a->shape.value, b->shape.value,
+                    fields == ARC_MANIFOLD_ALL).to_public();
+            }
+            if (manifold.colliding)
+                world->contact_values.push_back(
+                    {pair.a, pair.b, manifold});
+        }
+        return publish_world_results(world->contact_values, output, count);
+    } catch (...) {
+        arc::set_error("Batch contact resolution failed.");
+        return ARC_STATUS_INTERNAL_ERROR;
+    }
 }
 
 arc_status ARC_CALL arc_world_try_contact_shape(

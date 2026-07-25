@@ -150,15 +150,15 @@ internal static class Program
     private static void ValidateEquivalent(
         in TrialResult reference, in TrialResult wrapper, string phase)
     {
-        if (reference.CandidateCount != wrapper.CandidateCount
+        if (reference.PairCount != wrapper.PairCount
             || reference.CollisionCount != wrapper.CollisionCount
             || reference.Checksum != wrapper.Checksum)
         {
             throw new InvalidOperationException(
                 $"Backend result mismatch during {phase}: "
-                + $"Ref candidates/collisions/hash={reference.CandidateCount}/"
+                + $"Ref pairs/collisions/hash={reference.PairCount}/"
                 + $"{reference.CollisionCount}/0x{reference.Checksum:X16}, "
-                + $"Wrapper={wrapper.CandidateCount}/{wrapper.CollisionCount}/"
+                + $"Wrapper={wrapper.PairCount}/{wrapper.CollisionCount}/"
                 + $"0x{wrapper.Checksum:X16}.");
         }
     }
@@ -178,7 +178,7 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine($"Wrapper build speedup:      {refSummary.BuildMedian / wrapperSummary.BuildMedian:0.00}x");
         Console.WriteLine($"Wrapper simulation speedup: {refSummary.SimulationMedian / wrapperSummary.SimulationMedian:0.00}x");
-        Console.WriteLine($"Candidates per trial: {reference[0].CandidateCount:N0}");
+        Console.WriteLine($"Pairs per trial: {reference[0].PairCount:N0}");
         Console.WriteLine($"Collisions per trial: {reference[0].CollisionCount:N0}");
         Console.WriteLine($"Result checksum: 0x{reference[0].Checksum:X16} (identical)");
         Console.WriteLine($"Managed allocation/trial: Ref {FormatBytes(refSummary.AllocatedMedian)}, "

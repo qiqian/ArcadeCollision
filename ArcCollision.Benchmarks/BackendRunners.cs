@@ -13,7 +13,7 @@ namespace ArcCollision.Benchmarks;
 internal readonly record struct TrialResult(
     TimeSpan BuildTime,
     TimeSpan SimulationTime,
-    long CandidateCount,
+    long PairCount,
     long CollisionCount,
     long AllocatedBytes,
     ulong Checksum);
@@ -29,7 +29,9 @@ internal static class BackendRunners
         EnsureThread(expectedThreadId);
         int pairCapacity = PairCapacity(options);
         var dynamicHandles = new Ref.ArcHandle[options.DynamicCount];
-        var pairs = new List<Ref.CandidatePair>(pairCapacity);
+        var confirmed = new List<Ref.ContactPair>(pairCapacity);
+        var candidates = new List<Ref.CandidatePair>(pairCapacity);
+        var resolved = new List<Ref.ContactPair>(pairCapacity);
 
         long allocatedStart = GC.GetAllocatedBytesForCurrentThread();
         long buildStart = Stopwatch.GetTimestamp();
@@ -48,7 +50,7 @@ internal static class BackendRunners
         long buildEnd = Stopwatch.GetTimestamp();
 
         ulong checksum = HashOffset;
-        long candidateCount = 0;
+        long pairTotal = 0;
         long collisionCount = 0;
         long simulationStart = Stopwatch.GetTimestamp();
         for (int frame = 0; frame < options.Frames; frame++)
@@ -58,19 +60,35 @@ internal static class BackendRunners
                 world.UpdateTransform(
                     dynamicHandles[i], scene.DynamicFrameTransforms[shapeOffset + i]);
 
-            world.ComputePairs(pairs);
-            candidateCount += pairs.Count;
+            world.ComputePairs(confirmed, candidates, Ref.ManifoldFields.All);
+            world.TryComputeContacts(candidates, resolved, Ref.ManifoldFields.All);
+            int pairCount = confirmed.Count + candidates.Count;
+            pairTotal += pairCount;
+            collisionCount += confirmed.Count + resolved.Count;
             checksum = Add(checksum, unchecked((uint)frame));
-            checksum = Add(checksum, unchecked((uint)pairs.Count));
-            for (int i = 0; i < pairs.Count; i++)
+            checksum = Add(checksum, unchecked((uint)pairCount));
+            for (int i = 0; i < confirmed.Count; i++)
             {
-                Ref.CandidatePair pair = pairs[i];
+                Ref.ContactPair contact = confirmed[i];
+                checksum = Add(checksum, unchecked((uint)contact.A.EntityId));
+                checksum = Add(checksum, unchecked((uint)contact.B.EntityId));
+                checksum = Add(checksum, 1u);
+                Ref.Manifold manifold = contact.Manifold;
+                checksum = AddManifold(checksum, manifold.Normal.X, manifold.Normal.Y,
+                    manifold.Depth, manifold.Contact.X, manifold.Contact.Y);
+            }
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                Ref.CandidatePair pair = candidates[i];
                 checksum = Add(checksum, unchecked((uint)pair.A.EntityId));
                 checksum = Add(checksum, unchecked((uint)pair.B.EntityId));
-                bool colliding = world.TryComputeContact(pair, out Ref.ContactPair contact);
-                checksum = Add(checksum, colliding ? 1u : 0u);
-                if (!colliding) continue;
-                collisionCount++;
+            }
+            checksum = Add(checksum, unchecked((uint)resolved.Count));
+            for (int i = 0; i < resolved.Count; i++)
+            {
+                Ref.ContactPair contact = resolved[i];
+                checksum = Add(checksum, unchecked((uint)contact.A.EntityId));
+                checksum = Add(checksum, unchecked((uint)contact.B.EntityId));
                 Ref.Manifold manifold = contact.Manifold;
                 checksum = AddManifold(checksum, manifold.Normal.X, manifold.Normal.Y,
                     manifold.Depth, manifold.Contact.X, manifold.Contact.Y);
@@ -82,7 +100,7 @@ internal static class BackendRunners
         return new TrialResult(
             Stopwatch.GetElapsedTime(buildStart, buildEnd),
             Stopwatch.GetElapsedTime(simulationStart, simulationEnd),
-            candidateCount, collisionCount, allocatedBytes, checksum);
+            pairTotal, collisionCount, allocatedBytes, checksum);
     }
 
     public static TrialResult RunWrapper(
@@ -91,7 +109,9 @@ internal static class BackendRunners
         EnsureThread(expectedThreadId);
         int pairCapacity = PairCapacity(options);
         var dynamicHandles = new Wrapper.ArcHandle[options.DynamicCount];
-        var pairs = new List<Wrapper.CandidatePair>(pairCapacity);
+        var confirmed = new List<Wrapper.ContactPair>(pairCapacity);
+        var candidates = new List<Wrapper.CandidatePair>(pairCapacity);
+        var resolved = new List<Wrapper.ContactPair>(pairCapacity);
 
         long allocatedStart = GC.GetAllocatedBytesForCurrentThread();
         long buildStart = Stopwatch.GetTimestamp();
@@ -110,7 +130,7 @@ internal static class BackendRunners
         long buildEnd = Stopwatch.GetTimestamp();
 
         ulong checksum = HashOffset;
-        long candidateCount = 0;
+        long pairTotal = 0;
         long collisionCount = 0;
         long simulationStart = Stopwatch.GetTimestamp();
         for (int frame = 0; frame < options.Frames; frame++)
@@ -120,19 +140,37 @@ internal static class BackendRunners
                 world.UpdateTransform(
                     dynamicHandles[i], scene.DynamicFrameTransforms[shapeOffset + i]);
 
-            world.ComputePairs(pairs);
-            candidateCount += pairs.Count;
+            world.ComputePairs(
+                confirmed, candidates, Wrapper.ManifoldFields.All);
+            world.TryComputeContacts(
+                candidates, resolved, Wrapper.ManifoldFields.All);
+            int pairCount = confirmed.Count + candidates.Count;
+            pairTotal += pairCount;
+            collisionCount += confirmed.Count + resolved.Count;
             checksum = Add(checksum, unchecked((uint)frame));
-            checksum = Add(checksum, unchecked((uint)pairs.Count));
-            for (int i = 0; i < pairs.Count; i++)
+            checksum = Add(checksum, unchecked((uint)pairCount));
+            for (int i = 0; i < confirmed.Count; i++)
             {
-                Wrapper.CandidatePair pair = pairs[i];
+                Wrapper.ContactPair contact = confirmed[i];
+                checksum = Add(checksum, unchecked((uint)contact.A.EntityId));
+                checksum = Add(checksum, unchecked((uint)contact.B.EntityId));
+                checksum = Add(checksum, 1u);
+                Wrapper.Manifold manifold = contact.Manifold;
+                checksum = AddManifold(checksum, manifold.Normal.X, manifold.Normal.Y,
+                    manifold.Depth, manifold.Contact.X, manifold.Contact.Y);
+            }
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                Wrapper.CandidatePair pair = candidates[i];
                 checksum = Add(checksum, unchecked((uint)pair.A.EntityId));
                 checksum = Add(checksum, unchecked((uint)pair.B.EntityId));
-                bool colliding = world.TryComputeContact(pair, out Wrapper.ContactPair contact);
-                checksum = Add(checksum, colliding ? 1u : 0u);
-                if (!colliding) continue;
-                collisionCount++;
+            }
+            checksum = Add(checksum, unchecked((uint)resolved.Count));
+            for (int i = 0; i < resolved.Count; i++)
+            {
+                Wrapper.ContactPair contact = resolved[i];
+                checksum = Add(checksum, unchecked((uint)contact.A.EntityId));
+                checksum = Add(checksum, unchecked((uint)contact.B.EntityId));
                 Wrapper.Manifold manifold = contact.Manifold;
                 checksum = AddManifold(checksum, manifold.Normal.X, manifold.Normal.Y,
                     manifold.Depth, manifold.Contact.X, manifold.Contact.Y);
@@ -144,7 +182,7 @@ internal static class BackendRunners
         return new TrialResult(
             Stopwatch.GetElapsedTime(buildStart, buildEnd),
             Stopwatch.GetElapsedTime(simulationStart, simulationEnd),
-            candidateCount, collisionCount, allocatedBytes, checksum);
+            pairTotal, collisionCount, allocatedBytes, checksum);
     }
 
     private static int PairCapacity(BenchmarkOptions options) =>

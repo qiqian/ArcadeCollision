@@ -142,8 +142,14 @@ public class BroadphaseScaleTests
 
     private static HashSet<(int, int)> WorldPairs(ArcWorld world, List<CandidatePair> scratch)
     {
-        world.ComputePairs(scratch);
+        var contacts = new List<ContactPair>();
+        world.ComputePairs(contacts, scratch);
         var set = new HashSet<(int, int)>();
+        foreach (ContactPair contact in contacts)
+        {
+            (int, int) key = Key(contact.A.EntityId, contact.B.EntityId);
+            Assert.True(set.Add(key), $"duplicate confirmed pair {key}");
+        }
         foreach (CandidatePair pair in scratch)
         {
             (int, int) key = Key(pair.A.EntityId, pair.B.EntityId);
@@ -347,8 +353,10 @@ public class BroadphaseScaleTests
         using var world = new ArcWorld(8f);
         ArcHandle a = world.Add(1, new Circle(new Vec2(0, 0), 5f), CollisionFilter.Default);
         world.Add(2, new Circle(new Vec2(4, 0), 5f), CollisionFilter.Default);
+        var contacts = new List<ContactPair>();
         var pairs = new List<CandidatePair>();
-        world.ComputePairs(pairs);
+        world.ComputePairs(contacts, pairs);
+        Assert.Empty(contacts);
         CandidatePair pair = Assert.Single(pairs);
         Assert.True(world.TryComputeContact(pair, out _));
 
