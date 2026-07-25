@@ -1,5 +1,14 @@
 # ArcadeCollision
 
+> **Deterministic, cross-platform 2D collision detection for lockstep and rollback games** — with bit-parity-tested C# and C++ backends for fighting games, beat 'em ups, and arcade action.
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+![.NET Standard 2.1](https://img.shields.io/badge/.NET%20Standard-2.1-512BD4.svg)
+![Unity](https://img.shields.io/badge/Unity-2021.2%2B%20%7C%202022%20LTS-black.svg)
+![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C.svg)
+![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20Android%20%7C%20iOS-lightgrey.svg)
+![Determinism](https://img.shields.io/badge/determinism-bit--parity%20tested-brightgreen.svg)
+
 <table>
   <tr>
     <td width="55%" valign="middle" align="center">
@@ -18,6 +27,15 @@
 ArcadeCollision is a **deterministic 2D collision-query library** for arcade action games, fighting games, and beat 'em ups. Its goal is to provide predictable collision results on Windows, Linux, macOS, Android, and iOS while keeping latency, managed allocation, and integration overhead low enough for a game loop.
 
 Its defining feature is lockstep-friendly collision geometry: the C# reference backend and the C++ native backend share an explicitly quantized integer model and are designed and regression-tested for bit-level behavioral parity. ArcadeCollision provides shape tests, manifolds, continuous casts, spatial queries, and a collision world; it is not a rigid-body dynamics or constraint solver.
+
+## Highlights
+
+- **Deterministic by design.** An integer fixed-point core drives every collision decision; the C# and C++ backends are regression-tested for bit-level parity, so results are reproducible across machines for lockstep and rollback netcode.
+- **Two interchangeable backends, one API.** A pure C# reference implementation and a C++/SIMD native library expose the same public types — switch between them with a namespace change.
+- **Shapes, manifolds, casts, and queries.** Circle, AABB, OBB, capsule, and convex/concave polygon; collision normals and penetration depth, continuous shape and ray casts, batched spatial queries, and fast existence tests.
+- **Engine- and runtime-agnostic.** The managed libraries target **.NET Standard 2.1**, so they drop into **Unity 2021.2+ (incl. 2022 LTS)**, .NET Core 3.0+, and .NET 5–9. The native library ships for Windows, Linux, macOS, Android arm64, and iOS arm64.
+- **Allocation-aware.** After capacity warmup, the hot loop performs no per-frame managed allocation on either backend — no GC spikes in the game loop.
+- **Collision queries, not a physics engine.** You keep your own integration, rollback, and gameplay state; ArcadeCollision answers *what is touching what*, deterministically.
 
 ## Contents
 
@@ -352,7 +370,9 @@ See [`ArcCollision/README.md`](./ArcCollision/README.md) and [`ArcCollision.Wrap
 
 ### Build and test
 
-The managed projects require the .NET 8 SDK. The native library requires CMake 3.20+ and a C++17 compiler.
+The shipped libraries `ArcCollision.Ref` and `ArcCollision.Wrapper` target **.NET Standard 2.1**, so they can be consumed from Unity 2021.2+ (including 2022 LTS), .NET Core 3.0+, and .NET 5–9. Building the tests, benchmarks, and samples uses the .NET 8 SDK; the native library requires CMake 3.20+ and a C++17 compiler.
+
+To use ArcadeCollision in Unity, add `ArcCollision.Ref.dll` (pure C#, runs everywhere including IL2CPP) or `ArcCollision.Wrapper.dll` plus the matching native `arccollision` plugin to your project's `Plugins` folder; Unity's native plugin loader resolves the P/Invoke library by name.
 
 ```powershell
 cd ArcCollision
