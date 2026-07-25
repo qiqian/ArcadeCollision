@@ -1,6 +1,19 @@
 # ArcadeCollision
 
-![Collision bodies, hurtboxes, and attack volumes in the Battlefield sample](./intro.png)
+<table>
+  <tr>
+    <td width="55%" valign="middle" align="center">
+      <img src="./battlefield-collision.gif" height="280" alt="Battlefield sample showing body, hurtbox, and attack collision volumes">
+    </td>
+    <td width="45%" valign="middle" align="center">
+      <img src="./visualizer-capsule-polygon.gif" height="280" alt="Visualizer demonstrating a continuous Capsule-vs-Polygon sweep">
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Battlefield sample</strong></td>
+    <td align="center"><strong>Collision and sweep visualizer</strong></td>
+  </tr>
+</table>
 
 ArcadeCollision is a **deterministic 2D collision-query library** for arcade action games, fighting games, and beat 'em ups. Its goal is to provide predictable collision results on Windows, Linux, macOS, Android, and iOS while keeping latency, managed allocation, and integration overhead low enough for a game loop.
 
