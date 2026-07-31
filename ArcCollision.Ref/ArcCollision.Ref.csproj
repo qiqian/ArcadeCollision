@@ -5,11 +5,15 @@
          can consume the assembly as a precompiled managed plugin. Builds with the
          .NET 8 SDK; no separate runtime is required. -->
     <TargetFramework>netstandard2.1</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- C# 9 is the newest language version Unity 2022 LTS compiles, so the
+         sources stay usable both as a precompiled plugin and when dropped
+         directly into an Assets folder. Implicit (global) usings are a C# 10
+         feature, hence the explicit using directives in every file. -->
+    <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>ArcCollision.Ref</AssemblyName>
     <RootNamespace>ArcCollision.Ref</RootNamespace>
-    <LangVersion>latest</LangVersion>
+    <LangVersion>9</LangVersion>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <Description>Reference (correctness-first) implementation of the ArcadeCollision toolkit.</Description>
   </PropertyGroup>

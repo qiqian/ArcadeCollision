@@ -370,9 +370,27 @@ See [`ArcCollision/README.md`](./ArcCollision/README.md) and [`ArcCollision.Wrap
 
 ### Build and test
 
-The shipped libraries `ArcCollision.Ref` and `ArcCollision.Wrapper` target **.NET Standard 2.1**, so they can be consumed from Unity 2021.2+ (including 2022 LTS), .NET Core 3.0+, and .NET 5–9. Building the tests, benchmarks, and samples uses the .NET 8 SDK; the native library requires CMake 3.20+ and a C++17 compiler.
+The shipped libraries `ArcCollision.Ref` and `ArcCollision.Wrapper` target **.NET Standard 2.1** and are written in **C# 9**, so they can be consumed from Unity 2021.2+ (including 2022 LTS), .NET Core 3.0+, and .NET 5–9. Building the tests, benchmarks, and samples uses the .NET 8 SDK; the native library requires CMake 3.20+ and a C++17 compiler.
 
 To use ArcadeCollision in Unity, add `ArcCollision.Ref.dll` (pure C#, runs everywhere including IL2CPP) or `ArcCollision.Wrapper.dll` plus the matching native `arccollision` plugin to your project's `Plugins` folder; Unity's native plugin loader resolves the P/Invoke library by name.
+
+C# 9 is the newest language version Unity 2022 LTS compiles, so the two shipped
+libraries stay within it: their sources can also be dropped straight into an
+`Assets` folder instead of being referenced as a precompiled plugin. Two
+consequences are worth knowing:
+
+- Implicit (global) usings are a C# 10 feature and are disabled in both projects, so every file carries explicit `using` directives.
+- C# 9 has no parameterless struct constructor, so `new ArcWorldOptions()` and `default(ArcWorldOptions)` both yield an all-zero value. Use `ArcWorldOptions.Default` — or the parameterized constructor — for the documented defaults (fat margin 16, capacities 16).
+
+If you drop `ArcCollision.Ref` in as a precompiled DLL under IL2CPP, preserve `List<T>` from managed code stripping. `InPlaceSort` reaches the list's private `_items` array by reflection to sort without allocating, and throws `PlatformNotSupportedException` if stripping removed it:
+
+```xml
+<linker>
+  <assembly fullname="mscorlib">
+    <type fullname="System.Collections.Generic.List`1" preserve="fields" />
+  </assembly>
+</linker>
+```
 
 ```powershell
 cd ArcCollision

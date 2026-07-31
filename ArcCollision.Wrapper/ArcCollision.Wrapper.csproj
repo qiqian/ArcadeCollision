@@ -4,10 +4,13 @@
          can consume the assembly as a precompiled managed plugin. Builds with the
          .NET 8 SDK; no separate runtime is required. -->
     <TargetFramework>netstandard2.1</TargetFramework>
-    <!-- netstandard2.1 defaults to C# 8; the wrapper uses newer compiler-only
-         features (file-scoped namespaces, parameterless struct ctors). -->
-    <LangVersion>latest</LangVersion>
-    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- netstandard2.1 defaults to C# 8; C# 9 is the newest language version
+         Unity 2022 LTS compiles, so the sources stay usable both as a
+         precompiled plugin and when dropped directly into an Assets folder.
+         Implicit (global) usings are a C# 10 feature, hence the explicit using
+         directives in every file. -->
+    <LangVersion>9</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>ArcCollision.Wrapper</AssemblyName>
